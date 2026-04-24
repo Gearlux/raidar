@@ -1,0 +1,42 @@
+[project]
+name = "raidar"
+version = "0.1.0"
+description = "Object-detection models and adapters for the Marainer training framework."
+authors = [{name = "Taidal"}]
+license = {text = "MIT"}
+dependencies = [
+    "marainer>=0.1.0",
+    "confluid>=0.1.0",
+    "data-flux>=0.1.0",
+    "log-flow>=0.1.0",
+    "torch",
+    "torchvision",
+    "torchmetrics[detection]",
+    "pycocotools",
+    "pytorch-lightning",
+]
+requires-python = ">=3.12"
+
+[project.optional-dependencies]
+dev = [
+    "black>=24.0.0,<25.0.0",
+    "isort>=5.13.0,<6.0.0",
+    "flake8>=6.0.0,<8.0.0",
+    "mypy>=1.0.0,<2.0.0",
+    "pytest>=7.0.0,<9.0.0",
+    "pytest-cov>=4.0.0,<7.0.0",
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["raidar*"]
+
+[tool.setuptools.package-data]
+raidar = ["py.typed"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.coverage.run]
+source = ["raidar"]
+branch = true
