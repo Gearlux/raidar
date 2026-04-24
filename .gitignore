@@ -1,0 +1,52 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Environments
+.venv/
+env/
+venv/
+ENV/
+
+# Distribution / packaging
+dist/
+build/
+*.egg-info/
+
+# IDEs
+.vscode/
+.idea/
+.DS_Store
+
+# Testing / Coverage
+.pytest_cache/
+.mypy_cache/
+.coverage
+.coverage.*
+htmlcov/
+coverage-*
+
+# Project-Specific (Data & Logs)
+data/
+logs/
+mlruns/
+mlflow.db
+lightning_logs/
+models/*.pt
+models/*.onnx
+*.h5
+*.zarr
+
+# Reports
+*-checkstyle.xml
+*-diff.txt
+flake8.txt
+mypy.txt
+coverage.xml
+test-report.xml
+
+# Training artifacts
+csv_logs/
+tb_logs/
+checkpoints/
