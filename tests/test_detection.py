@@ -14,15 +14,11 @@ from torch import Tensor
 from torch.utils.data import DataLoader
 from torchmetrics.detection import MeanAveragePrecision
 
-from raidar.detection import (
-    DetectionBatchInput,
-    DetectionMetricAdapter,
-    DetectionStepOutput,
-    FasterRCNNLoss,
-    FasterRCNNModel,
-    _compute_losses_without_bn_drift,
-    detection_collate_fn,
-)
+from raidar.detection import (DetectionBatchInput, DetectionMetricAdapter,
+                              DetectionStepOutput, FasterRCNNLoss,
+                              FasterRCNNModel,
+                              _compute_losses_without_bn_drift,
+                              detection_collate_fn)
 
 # --- fixtures & helpers ----------------------------------------------------
 
@@ -321,6 +317,62 @@ def test_faster_rcnn_compute_val_loss_false_skips_dual_forward(
         assert step["predictions"] is not None
     finally:
         small_faster_rcnn.compute_val_loss = True
+
+
+def test_faster_rcnn_pretrained_detector_swaps_predictor_for_num_classes() -> None:
+    """`pretrained_detector=True` keeps backbone/RPN/ROI weights but swaps the head.
+
+    Building the full pretrained model loads a 91-class COCO predictor; the
+    constructor must replace it with a fresh ``FastRCNNPredictor`` whose
+    ``cls_score`` has the configured ``num_classes`` outputs (and whose weights
+    are random — distinct from the COCO weights even bit-pattern-wise).
+
+    This test forces the pretrained-weights download path; skip cleanly when
+    the runtime can't reach the torchvision weights mirror so CI without
+    network access still passes the rest of the suite.
+    """
+    from torchvision.models.detection.faster_rcnn import FastRCNNPredictor
+
+    try:
+        model = FasterRCNNModel(
+            num_classes=3,  # 1 background + 2 foreground
+            variant="v2",
+            pretrained_detector=True,
+            trainable_backbone_layers=1,
+            min_size=64,
+            max_size=128,
+        )
+    except (RuntimeError, OSError) as exc:
+        pytest.skip(f"Skipping: pretrained weights unavailable ({exc})")
+
+    predictor = model.detector.roi_heads.box_predictor  # type: ignore[union-attr]
+    assert isinstance(predictor, FastRCNNPredictor)
+    # cls_score is `[in_features → num_classes]` for FastRCNNPredictor.
+    assert predictor.cls_score.out_features == 3
+    # bbox_pred is `[in_features → num_classes * 4]`.
+    assert predictor.bbox_pred.out_features == 12
+
+    # The model must still run a forward pass — pretrained body + fresh head.
+    model.eval()
+    batch = DetectionBatchInput(images=_make_images(1, size=64), targets=None)
+    step = model(batch)
+    assert step["predictions"] is not None and len(step["predictions"]) == 1
+
+
+def test_faster_rcnn_pretrained_detector_default_off() -> None:
+    """Default ``pretrained_detector=False`` runs offline (no weights download)."""
+    # Just instantiating succeeds — this is the path used by the small fixture.
+    model = FasterRCNNModel(
+        num_classes=2,
+        variant="v2",
+        pretrained_backbone=False,
+        pretrained_detector=False,
+        trainable_backbone_layers=1,
+        min_size=64,
+        max_size=128,
+    )
+    predictor = model.detector.roi_heads.box_predictor  # type: ignore[union-attr]
+    assert predictor.cls_score.out_features == 2
 
 
 # --- End-to-end: adapter pattern inside the unchanged base Trainer ---------
