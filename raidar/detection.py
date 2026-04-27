@@ -47,7 +47,7 @@ Typical wiring (YAML)::
 """
 
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Tuple, TypedDict
+from typing import Any, Dict, List, Optional, Tuple, TypedDict, Union
 
 import torch
 import torch.nn as nn
@@ -228,6 +228,12 @@ DEFAULT_MEAN_AP_SCALAR_KEYS: Tuple[str, ...] = (
 
 
 class DetectionMetricAdapter(MetricCollection):
+    # Class-level annotation so mypy knows the runtime type of ``_inner_metric``.
+    # The actual value is stored via ``object.__setattr__`` in __init__ to
+    # bypass nn.Module's submodule-registration path (each view already holds
+    # a reference under .inner).
+    _inner_metric: Metric
+
     """Wrap a torchmetrics detection metric to consume :class:`DetectionStepOutput`.
 
     Torchmetrics' :class:`MeanAveragePrecision` expects the call signature
@@ -277,9 +283,8 @@ class DetectionMetricAdapter(MetricCollection):
         if isinstance(inner, _ConfluidFluid):
             inner = _confluid_flow(inner)
 
-        views: Dict[str, Metric] = {
-            key: _ScalarKeyView(inner, key) for key in scalar_keys
-        }
+        # Wider element type satisfies MetricCollection's invariant dict signature.
+        views: Dict[str, Union[Metric, MetricCollection]] = {key: _ScalarKeyView(inner, key) for key in scalar_keys}
         super().__init__(views, prefix=prefix)
         # Keep a named reference to the shared inner without re-registering it
         # as an extra submodule — each view already holds it under .inner.

@@ -14,6 +14,7 @@ from torchmetrics.detection import MeanAveragePrecision
 from raidar.detection import (
     DetectionBatchInput,
     DetectionMetricAdapter,
+    DetectionOutput,
     DetectionStepOutput,
     TorchvisionDetectionLoss,
     detection_collate_fn,
@@ -45,9 +46,7 @@ def _synthetic_detection_samples(n: int, size: int = 64) -> List[Sample]:
             Sample(
                 input=torch.rand(3, size, size),
                 target={
-                    "boxes": torch.tensor(
-                        [[4.0, 4.0, 28.0, 28.0]], dtype=torch.float32
-                    ),
+                    "boxes": torch.tensor([[4.0, 4.0, 28.0, 28.0]], dtype=torch.float32),
                     "labels": torch.tensor([1], dtype=torch.int64),
                 },
                 metadata={},
@@ -124,11 +123,11 @@ def test_metric_adapter_no_op_when_predictions_none() -> None:
 def test_metric_adapter_forwards_to_inner_when_predictions_present() -> None:
     adapter = DetectionMetricAdapter(MeanAveragePrecision(iou_type="bbox"))
     preds = [
-        {
-            "boxes": torch.tensor([[0.0, 0.0, 10.0, 10.0]]),
-            "scores": torch.tensor([0.9]),
-            "labels": torch.tensor([1], dtype=torch.int64),
-        }
+        DetectionOutput(
+            boxes=torch.tensor([[0.0, 0.0, 10.0, 10.0]]),
+            scores=torch.tensor([0.9]),
+            labels=torch.tensor([1], dtype=torch.int64),
+        )
     ]
     targets = [
         {
@@ -141,11 +140,7 @@ def test_metric_adapter_forwards_to_inner_when_predictions_present() -> None:
     computed = adapter.compute()
     assert isinstance(computed, dict)
     # MeanAveragePrecision emits scalar `map` among other keys.
-    assert (
-        "map" in computed
-        or "MeanAveragePrecision_map" in computed
-        or any("map" in str(k) for k in computed.keys())
-    )
+    assert "map" in computed or "MeanAveragePrecision_map" in computed or any("map" in str(k) for k in computed.keys())
 
 
 # --- detection_collate_fn --------------------------------------------------
@@ -158,6 +153,7 @@ def test_detection_collate_preserves_lists_and_sets_batch_input() -> None:
     assert isinstance(batch.input, DetectionBatchInput)
     assert batch.input.shape[0] == 3
     assert len(batch.input.images) == 3
+    assert batch.input.targets is not None
     assert len(batch.input.targets) == 3
     # batch.target is the same list of dicts (for metrics/loss).
     assert batch.target is batch.input.targets
