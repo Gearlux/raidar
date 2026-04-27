@@ -39,7 +39,7 @@ Typical wiring (YAML)::
 """
 
 from types import SimpleNamespace
-from typing import Dict, List, Literal, Optional, Tuple
+from typing import Dict, List, Literal, Optional, Tuple, cast
 
 import torch
 import torch.nn as nn
@@ -78,9 +78,7 @@ def _build_yolo26(
     if pretrained_detector:
         weights_path = attempt_download_asset(f"yolo26{variant}.pt")
         ckpt = torch.load(weights_path, map_location="cpu", weights_only=False)
-        src_model = (
-            ckpt["model"] if isinstance(ckpt, dict) and "model" in ckpt else ckpt
-        )
+        src_model = ckpt["model"] if isinstance(ckpt, dict) and "model" in ckpt else ckpt
         src_state = src_model.float().state_dict()
         dst_state = detector.state_dict()
         for k, v in src_state.items():
@@ -100,8 +98,11 @@ def _build_yolo26(
     else:
         raw_args = vars(existing)
     merged: Dict[str, object] = {**DEFAULT_CFG_DICT, **raw_args}
-    detector.args = SimpleNamespace(**merged)
-    detector.hyp = detector.args
+    # nn.Module.__setattr__ only types Tensor / Module / Parameter assignments;
+    # bypass it via object.__setattr__ to attach the namespace cleanly.
+    namespace = SimpleNamespace(**merged)
+    object.__setattr__(detector, "args", namespace)
+    object.__setattr__(detector, "hyp", namespace)
 
     return detector
 
@@ -122,14 +123,12 @@ def _compute_yolo_loss_without_bn_drift(
     """
     was_training = detector.training
     detector.train()
-    bn_layers = [
-        m for m in detector.modules() if isinstance(m, nn.modules.batchnorm._BatchNorm)
-    ]
+    bn_layers = [m for m in detector.modules() if isinstance(m, nn.modules.batchnorm._BatchNorm)]
     for m in bn_layers:
         m.eval()
     try:
         with torch.no_grad():
-            return detector(batch_dict)
+            return cast(Tuple[Tensor, Tensor], detector(batch_dict))
     finally:
         if not was_training:
             detector.eval()
@@ -274,9 +273,7 @@ class YOLO26Model(nn.Module):
     ) -> None:
         super().__init__()
         if imgsz % 32 != 0:
-            raise ValueError(
-                f"imgsz must be a multiple of 32 (YOLO stride), got {imgsz}."
-            )
+            raise ValueError(f"imgsz must be a multiple of 32 (YOLO stride), got {imgsz}.")
         self.num_classes = int(num_classes)
         self.variant = variant
         self.imgsz = int(imgsz)
@@ -291,9 +288,7 @@ class YOLO26Model(nn.Module):
     def forward(self, x: DetectionBatchInput) -> DetectionStepOutput:
         if self.training:
             if x.targets is None:
-                raise ValueError(
-                    "YOLO26Model in train mode requires targets on DetectionBatchInput."
-                )
+                raise ValueError("YOLO26Model in train mode requires targets on DetectionBatchInput.")
             batch_dict = _build_yolo_batch_dict(x.images, x.targets, self.imgsz)
             loss_components, _items = self.detector(batch_dict)
             loss_total = loss_components.sum()
@@ -316,9 +311,7 @@ class YOLO26Model(nn.Module):
         losses: Optional[Dict[str, Tensor]] = None
         if x.targets is not None and self.compute_val_loss:
             batch_dict = _build_yolo_batch_dict(x.images, x.targets, self.imgsz)
-            loss_components, _items = _compute_yolo_loss_without_bn_drift(
-                self.detector, batch_dict
-            )
+            loss_components, _items = _compute_yolo_loss_without_bn_drift(self.detector, batch_dict)
             losses = {"loss": loss_components.sum()}
 
         img_tensor = torch.stack(x.images)
@@ -345,9 +338,7 @@ class YOLO26Model(nn.Module):
             )
         else:
             loss_summary = f"loss={float(losses['loss']):.4f}" if losses else "loss=n/a"
-            logger.debug(
-                f"[diag][yolo26][eval] {' '.join(per_image_summaries)} | {loss_summary}"
-            )
+            logger.debug(f"[diag][yolo26][eval] {' '.join(per_image_summaries)} | {loss_summary}")
         return DetectionStepOutput(losses=losses, predictions=predictions)
 
 

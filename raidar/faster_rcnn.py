@@ -25,7 +25,7 @@ Typical wiring (YAML)::
       weights: { loss_classifier: 1.0, loss_box_reg: 1.0 }
 """
 
-from typing import Dict, List, Literal, Optional
+from typing import Dict, List, Literal, Optional, cast
 
 import torch
 import torch.nn as nn
@@ -59,10 +59,7 @@ def _build_faster_rcnn(
     converges far better on small datasets than training the heads + RPN from
     scratch, since the RPN already produces sensible region proposals.
     """
-    from torchvision.models.detection import (
-        fasterrcnn_resnet50_fpn,
-        fasterrcnn_resnet50_fpn_v2,
-    )
+    from torchvision.models.detection import fasterrcnn_resnet50_fpn, fasterrcnn_resnet50_fpn_v2
     from torchvision.models.detection.faster_rcnn import FastRCNNPredictor
 
     factory = fasterrcnn_resnet50_fpn_v2 if variant == "v2" else fasterrcnn_resnet50_fpn
@@ -87,7 +84,7 @@ def _build_faster_rcnn(
         )
     in_features = detector.roi_heads.box_predictor.cls_score.in_features
     detector.roi_heads.box_predictor = FastRCNNPredictor(in_features, num_classes)
-    return detector
+    return cast(nn.Module, detector)
 
 
 def _compute_losses_without_bn_drift(
@@ -105,14 +102,12 @@ def _compute_losses_without_bn_drift(
     """
     was_training = detector.training
     detector.train()
-    bn_layers = [
-        m for m in detector.modules() if isinstance(m, nn.modules.batchnorm._BatchNorm)
-    ]
+    bn_layers = [m for m in detector.modules() if isinstance(m, nn.modules.batchnorm._BatchNorm)]
     for m in bn_layers:
         m.eval()
     try:
         with torch.no_grad():
-            return detector(images, targets)
+            return cast(Dict[str, Tensor], detector(images, targets))
     finally:
         if not was_training:
             detector.eval()
@@ -186,18 +181,12 @@ class FasterRCNNModel(nn.Module):
     def forward(self, x: DetectionBatchInput) -> DetectionStepOutput:
         if self.training:
             if x.targets is None:
-                raise ValueError(
-                    "FasterRCNNModel in train mode requires targets on DetectionBatchInput."
-                )
+                raise ValueError("FasterRCNNModel in train mode requires targets on DetectionBatchInput.")
             n_imgs = len(x.images)
             box_counts = [int(t["boxes"].shape[0]) for t in x.targets]
             total_boxes = sum(box_counts)
             train_losses: Dict[str, Tensor] = self.detector(x.images, x.targets)
-            losses_summary = ", ".join(
-                f"{k}={float(v):.4f}"
-                for k, v in train_losses.items()
-                if isinstance(v, Tensor)
-            )
+            losses_summary = ", ".join(f"{k}={float(v):.4f}" for k, v in train_losses.items() if isinstance(v, Tensor))
             if total_boxes == 0:
                 logger.warning(
                     f"[diag][faster_rcnn][train] batch sees ZERO target boxes across "
@@ -213,9 +202,7 @@ class FasterRCNNModel(nn.Module):
 
         losses: Optional[Dict[str, Tensor]] = None
         if x.targets is not None and self.compute_val_loss:
-            losses = _compute_losses_without_bn_drift(
-                self.detector, x.images, x.targets
-            )
+            losses = _compute_losses_without_bn_drift(self.detector, x.images, x.targets)
 
         raw = self.detector(x.images)
         predictions: List[DetectionOutput] = [
@@ -250,15 +237,8 @@ class FasterRCNNModel(nn.Module):
                 f"positive examples (verify target boxes during training)."
             )
         else:
-            losses_summary = (
-                ", ".join(f"{k}={float(v):.4f}" for k, v in losses.items())
-                if losses
-                else "n/a"
-            )
-            logger.debug(
-                f"[diag][faster_rcnn][eval] {' '.join(per_image_summaries)} | "
-                f"losses=({losses_summary})"
-            )
+            losses_summary = ", ".join(f"{k}={float(v):.4f}" for k, v in losses.items()) if losses else "n/a"
+            logger.debug(f"[diag][faster_rcnn][eval] {' '.join(per_image_summaries)} | " f"losses=({losses_summary})")
         return DetectionStepOutput(losses=losses, predictions=predictions)
 
 
