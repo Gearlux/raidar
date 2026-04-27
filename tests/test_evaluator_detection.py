@@ -11,11 +11,8 @@ from marainer.evaluator import Evaluator
 from torch.utils.data import DataLoader
 from torchmetrics.detection import MeanAveragePrecision
 
-from raidar.detection import (
-    DetectionMetricAdapter,
-    FasterRCNNModel,
-    detection_collate_fn,
-)
+from raidar.detection import DetectionMetricAdapter, detection_collate_fn
+from raidar.faster_rcnn import FasterRCNNModel
 
 
 class _RecordingSink:

@@ -1,7 +1,8 @@
-"""Object-detection models and adapters that plug into Marainer's :class:`~marainer.trainer.Trainer`.
+"""Generic object-detection adapters that plug into Marainer's
+:class:`~marainer.trainer.Trainer`.
 
-This module provides everything needed to train and evaluate torchvision-style
-detectors (Faster R-CNN and friends) through the **unchanged** base Trainer
+This module provides the detector-agnostic plumbing needed to train and
+evaluate torchvision-style detectors through the **unchanged** base Trainer
 flow — no subclass, no overridden step functions. Marainer's
 ``training_step`` / ``validation_step`` pattern::
 
@@ -15,13 +16,11 @@ fits detection because we adapt the pieces on either side:
   ``batch.input`` (torchvision detectors need both together during training),
   and exposes a ``shape`` property so ``batch.input.shape[0]`` still works for
   Lightning's batch-size logging.
-* :class:`FasterRCNNModel` wraps torchvision and **always** returns a
-  :class:`DetectionStepOutput` — in train mode it's ``{losses: {...},
-  predictions: None}``; in eval mode (with targets) it's ``{losses: {...},
-  predictions: [DetectionOutput, ...]}`` via a BN-frozen dual-forward so val
-  loss is directly comparable to train loss.
-* :class:`FasterRCNNLoss` sums the loss dict from the step output, returning a
-  real scalar in both train and val — no ``tensor(0.0)`` placeholder.
+* :class:`DetectionStepOutput` is the unified ``{losses, predictions}`` dict
+  every detector model in ``raidar`` returns from its ``forward``.
+* :class:`TorchvisionDetectionLoss` sums the loss dict from the step output,
+  returning a real scalar in both train and val — no ``tensor(0.0)``
+  placeholder.
 * :class:`DetectionMetricAdapter` unwraps predictions from the step output
   before forwarding to any torchmetrics detection metric (e.g.
   ``MeanAveragePrecision``).
@@ -32,9 +31,13 @@ The per-image prediction schema is the task-agnostic
 :class:`marainer.outputs.DetectionOutput` — the "know exactly what's in the
 dict" contract, re-exported from this module for convenience.
 
+Detector implementations live in their own sibling modules — see
+:mod:`raidar.faster_rcnn` for :class:`~raidar.faster_rcnn.FasterRCNNModel`.
+
 Typical wiring (YAML)::
 
-    loss_fn: !class:raidar.detection.FasterRCNNLoss
+    model: !class:raidar.faster_rcnn.FasterRCNNModel
+    loss_fn: !class:raidar.detection.TorchvisionDetectionLoss
       weights: { loss_classifier: 1.0, loss_box_reg: 1.0 }
     train_loader: !class:torch.utils.data.DataLoader
       collate_fn: !ref:raidar.detection.detection_collate_fn
@@ -44,7 +47,7 @@ Typical wiring (YAML)::
 """
 
 from dataclasses import dataclass
-from typing import Any, Dict, List, Literal, Optional, Tuple, TypedDict
+from typing import Any, Dict, List, Optional, Tuple, TypedDict
 
 import torch
 import torch.nn as nn
@@ -96,13 +99,14 @@ class DetectionBatchInput:
 
 
 class DetectionStepOutput(TypedDict):
-    """Unified model output consumed by :class:`FasterRCNNLoss` and
+    """Unified model output consumed by :class:`TorchvisionDetectionLoss` and
     :class:`DetectionMetricAdapter`.
 
     Keys:
-        losses: Torchvision loss dict (``loss_classifier``, ``loss_box_reg``,
-            ``loss_objectness``, ``loss_rpn_box_reg``) when targets were
-            provided; ``None`` otherwise.
+        losses: Torchvision loss dict (e.g. ``loss_classifier``,
+            ``loss_box_reg``, ``loss_objectness``, ``loss_rpn_box_reg`` for
+            Faster R-CNN; the exact keys depend on the detector family) when
+            targets were provided; ``None`` otherwise.
         predictions: Per-image :class:`DetectionOutput` list in eval mode;
             ``None`` during training (predictions there would waste compute
             and break gradient flow).
@@ -113,245 +117,23 @@ class DetectionStepOutput(TypedDict):
 
 
 # ---------------------------------------------------------------------------
-# Faster R-CNN model wrapper
-# ---------------------------------------------------------------------------
-
-
-def _build_faster_rcnn(
-    variant: Literal["v1", "v2"],
-    num_classes: int,
-    pretrained_backbone: bool,
-    pretrained_detector: bool,
-    trainable_backbone_layers: int,
-    min_size: int,
-    max_size: int,
-) -> nn.Module:
-    """Instantiate a torchvision Faster R-CNN with the box predictor head
-    replaced to match ``num_classes`` (including background=0).
-
-    With ``pretrained_detector=True`` the model loads the **full** COCO-trained
-    weights (91-class predictor included). The 91-class predictor is then
-    swapped for a fresh ``FastRCNNPredictor(in_features, num_classes)`` — the
-    backbone, FPN, RPN, and ROI pooler keep their pretrained weights, only the
-    final classification + box-regression heads start random. This usually
-    converges far better on small datasets than training the heads + RPN from
-    scratch, since the RPN already produces sensible region proposals.
-    """
-    from torchvision.models.detection import (fasterrcnn_resnet50_fpn,
-                                              fasterrcnn_resnet50_fpn_v2)
-    from torchvision.models.detection.faster_rcnn import FastRCNNPredictor
-
-    factory = fasterrcnn_resnet50_fpn_v2 if variant == "v2" else fasterrcnn_resnet50_fpn
-    if pretrained_detector:
-        # Full COCO-pretrained model. ``weights_backbone`` is redundant when the
-        # full detector weights are loaded — torchvision raises if both are set.
-        detector = factory(
-            weights="DEFAULT",
-            weights_backbone=None,
-            trainable_backbone_layers=trainable_backbone_layers,
-            min_size=min_size,
-            max_size=max_size,
-        )
-    else:
-        weights_backbone = "DEFAULT" if pretrained_backbone else None
-        detector = factory(
-            weights=None,
-            weights_backbone=weights_backbone,
-            trainable_backbone_layers=trainable_backbone_layers,
-            min_size=min_size,
-            max_size=max_size,
-        )
-    in_features = detector.roi_heads.box_predictor.cls_score.in_features
-    detector.roi_heads.box_predictor = FastRCNNPredictor(in_features, num_classes)
-    return detector
-
-
-def _compute_losses_without_bn_drift(
-    detector: nn.Module,
-    images: List[Tensor],
-    targets: List[Dict[str, Tensor]],
-) -> Dict[str, Tensor]:
-    """Run the detector's training forward in eval-like conditions.
-
-    Torchvision's ``GeneralizedRCNN`` only emits its loss dict when
-    ``self.training is True``, so we briefly call ``train()``. To prevent
-    BatchNorm running statistics from drifting during validation, every BN
-    layer is forced back to ``eval()`` for the duration of the pass. Grad is
-    disabled — we only want the scalar loss values.
-    """
-    was_training = detector.training
-    detector.train()
-    bn_layers = [
-        m for m in detector.modules() if isinstance(m, nn.modules.batchnorm._BatchNorm)
-    ]
-    for m in bn_layers:
-        m.eval()
-    try:
-        with torch.no_grad():
-            return detector(images, targets)
-    finally:
-        if not was_training:
-            detector.eval()
-
-
-@configurable
-class FasterRCNNModel(nn.Module):
-    """Torchvision Faster R-CNN wrapped for the Marainer Trainer flow.
-
-    Returns a :class:`DetectionStepOutput` in every mode:
-
-    * **Training** (``self.training is True``): ``{losses: <dict>, predictions: None}``.
-    * **Validation / test** with targets: ``{losses: <dict>, predictions: [...]}``
-      via a BN-frozen dual-forward. This makes ``val/loss`` directly
-      comparable to ``train/loss`` — useful for spotting overfitting before
-      mAP has had enough samples to stabilize.
-    * **Pure prediction** (no targets): ``{losses: None, predictions: [...]}``.
-
-    Args:
-        num_classes: Total class count **including** background (class 0).
-        variant: ``"v1"`` (:func:`torchvision.models.detection.fasterrcnn_resnet50_fpn`)
-            or ``"v2"`` (the improved FPN v2 variant). v2 is the default.
-        pretrained_backbone: Load ImageNet-pretrained ResNet-50 weights for
-            the backbone. Ignored when ``pretrained_detector=True`` (the full
-            detector weights already include a pretrained backbone).
-        pretrained_detector: Load **full** COCO-pretrained Faster R-CNN
-            weights (backbone + FPN + RPN + ROI pooler + 91-class predictor).
-            The 91-class box predictor is then swapped for a fresh head with
-            ``num_classes`` outputs, so the body stays pretrained while the
-            classifier starts from scratch. Strongly recommended for
-            small-dataset training — the pretrained RPN produces sensible
-            region proposals from epoch 0, avoiding the score-collapse you
-            get when training all heads from scratch with few examples.
-        trainable_backbone_layers: Number of trainable trailing ResNet stages
-            (0-5). Torchvision's default is 3.
-        min_size / max_size: Image resize bounds applied by the detector's
-            built-in :class:`GeneralizedRCNNTransform`.
-        compute_val_loss: When False, skips the dual-forward during eval so
-            val/test throughput matches predictions-only. Defaults to True.
-
-    The output in eval mode wraps torchvision's raw per-image dict as a
-    typed :class:`DetectionOutput` so downstream code can rely on the three
-    keys ``{boxes, scores, labels}``.
-    """
-
-    def __init__(
-        self,
-        num_classes: int = 2,
-        variant: Literal["v1", "v2"] = "v2",
-        pretrained_backbone: bool = True,
-        pretrained_detector: bool = False,
-        trainable_backbone_layers: int = 3,
-        min_size: int = 800,
-        max_size: int = 1333,
-        compute_val_loss: bool = True,
-    ) -> None:
-        super().__init__()
-        self.num_classes = int(num_classes)
-        self.variant = variant
-        self.compute_val_loss = bool(compute_val_loss)
-        self.detector = _build_faster_rcnn(
-            variant=variant,
-            num_classes=self.num_classes,
-            pretrained_backbone=pretrained_backbone,
-            pretrained_detector=pretrained_detector,
-            trainable_backbone_layers=trainable_backbone_layers,
-            min_size=min_size,
-            max_size=max_size,
-        )
-
-    def forward(self, x: DetectionBatchInput) -> DetectionStepOutput:
-        if self.training:
-            if x.targets is None:
-                raise ValueError(
-                    "FasterRCNNModel in train mode requires targets on DetectionBatchInput."
-                )
-            n_imgs = len(x.images)
-            box_counts = [int(t["boxes"].shape[0]) for t in x.targets]
-            total_boxes = sum(box_counts)
-            train_losses: Dict[str, Tensor] = self.detector(x.images, x.targets)
-            losses_summary = ", ".join(
-                f"{k}={float(v):.4f}"
-                for k, v in train_losses.items()
-                if isinstance(v, Tensor)
-            )
-            if total_boxes == 0:
-                logger.warning(
-                    f"[diag][faster_rcnn][train] batch sees ZERO target boxes across "
-                    f"{n_imgs} image(s) — gradients on classifier/box-reg heads will be "
-                    f"trivial. losses=({losses_summary})"
-                )
-            else:
-                logger.info(
-                    f"[diag][faster_rcnn][train] images={n_imgs} target_boxes/img={box_counts} "
-                    f"total_boxes={total_boxes} losses=({losses_summary})"
-                )
-            return DetectionStepOutput(losses=train_losses, predictions=None)
-
-        losses: Optional[Dict[str, Tensor]] = None
-        if x.targets is not None and self.compute_val_loss:
-            losses = _compute_losses_without_bn_drift(
-                self.detector, x.images, x.targets
-            )
-
-        raw = self.detector(x.images)
-        predictions: List[DetectionOutput] = [
-            DetectionOutput(
-                boxes=p["boxes"].float(),
-                scores=p["scores"].float(),
-                labels=p["labels"].long(),
-            )
-            for p in raw
-        ]
-
-        # Per-batch diagnostic on the raw prediction stream — useful when the
-        # downstream sink reports "no boxes" so the user can tell whether the
-        # model produces NOTHING (head un-trained) vs. plenty of low-score
-        # candidates that downstream score thresholds drop.
-        per_image_summaries = []
-        for i, p in enumerate(predictions):
-            n = int(p["boxes"].shape[0])
-            if n == 0:
-                per_image_summaries.append(f"img{i}=0")
-                continue
-            scores = p["scores"]
-            per_image_summaries.append(
-                f"img{i}={n}@s∈[{float(scores.min()):.3f},{float(scores.max()):.3f}]"
-                f"(mean={float(scores.mean()):.3f})"
-            )
-        total_pred = sum(int(p["boxes"].shape[0]) for p in predictions)
-        if total_pred == 0:
-            logger.warning(
-                f"[diag][faster_rcnn][eval] {len(predictions)} image(s): model produced "
-                f"ZERO predictions across the batch — classifier head likely never saw "
-                f"positive examples (verify target boxes during training)."
-            )
-        else:
-            losses_summary = (
-                ", ".join(f"{k}={float(v):.4f}" for k, v in losses.items())
-                if losses
-                else "n/a"
-            )
-            logger.info(
-                f"[diag][faster_rcnn][eval] {' '.join(per_image_summaries)} | "
-                f"losses=({losses_summary})"
-            )
-        return DetectionStepOutput(losses=losses, predictions=predictions)
-
-
-# ---------------------------------------------------------------------------
 # Loss adapter
 # ---------------------------------------------------------------------------
 
 
 @configurable
-class FasterRCNNLoss(nn.Module):
-    """Sum torchvision's loss dict with optional per-head weights.
+class TorchvisionDetectionLoss(nn.Module):
+    """Sum a torchvision detector's loss dict with optional per-head weights.
 
     Consumes a :class:`DetectionStepOutput` and returns the weighted sum of
-    ``step_output["losses"]`` as a scalar tensor. Because
-    :class:`FasterRCNNModel` recomputes losses under BN-frozen eval during
-    validation, ``train/loss`` and ``val/loss`` report the **same** torchvision
-    objective — they are directly comparable.
+    ``step_output["losses"]`` as a scalar tensor. Works for any torchvision
+    detector that emits a loss dict during training (Faster R-CNN, RetinaNet,
+    FCOS, …) — the keys differ by family but the summing contract is the same.
+
+    When the model recomputes losses under BN-frozen eval during validation
+    (as :class:`raidar.faster_rcnn.FasterRCNNModel` does), ``train/loss`` and
+    ``val/loss`` report the **same** torchvision objective — they are directly
+    comparable.
 
     When ``step_output["losses"]`` is ``None`` (pure-prediction path, no
     targets provided), returns a device-matching zero so Lightning's scalar
@@ -542,8 +324,10 @@ def detection_collate_fn(batch: List[Sample]) -> Sample:
     The returned :class:`~dataflux.sample.Sample` has:
 
     * ``.input`` — :class:`DetectionBatchInput` carrying ``images`` (list of
-      tensors) AND ``targets`` (list of dicts). This is what the
-      :class:`FasterRCNNModel` needs in train and val modes alike.
+      tensors) AND ``targets`` (list of dicts). This is what torchvision
+      detector wrappers (e.g.
+      :class:`raidar.faster_rcnn.FasterRCNNModel`) need in train and val
+      modes alike.
     * ``.target`` — the same list of target dicts, so
       :class:`DetectionMetricAdapter` can feed torchmetrics.
     * ``.metadata`` — list of the per-sample metadata dicts (preserved for
@@ -564,12 +348,12 @@ def detection_collate_fn(batch: List[Sample]) -> Sample:
 
 
 __all__ = [
+    "DEFAULT_MEAN_AP_SCALAR_KEYS",
     "DetectionBatchInput",
     "DetectionMetricAdapter",
     "DetectionOutput",
     "DetectionPredictions",
     "DetectionStepOutput",
-    "FasterRCNNLoss",
-    "FasterRCNNModel",
+    "TorchvisionDetectionLoss",
     "detection_collate_fn",
 ]

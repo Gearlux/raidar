@@ -6,10 +6,11 @@ from raidar.detection import (
     DetectionOutput,
     DetectionPredictions,
     DetectionStepOutput,
-    FasterRCNNLoss,
-    FasterRCNNModel,
+    TorchvisionDetectionLoss,
     detection_collate_fn,
 )
+from raidar.faster_rcnn import FasterRCNNModel
+from raidar.yolo26 import YOLO26Model
 
 __all__ = [
     "DetectionBatchInput",
@@ -17,7 +18,8 @@ __all__ = [
     "DetectionOutput",
     "DetectionPredictions",
     "DetectionStepOutput",
-    "FasterRCNNLoss",
     "FasterRCNNModel",
+    "TorchvisionDetectionLoss",
+    "YOLO26Model",
     "detection_collate_fn",
 ]
