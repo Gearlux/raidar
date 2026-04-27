@@ -35,6 +35,9 @@ mlflow.db
 lightning_logs/
 models/*.pt
 models/*.onnx
+# Ultralytics auto-downloads YOLO weights into the cwd on first use;
+# they're a runtime cache, not source.
+yolo*.pt
 *.h5
 *.zarr
 
