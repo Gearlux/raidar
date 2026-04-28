@@ -263,6 +263,35 @@ def test_faster_rcnn_pretrained_detector_default_off() -> None:
     assert predictor.cls_score.out_features == 2
 
 
+def test_faster_rcnn_loads_from_checkpoint_path(tmp_path: Any) -> None:
+    """``checkpoint_path`` round-trips a Lightning-style ``state_dict`` into the model."""
+    src = _build_small_faster_rcnn()
+    # Mutate one parameter so we can detect whether the load reached the model.
+    src_predictor = cast(FastRCNNPredictor, src.detector.roi_heads.box_predictor)  # type: ignore[union-attr]
+    sentinel = src_predictor.cls_score.weight.data
+    sentinel.fill_(0.42)
+
+    # Lightning wraps the model under ``self.model = model``, so the saved
+    # state_dict's keys are prefixed with ``model.``. Mimic that here.
+    wrapped = {f"model.{k}": v for k, v in src.state_dict().items()}
+    ckpt = tmp_path / "fake_lightning.ckpt"
+    torch.save({"state_dict": wrapped, "epoch": 1}, ckpt)
+
+    loaded = FasterRCNNModel(
+        num_classes=2,
+        variant="v2",
+        pretrained_backbone=False,
+        pretrained_detector=False,
+        trainable_backbone_layers=1,
+        min_size=64,
+        max_size=128,
+        checkpoint_path=str(ckpt),
+    )
+    loaded_predictor = cast(FastRCNNPredictor, loaded.detector.roi_heads.box_predictor)  # type: ignore[union-attr]
+    restored = loaded_predictor.cls_score.weight.data
+    assert torch.equal(restored, sentinel)
+
+
 # --- End-to-end: adapter pattern inside the unchanged base Trainer ---------
 
 

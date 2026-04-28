@@ -48,6 +48,7 @@ from logflow import get_logger
 from marainer.outputs import DetectionOutput
 from torch import Tensor
 
+from raidar.checkpoint import load_lightning_checkpoint
 from raidar.detection import DetectionBatchInput, DetectionStepOutput
 
 logger = get_logger(__name__)
@@ -260,6 +261,16 @@ class YOLO26Model(nn.Module):
             :class:`DetectionOutput`.
         compute_val_loss: When False, skips the loss recomputation during
             eval. Defaults to True.
+        checkpoint_path: Optional path to a Lightning ``.ckpt`` (or plain
+            torch state-dict) saved by a previous training run. Loaded after
+            ``pretrained_detector`` weights so checkpoint values win.
+            ``"model."`` prefix from Lightning wrapping is stripped
+            automatically. Use this to resume training from a checkpoint,
+            or to plug a trained model into the Evaluator without going
+            through Marainer.
+        checkpoint_strict: Forwarded to ``load_state_dict(strict=...)``.
+            Defaults to False so e.g. a re-trained classifier head with a
+            different ``num_classes`` doesn't reject the whole load.
     """
 
     def __init__(
@@ -270,6 +281,8 @@ class YOLO26Model(nn.Module):
         imgsz: int = 640,
         score_threshold: float = 0.25,
         compute_val_loss: bool = True,
+        checkpoint_path: Optional[str] = None,
+        checkpoint_strict: bool = False,
     ) -> None:
         super().__init__()
         if imgsz % 32 != 0:
@@ -284,6 +297,8 @@ class YOLO26Model(nn.Module):
             num_classes=self.num_classes,
             pretrained_detector=pretrained_detector,
         )
+        if checkpoint_path:
+            load_lightning_checkpoint(self, checkpoint_path, strict=checkpoint_strict)
 
     def forward(self, x: DetectionBatchInput) -> DetectionStepOutput:
         if self.training:
@@ -302,7 +317,7 @@ class YOLO26Model(nn.Module):
                     f"trivial. loss={float(loss_total):.4f}"
                 )
             else:
-                logger.info(
+                logger.trace(
                     f"[diag][yolo26][train] images={n_imgs} target_boxes/img={box_counts} "
                     f"total_boxes={total_boxes} loss={float(loss_total):.4f}"
                 )
