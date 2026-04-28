@@ -36,8 +36,12 @@ lightning_logs/
 models/*.pt
 models/*.onnx
 # Ultralytics auto-downloads YOLO weights into the cwd on first use;
-# they're a runtime cache, not source.
+# they're a runtime cache, not source. Same applies to torchvision /
+# RT-DETR / RF-DETR pretrained checkpoints downloaded on demand.
 yolo*.pt
+*.pth
+rtdetr*.pt
+rfdetr*.pt
 *.h5
 *.zarr
 

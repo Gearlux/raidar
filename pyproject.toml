@@ -15,6 +15,7 @@ dependencies = [
     "pycocotools",
     "pytorch-lightning",
     "ultralytics>=8.4.0",
+    "rfdetr>=1.6.0",
 ]
 requires-python = ">=3.12"
 

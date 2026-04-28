@@ -34,6 +34,7 @@ from logflow import get_logger
 from marainer.outputs import DetectionOutput
 from torch import Tensor
 
+from raidar.checkpoint import load_lightning_checkpoint
 from raidar.detection import DetectionBatchInput, DetectionStepOutput
 
 logger = get_logger(__name__)
@@ -147,6 +148,13 @@ class FasterRCNNModel(nn.Module):
             built-in :class:`GeneralizedRCNNTransform`.
         compute_val_loss: When False, skips the dual-forward during eval so
             val/test throughput matches predictions-only. Defaults to True.
+        checkpoint_path: Optional path to a Lightning ``.ckpt`` (or plain
+            torch state-dict) saved by a previous training run. Loaded after
+            ``pretrained_*`` weights so checkpoint values win. ``"model."``
+            prefix from Lightning wrapping is stripped automatically.
+        checkpoint_strict: Forwarded to ``load_state_dict(strict=...)``.
+            Defaults to False so e.g. a re-trained classifier head with a
+            different ``num_classes`` doesn't reject the whole load.
 
     The output in eval mode wraps torchvision's raw per-image dict as a
     typed :class:`~marainer.outputs.DetectionOutput` so downstream code can
@@ -163,6 +171,8 @@ class FasterRCNNModel(nn.Module):
         min_size: int = 800,
         max_size: int = 1333,
         compute_val_loss: bool = True,
+        checkpoint_path: Optional[str] = None,
+        checkpoint_strict: bool = False,
     ) -> None:
         super().__init__()
         self.num_classes = int(num_classes)
@@ -177,6 +187,8 @@ class FasterRCNNModel(nn.Module):
             min_size=min_size,
             max_size=max_size,
         )
+        if checkpoint_path:
+            load_lightning_checkpoint(self, checkpoint_path, strict=checkpoint_strict)
 
     def forward(self, x: DetectionBatchInput) -> DetectionStepOutput:
         if self.training:
