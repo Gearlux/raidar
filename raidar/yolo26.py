@@ -58,6 +58,7 @@ def _build_yolo26(
     variant: Literal["n", "s", "m", "l", "x"],
     num_classes: int,
     pretrained_detector: bool,
+    agnostic_nms: bool = False,
 ) -> nn.Module:
     """Instantiate a YOLO26 ``DetectionModel`` with ``num_classes`` outputs.
 
@@ -104,6 +105,8 @@ def _build_yolo26(
     namespace = SimpleNamespace(**merged)
     object.__setattr__(detector, "args", namespace)
     object.__setattr__(detector, "hyp", namespace)
+
+    detector.set_head_attr(agnostic_nms=agnostic_nms)
 
     return detector
 
@@ -305,8 +308,8 @@ class YOLO26Model(nn.Module):
             variant=variant,
             num_classes=self.num_classes,
             pretrained_detector=pretrained_detector,
+            agnostic_nms=self.agnostic_nms,
         )
-        self.detector.set_head_attr(agnostic_nms=self.agnostic_nms)
         if checkpoint_path:
             load_lightning_checkpoint(self, checkpoint_path, strict=checkpoint_strict)
 
