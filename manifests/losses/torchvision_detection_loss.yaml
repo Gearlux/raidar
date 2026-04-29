@@ -1,0 +1,11 @@
+description: "Sum a torchvision-style detector's loss dict with optional per-component weights."
+use_case: "Generic loss adapter for any raidar detector. Faster R-CNN emits a multi-component dict (loss_classifier / loss_box_reg / loss_objectness / loss_rpn_box_reg) — supply per-key weights to balance them. YOLO26 / RT-DETR emit a single 'loss' key already balanced internally — leave weights empty."
+category: "Detection"
+flux_type: "Loss"
+task: "object_detection"
+class_path: "raidar.detection.TorchvisionDetectionLoss"
+params:
+  weights:
+    type: "Dict[str, float] | null"
+    default: null
+    description: "Optional per-loss-key multipliers. Keys missing from the dict are weighted 1.0; extras are ignored."

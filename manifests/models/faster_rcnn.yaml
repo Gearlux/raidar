@@ -1,0 +1,48 @@
+description: "Torchvision Faster R-CNN wrapped for the Marainer Trainer flow."
+use_case: "Two-stage detector with strong small-dataset accuracy. Returns a torchvision-style multi-component loss dict — pair with TorchvisionDetectionLoss (with optional per-component weights) + DetectionMetricAdapter."
+category: "Detection"
+flux_type: "Model"
+task: "object_detection"
+class_path: "raidar.faster_rcnn.FasterRCNNModel"
+params:
+  num_classes:
+    type: "int"
+    default: 2
+    description: "Total class count INCLUDING background (class 0)."
+  variant:
+    type: "str"
+    default: "v2"
+    choices: ["v1", "v2"]
+    description: "v1 = fasterrcnn_resnet50_fpn; v2 = improved FPN-v2 variant."
+  pretrained_backbone:
+    type: "bool"
+    default: true
+    description: "Load ImageNet-pretrained ResNet-50 backbone. Ignored when pretrained_detector=true."
+  pretrained_detector:
+    type: "bool"
+    default: false
+    description: "Load full COCO-pretrained Faster R-CNN weights. The 91-class predictor is swapped for a fresh head with num_classes outputs."
+  trainable_backbone_layers:
+    type: "int"
+    default: 3
+    description: "Number of trainable trailing ResNet stages (0-5)."
+  min_size:
+    type: "int"
+    default: 800
+    description: "Lower bound passed to torchvision's GeneralizedRCNNTransform."
+  max_size:
+    type: "int"
+    default: 1333
+    description: "Upper bound passed to torchvision's GeneralizedRCNNTransform."
+  compute_val_loss:
+    type: "bool"
+    default: true
+    description: "When False, skips the BN-frozen dual-forward during eval."
+  checkpoint_path:
+    type: "str | null"
+    default: null
+    description: "Optional Lightning .ckpt path."
+  checkpoint_strict:
+    type: "bool"
+    default: false
+    description: "Forwarded to load_state_dict(strict=...)."

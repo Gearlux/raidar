@@ -1,0 +1,19 @@
+description: "Wrap a torchmetrics detection metric so it consumes DetectionStepOutput and surfaces scalar keys for log_dict."
+use_case: "Required wrapper for any torchmetrics.detection.* metric used in a raidar val_metrics block. Inner is typically MeanAveragePrecision; the adapter unwraps step_output['predictions'] before forwarding and surfaces each scalar key (map, map_50, mar_100, ...) as its own Lightning-loggable view."
+category: "Detection"
+flux_type: "Metric"
+task: "object_detection"
+class_path: "raidar.detection.DetectionMetricAdapter"
+params:
+  inner:
+    type: "torchmetrics.Metric"
+    required: true
+    description: "The detection metric to wrap. Typically !class:torchmetrics.detection.MeanAveragePrecision with iou_type=bbox."
+  scalar_keys:
+    type: "Tuple[str, ...]"
+    default: ["map", "map_50", "map_75", "map_small", "map_medium", "map_large", "mar_1", "mar_10", "mar_100", "mar_small", "mar_medium", "mar_large"]
+    description: "Scalar-valued keys of inner.compute() to surface. Override for inners that emit a plain scalar (use a single-key tuple like ['value'])."
+  prefix:
+    type: "str"
+    default: ""
+    description: "Optional prefix prepended to every surfaced key."

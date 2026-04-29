@@ -1,0 +1,35 @@
+description: "Roboflow RF-DETR wrapped for the Marainer Trainer flow."
+use_case: "DETR-family detector with Roboflow's lightweight backbones. Pair with TorchvisionDetectionLoss + DetectionMetricAdapter."
+category: "Detection"
+flux_type: "Model"
+task: "object_detection"
+class_path: "raidar.rfdetr.RFDETRModel"
+params:
+  num_classes:
+    type: "int"
+    default: 1
+    description: "Foreground class count."
+  variant:
+    type: "str"
+    default: "nano"
+    description: "Model size — see raidar.rfdetr for available variants."
+  pretrained_detector:
+    type: "bool"
+    default: true
+    description: "Load full COCO-pretrained RF-DETR weights."
+  imgsz:
+    type: "int"
+    default: 640
+    description: "Square input size (must satisfy the model's stride)."
+  score_threshold:
+    type: "float"
+    default: 0.25
+    description: "Eval-time confidence cutoff."
+  checkpoint_path:
+    type: "str | null"
+    default: null
+    description: "Optional Lightning .ckpt path."
+  checkpoint_strict:
+    type: "bool"
+    default: false
+    description: "Forwarded to load_state_dict(strict=...)."

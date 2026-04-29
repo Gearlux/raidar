@@ -1,0 +1,40 @@
+description: "Ultralytics RT-DETR (Real-Time DEtection TRansformer) wrapped for the Marainer Trainer flow."
+use_case: "Transformer-based NMS-free detector. Always emits 300 raw queries per image — score_threshold is the only mechanism keeping MeanAveragePrecision tractable on real data. Pair with TorchvisionDetectionLoss + DetectionMetricAdapter."
+category: "Detection"
+flux_type: "Model"
+task: "object_detection"
+class_path: "raidar.rtdetr.RTDETRModel"
+params:
+  num_classes:
+    type: "int"
+    default: 1
+    description: "Foreground class count. RT-DETR uses 0..nc-1 directly (no background slot)."
+  variant:
+    type: "str"
+    default: "l"
+    choices: ["l", "x", "resnet50", "resnet101"]
+    description: "Model size: l (large, default) / x (xlarge) ship public COCO weights; resnet variants are architecture-only (set pretrained_detector=false)."
+  pretrained_detector:
+    type: "bool"
+    default: true
+    description: "Load full COCO-pretrained RT-DETR weights. Classifier heads skipped if num_classes != 80. Must be False for resnet variants."
+  imgsz:
+    type: "int"
+    default: 640
+    description: "Square input size (must be a multiple of 32). All images in a batch must already be [3, imgsz, imgsz]."
+  score_threshold:
+    type: "float"
+    default: 0.25
+    description: "Eval-time confidence cutoff applied to per-query max class probability."
+  compute_val_loss:
+    type: "bool"
+    default: true
+    description: "When False, skips the loss recomputation during eval."
+  checkpoint_path:
+    type: "str | null"
+    default: null
+    description: "Optional Lightning .ckpt path. Loaded after pretrained_detector so checkpoint values win."
+  checkpoint_strict:
+    type: "bool"
+    default: false
+    description: "Forwarded to load_state_dict(strict=...)."
