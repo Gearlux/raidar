@@ -57,3 +57,5 @@ test-report.xml
 csv_logs/
 tb_logs/
 checkpoints/
+*.pth
+*.pt
