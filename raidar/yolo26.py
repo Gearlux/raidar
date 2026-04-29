@@ -323,16 +323,17 @@ class YOLO26Model(nn.Module):
             n_imgs = len(x.images)
             box_counts = [int(t["boxes"].shape[0]) for t in x.targets]
             total_boxes = sum(box_counts)
+            loss_value = loss_total.detach().item()
             if total_boxes == 0:
                 logger.warning(
                     f"[diag][yolo26][train] batch sees ZERO target boxes across "
                     f"{n_imgs} image(s) — gradients on classifier head will be "
-                    f"trivial. loss={float(loss_total):.4f}"
+                    f"trivial. loss={loss_value:.4f}"
                 )
             else:
                 logger.trace(
                     f"[diag][yolo26][train] images={n_imgs} target_boxes/img={box_counts} "
-                    f"total_boxes={total_boxes} loss={float(loss_total):.4f}"
+                    f"total_boxes={total_boxes} loss={loss_value:.4f}"
                 )
             return DetectionStepOutput(losses={"loss": loss_total}, predictions=None)
 
@@ -352,14 +353,14 @@ class YOLO26Model(nn.Module):
             if n == 0:
                 per_image_summaries.append(f"img{i}=0")
                 continue
-            scores = p["scores"]
+            scores = p["scores"].detach()
             per_image_summaries.append(
-                f"img{i}={n}@s∈[{float(scores.min()):.3f},{float(scores.max()):.3f}]"
-                f"(mean={float(scores.mean()):.3f})"
+                f"img{i}={n}@s∈[{scores.min().item():.3f},{scores.max().item():.3f}]"
+                f"(mean={scores.mean().item():.3f})"
             )
         total_pred = sum(int(p["boxes"].shape[0]) for p in predictions)
         if total_pred == 0:
-            logger.warning(
+            logger.trace(
                 f"[diag][yolo26][eval] {len(predictions)} image(s): no predictions "
                 f"survived score_threshold={self.score_threshold} — classifier head "
                 f"may be undertrained, or threshold may be too high."
