@@ -2,6 +2,7 @@
 
 from raidar.detection import (
     DetectionBatchInput,
+    DetectionConfusionMatrix,
     DetectionMetricAdapter,
     DetectionOutput,
     DetectionPredictions,
@@ -16,6 +17,7 @@ from raidar.yolo26 import YOLO26Model
 
 __all__ = [
     "DetectionBatchInput",
+    "DetectionConfusionMatrix",
     "DetectionMetricAdapter",
     "DetectionOutput",
     "DetectionPredictions",
