@@ -334,6 +334,31 @@ def test_yolo26_pretrained_detector_default_off() -> None:
     assert head.nc == 2
 
 
+def test_yolo26_agnostic_nms_default_off_propagates_to_head() -> None:
+    model = YOLO26Model(num_classes=2, variant="n", pretrained_detector=False, imgsz=IMGSZ)
+    head = cast(Detect, model.detector.model[-1])  # type: ignore[index, union-attr]
+    assert head.agnostic_nms is False
+    assert model.agnostic_nms is False
+
+
+def test_yolo26_agnostic_nms_true_propagates_to_head() -> None:
+    model = YOLO26Model(
+        num_classes=2,
+        variant="n",
+        pretrained_detector=False,
+        imgsz=IMGSZ,
+        agnostic_nms=True,
+    )
+    head = cast(Detect, model.detector.model[-1])  # type: ignore[index, union-attr]
+    assert head.agnostic_nms is True
+    assert model.agnostic_nms is True
+    # Forward must still run with the flag flipped.
+    model.eval()
+    batch = DetectionBatchInput(images=_make_images(1), targets=None)
+    step = model(batch)
+    assert step["predictions"] is not None and len(step["predictions"]) == 1
+
+
 # --- End-to-end: adapter pattern inside the unchanged base Trainer ---------
 
 

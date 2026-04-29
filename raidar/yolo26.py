@@ -259,6 +259,13 @@ class YOLO26Model(nn.Module):
         score_threshold: Eval-time confidence cutoff applied to the
             ``[B, N, 6]`` end-to-end output before packing into
             :class:`DetectionOutput`.
+        agnostic_nms: Class-agnostic top-k selection in the end-to-end head
+            — pick the top ``max_det`` boxes by their best class score
+            regardless of class id, instead of considering all classes
+            jointly. Forwarded to ``Detect.agnostic_nms`` via
+            ``DetectionModel.set_head_attr`` so it applies to both the
+            internal ``end2end`` path and the legacy multi-class top-k path.
+            Defaults to False.
         compute_val_loss: When False, skips the loss recomputation during
             eval. Defaults to True.
         checkpoint_path: Optional path to a Lightning ``.ckpt`` (or plain
@@ -280,6 +287,7 @@ class YOLO26Model(nn.Module):
         pretrained_detector: bool = True,
         imgsz: int = 640,
         score_threshold: float = 0.25,
+        agnostic_nms: bool = False,
         compute_val_loss: bool = True,
         checkpoint_path: Optional[str] = None,
         checkpoint_strict: bool = False,
@@ -291,12 +299,14 @@ class YOLO26Model(nn.Module):
         self.variant = variant
         self.imgsz = int(imgsz)
         self.score_threshold = float(score_threshold)
+        self.agnostic_nms = bool(agnostic_nms)
         self.compute_val_loss = bool(compute_val_loss)
         self.detector = _build_yolo26(
             variant=variant,
             num_classes=self.num_classes,
             pretrained_detector=pretrained_detector,
         )
+        self.detector.set_head_attr(agnostic_nms=self.agnostic_nms)
         if checkpoint_path:
             load_lightning_checkpoint(self, checkpoint_path, strict=checkpoint_strict)
 
