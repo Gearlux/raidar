@@ -393,17 +393,26 @@ class _DetectionConfusionInner(Metric):
         pred: DetectionOutput,
         target: Dict[str, Tensor],
     ) -> Tuple[int, int, int]:
+        # Move every input tensor to CPU at function entry. The matcher is
+        # integer-counting with no gradient flow — there's no GPU benefit.
+        # Keeping everything on CPU also avoids device mismatches between the
+        # caller's tensors (often on MPS / CUDA via Lightning) and locally-
+        # created tensors like ``gt_matched``, which would otherwise need
+        # explicit device threading.
         gt_boxes = target.get("boxes")
         gt_labels = target.get("labels")
         if gt_boxes is None or gt_labels is None:
             gt_boxes = torch.zeros((0, 4), dtype=torch.float32)
             gt_labels = torch.zeros((0,), dtype=torch.long)
+        else:
+            gt_boxes = gt_boxes.detach().cpu()
+            gt_labels = gt_labels.detach().cpu()
         n_gt = int(gt_boxes.shape[0])
 
-        scores = pred["scores"]
+        scores = pred["scores"].detach().cpu()
         keep = scores >= self.score_threshold
-        pred_boxes = pred["boxes"][keep]
-        pred_labels = pred["labels"][keep]
+        pred_boxes = pred["boxes"].detach().cpu()[keep]
+        pred_labels = pred["labels"].detach().cpu()[keep]
         pred_scores = scores[keep]
         n_pred = int(pred_boxes.shape[0])
 

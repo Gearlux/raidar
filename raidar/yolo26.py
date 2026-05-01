@@ -367,7 +367,7 @@ class YOLO26Model(nn.Module):
             )
         else:
             loss_summary = f"loss={float(losses['loss']):.4f}" if losses else "loss=n/a"
-            logger.debug(f"[diag][yolo26][eval] {' '.join(per_image_summaries)} | {loss_summary}")
+            logger.trace(f"[diag][yolo26][eval] {' '.join(per_image_summaries)} | {loss_summary}")
         return DetectionStepOutput(losses=losses, predictions=predictions)
 
 
