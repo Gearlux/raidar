@@ -1,0 +1,41 @@
+# Train YOLO26 via Ultralytics' native trainer over in-memory `dataflux.Flux`
+# objects — no on-disk YOLO data.yaml, no image directory, just the same
+# Confluid-wired Flux pipeline the Lightning-driven `marainer train` flow uses.
+#
+# Run:
+#   marainer ultralytics-train raidar/examples/ultralytics_train_flux.yaml
+#
+# Flux mode swaps the trainer for `FluxDetectionTrainer` whose `build_dataset`
+# returns a `FluxYOLODataset(YOLODataset)` reading samples from the supplied
+# Flux. Mosaic + albumentations + Ultralytics' LOGGER all stay live — only
+# the on-disk YOLODataset is replaced.
+#
+# This config sketches the wiring shape; pair the source / op chain with the
+# real RFUAV pipeline from `waivefront-rfuav/config/train_yolo26.yaml` (or any
+# Flux you already have).
+
+train_set: !class:dataflux.core.Flux()
+  source: []   # replace with a real DataSource (e.g. RegionsJsonSource)
+  ops: []      # replace with the IQ → spectrogram → detection-target op chain
+
+val_set: !class:dataflux.core.Flux()
+  source: []
+  ops: []
+
+trainer: !class:raidar.ultralytics_runner.UltralyticsTrainer
+  data:
+    train: !ref:train_set
+    val: !ref:val_set
+    names:
+      0: drone-signal
+    nc: 1
+  variant: n
+  pretrained: true
+  imgsz: 640
+  epochs: 50
+  batch: 16
+  experiment_name: yolo26n_rfuav_flux
+  metrics_output_path: ./runs/yolo26n_rfuav_flux/metrics.json
+  extra_overrides:
+    workers: 4
+    plots: false   # FluxDetectionTrainer overrides the plot helpers, but plots=false also suppresses ultralytics-side plotting

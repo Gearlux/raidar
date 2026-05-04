@@ -38,7 +38,6 @@ Typical wiring (YAML)::
       # No `weights` block — single "loss" key passes through with weight 1.0.
 """
 
-from types import SimpleNamespace
 from typing import Dict, List, Literal, Optional, Tuple, cast
 
 import torch
@@ -50,65 +49,9 @@ from torch import Tensor
 
 from raidar.checkpoint import load_lightning_checkpoint
 from raidar.detection import DetectionBatchInput, DetectionStepOutput
+from raidar.ultralytics_common import build_yolo26 as _build_yolo26
 
 logger = get_logger(__name__)
-
-
-def _build_yolo26(
-    variant: Literal["n", "s", "m", "l", "x"],
-    num_classes: int,
-    pretrained_detector: bool,
-    agnostic_nms: bool = False,
-) -> nn.Module:
-    """Instantiate a YOLO26 ``DetectionModel`` with ``num_classes`` outputs.
-
-    Building from the YAML (``yolo26{variant}.yaml``) gives us full control
-    over ``nc``; if ``pretrained_detector=True`` we then load the COCO-trained
-    .pt and copy every shape-compatible parameter into the new model. The
-    head's classification convolutions don't match (the .pt was trained for
-    ``nc=80``) and are silently skipped, leaving the backbone, FPN, and
-    regression head fully pretrained while the classifier starts random —
-    the same body-pretrained / head-fresh pattern used by
-    :func:`raidar.faster_rcnn._build_faster_rcnn`.
-    """
-    from ultralytics.nn.tasks import DetectionModel
-    from ultralytics.utils import DEFAULT_CFG_DICT
-    from ultralytics.utils.downloads import attempt_download_asset
-
-    detector = DetectionModel(f"yolo26{variant}.yaml", nc=num_classes, ch=3)
-
-    if pretrained_detector:
-        weights_path = attempt_download_asset(f"yolo26{variant}.pt")
-        ckpt = torch.load(weights_path, map_location="cpu", weights_only=False)
-        src_model = ckpt["model"] if isinstance(ckpt, dict) and "model" in ckpt else ckpt
-        src_state = src_model.float().state_dict()
-        dst_state = detector.state_dict()
-        for k, v in src_state.items():
-            if k in dst_state and v.shape == dst_state[k].shape:
-                dst_state[k] = v
-        detector.load_state_dict(dst_state)
-
-    # The criterion accesses self.hyp.{box, cls, dfl, ...} via attribute lookup.
-    # A YAML-built DetectionModel may have no .args at all; a .pt-loaded one
-    # has .args as a dict from the task block. Either way, normalize to a
-    # namespace populated from DEFAULT_CFG_DICT + whatever was present.
-    existing = getattr(detector, "args", None)
-    if existing is None:
-        raw_args: Dict[str, object] = {}
-    elif isinstance(existing, dict):
-        raw_args = existing
-    else:
-        raw_args = vars(existing)
-    merged: Dict[str, object] = {**DEFAULT_CFG_DICT, **raw_args}
-    # nn.Module.__setattr__ only types Tensor / Module / Parameter assignments;
-    # bypass it via object.__setattr__ to attach the namespace cleanly.
-    namespace = SimpleNamespace(**merged)
-    object.__setattr__(detector, "args", namespace)
-    object.__setattr__(detector, "hyp", namespace)
-
-    detector.set_head_attr(agnostic_nms=agnostic_nms)
-
-    return detector
 
 
 def _compute_yolo_loss_without_bn_drift(
