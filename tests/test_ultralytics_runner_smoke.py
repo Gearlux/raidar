@@ -97,6 +97,138 @@ def test_trainer_flux_mode_requires_train_and_val() -> None:
         trainer.run()
 
 
+def test_trainer_disk_mode_checkpoint_overrides_model_spec(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """Disk mode must hand the user's checkpoint path to ``YOLO()`` instead of
+    the variant-based default.
+    """
+    import raidar.ultralytics_runner as runner_mod
+
+    captured: dict[str, object] = {}
+
+    class _StubYOLO:
+        def __init__(self, model_spec: str, task: str = "detect") -> None:
+            captured["model_spec"] = model_spec
+            captured["task"] = task
+            self.model = None
+            self.metrics = {"mAP50": 0.0}
+
+        def train(self, **kwargs: object) -> None:
+            captured["train_kwargs"] = kwargs
+
+    monkeypatch.setattr(runner_mod, "YOLO", _StubYOLO)
+
+    ckpt_path = tmp_path / "my_checkpoint.pt"
+    ckpt_path.write_bytes(b"\x00")  # contents irrelevant — YOLO is stubbed
+
+    UltralyticsTrainer(
+        data="some_data.yaml",
+        variant="n",
+        pretrained=True,  # would normally select yolo26n.pt — checkpoint must win
+        checkpoint=str(ckpt_path),
+    ).run()
+
+    assert captured["model_spec"] == str(ckpt_path)
+    assert captured["task"] == "detect"
+
+
+def test_trainer_flux_mode_grafts_checkpoint_weights(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """Flux mode must (a) skip the COCO download when a checkpoint is supplied
+    and (b) call ``load_lightning_checkpoint`` with the user's path before
+    handing the model to ``FluxDetectionTrainer``.
+    """
+    import raidar.ultralytics_runner as runner_mod
+
+    build_calls: list[dict[str, object]] = []
+    load_calls: list[dict[str, object]] = []
+
+    class _DummyModel:
+        pass
+
+    def _fake_build(**kwargs: object) -> _DummyModel:
+        build_calls.append(kwargs)
+        return _DummyModel()
+
+    def _fake_load(model: object, path: str, strict: bool = False) -> None:
+        load_calls.append({"model": model, "path": path, "strict": strict})
+
+    class _StubTrainer:
+        def __init__(self, overrides: dict[str, object], _callbacks: object) -> None:
+            self.overrides = overrides
+            self.model = None
+            self.validator = None
+
+        def train(self) -> None:
+            pass
+
+    monkeypatch.setattr(runner_mod, "build_yolo26", _fake_build)
+    monkeypatch.setattr(runner_mod, "load_lightning_checkpoint", _fake_load)
+    monkeypatch.setattr(runner_mod, "FluxDetectionTrainer", _StubTrainer)
+
+    ckpt_path = tmp_path / "prior_run.pt"
+    ckpt_path.write_bytes(b"\x00")
+
+    flux = _tiny_detection_flux(n=2, h=64, w=64)
+    UltralyticsTrainer(
+        data={"train": flux, "val": flux, "names": {0: "x"}, "nc": 1},
+        variant="n",
+        pretrained=True,  # checkpoint wins → pretrained_detector=False expected
+        checkpoint=str(ckpt_path),
+        epochs=1,
+        batch=2,
+        imgsz=64,
+    ).run()
+
+    assert len(build_calls) == 1
+    assert build_calls[0]["pretrained_detector"] is False, "checkpoint should suppress the redundant COCO download"
+    assert len(load_calls) == 1
+    assert load_calls[0]["path"] == str(ckpt_path)
+
+
+def test_trainer_flux_mode_no_checkpoint_keeps_pretrained(monkeypatch: pytest.MonkeyPatch) -> None:
+    """When no checkpoint is supplied, ``pretrained=True`` must still drive the
+    COCO download path through ``build_yolo26``.
+    """
+    import raidar.ultralytics_runner as runner_mod
+
+    build_calls: list[dict[str, object]] = []
+    load_calls: list[dict[str, object]] = []
+
+    class _DummyModel:
+        pass
+
+    def _fake_build(**kwargs: object) -> _DummyModel:
+        build_calls.append(kwargs)
+        return _DummyModel()
+
+    def _fake_load(model: object, path: str, strict: bool = False) -> None:
+        load_calls.append({"path": path})
+
+    class _StubTrainer:
+        def __init__(self, overrides: dict[str, object], _callbacks: object) -> None:
+            self.model = None
+            self.validator = None
+
+        def train(self) -> None:
+            pass
+
+    monkeypatch.setattr(runner_mod, "build_yolo26", _fake_build)
+    monkeypatch.setattr(runner_mod, "load_lightning_checkpoint", _fake_load)
+    monkeypatch.setattr(runner_mod, "FluxDetectionTrainer", _StubTrainer)
+
+    flux = _tiny_detection_flux(n=2, h=64, w=64)
+    UltralyticsTrainer(
+        data={"train": flux, "val": flux, "names": {0: "x"}, "nc": 1},
+        variant="n",
+        pretrained=True,
+        epochs=1,
+        batch=2,
+        imgsz=64,
+    ).run()
+
+    assert build_calls[0]["pretrained_detector"] is True
+    assert load_calls == [], "load_lightning_checkpoint must not be called when checkpoint=None"
+
+
 def test_build_yolo26_end2end_toggle_disables_head_branch() -> None:
     """``end2end=False`` must propagate through ``build_yolo26 → set_head_attr``
     so the Detect head's NMS-free branch is off — the MPS-TAL bug workaround.

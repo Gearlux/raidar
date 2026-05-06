@@ -184,6 +184,20 @@ class FluxYOLODataset(YOLODataset):  # type: ignore[misc]
             raise RuntimeError(f"FluxYOLODataset: source flux is empty (len={len(self._flux)}).")
         return labels
 
+    def _flux_index(self, i: int) -> int:
+        """Resolve the position into the underlying Flux from the dataset slot ``i``.
+
+        ``BaseDataset.set_rectangle`` (rect=True, used in val mode) reorders
+        ``self.im_files`` and ``self.labels`` together by aspect-ratio sort,
+        so the slot index ``i`` no longer matches the original Flux index.
+        ``self.im_files[i]`` carries the synthetic ``flux://<j>`` path emitted
+        by :meth:`get_img_files` and is reordered in lockstep with the labels,
+        so it's the single source of truth for "which Flux sample does this
+        slot describe?". Parsing back from there keeps the image we load
+        paired with the labels the dataset hands to the loss / validator.
+        """
+        return int(self.im_files[i].rsplit("/", 1)[-1])
+
     def load_image(
         self,
         i: int,
@@ -193,7 +207,7 @@ class FluxYOLODataset(YOLODataset):  # type: ignore[misc]
         if cached is not None:
             return cached, self.im_hw0[i], self.im_hw[i]
 
-        sample = self._flux[i]
+        sample = self._flux[self._flux_index(i)]
         arr = _sample_image_to_bgr_hwc_uint8(sample.input, target_channels=self.channels)
         h0, w0 = arr.shape[:2]
 

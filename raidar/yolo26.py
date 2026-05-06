@@ -146,22 +146,31 @@ def _build_yolo_batch_dict(
 def _decode_yolo_predictions(
     raw: Tensor,
     score_threshold: float,
+    iou_threshold: float = 0.7,
+    max_det: int = 300,
 ) -> List[DetectionOutput]:
-    """Convert Ultralytics' ``[B, N, 6]`` end-to-end output to per-image
+    """Convert Ultralytics' detection-head output to per-image
     :class:`~marainer.outputs.DetectionOutput` dicts.
 
-    Each row is ``[x1, y1, x2, y2, score, class_id]`` in input-pixel space
-    (i.e. the ``imgsz``-square space the model saw). Boxes are clipped to
-    ``[0, imgsz]`` and filtered by ``score_threshold``; coordinates are not
+    Handles both head modes via :func:`ultralytics.utils.nms.non_max_suppression`:
+
+    * **end2end=True**: ``raw`` is ``(B, max_det, 6)`` — already top-K'd
+      inside the head. NMS short-circuits to a confidence filter.
+    * **end2end=False**: ``raw`` is ``(B, 4 + nc, num_anchors)`` — the
+      classic pre-NMS layout. NMS does the full xywh→xyxy + IoU dedup pass.
+
+    Each output row is ``[x1, y1, x2, y2, score, class_id]`` in input-pixel
+    space (the ``imgsz``-square space the model saw). Coordinates are not
     remapped to any "original" image size because this wrapper requires
     images to arrive pre-resized to ``imgsz``.
     """
+    from ultralytics.utils.nms import non_max_suppression
+
+    nms_out = non_max_suppression(
+        raw, conf_thres=score_threshold, iou_thres=iou_threshold, max_det=max_det
+    )
     predictions: List[DetectionOutput] = []
-    for b in range(raw.shape[0]):
-        rows = raw[b]
-        scores = rows[:, 4]
-        keep = scores >= score_threshold
-        rows = rows[keep]
+    for rows in nms_out:
         predictions.append(
             DetectionOutput(
                 boxes=rows[:, :4].float(),
@@ -224,6 +233,15 @@ class YOLO26Model(nn.Module):
         checkpoint_strict: Forwarded to ``load_state_dict(strict=...)``.
             Defaults to False so e.g. a re-trained classifier head with a
             different ``num_classes`` doesn't reject the whole load.
+        end2end: Toggle YOLO26's NMS-free one2one detection head. ``None``
+            (default) leaves whatever the model YAML specifies — for
+            ``yolo26{variant}.yaml`` that's ``True``. **Must match how the
+            checkpoint was trained.** Training with ``end2end=False`` (e.g.
+            to dodge the MPS bool-indexing bug in ``E2EDetectLoss``) only
+            updates the one2many head; the one2one head stays at its
+            random init. Predicting from such a checkpoint with
+            ``end2end=True`` (the YAML default) routes inference through
+            that random head and silently collapses confidences to ~0.
     """
 
     def __init__(
@@ -237,6 +255,7 @@ class YOLO26Model(nn.Module):
         compute_val_loss: bool = True,
         checkpoint_path: Optional[str] = None,
         checkpoint_strict: bool = False,
+        end2end: Optional[bool] = None,
     ) -> None:
         super().__init__()
         if imgsz % 32 != 0:
@@ -247,11 +266,13 @@ class YOLO26Model(nn.Module):
         self.score_threshold = float(score_threshold)
         self.agnostic_nms = bool(agnostic_nms)
         self.compute_val_loss = bool(compute_val_loss)
+        self.end2end = end2end
         self.detector = _build_yolo26(
             variant=variant,
             num_classes=self.num_classes,
             pretrained_detector=pretrained_detector,
             agnostic_nms=self.agnostic_nms,
+            end2end=end2end,
         )
         if checkpoint_path:
             load_lightning_checkpoint(self, checkpoint_path, strict=checkpoint_strict)

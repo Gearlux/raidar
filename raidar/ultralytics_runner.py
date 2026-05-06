@@ -45,6 +45,7 @@ from ultralytics.models.yolo.detect.val import DetectionValidator
 from ultralytics.utils import callbacks
 from ultralytics.utils.torch_utils import unwrap_model
 
+from raidar.checkpoint import load_lightning_checkpoint
 from raidar.flux_yolo_dataset import FluxYOLODataset
 from raidar.ultralytics_common import build_yolo26
 
@@ -301,6 +302,7 @@ class UltralyticsTrainer:
         name: Optional[str] = None,
         experiment_name: str = "ultralytics_run",
         end2end: Optional[bool] = None,
+        checkpoint: Optional[str] = None,
         extra_overrides: Optional[Dict[str, Any]] = None,
         metrics_output_path: Optional[str] = None,
     ) -> None:
@@ -314,6 +316,16 @@ class UltralyticsTrainer:
                 (``RuntimeError: shape mismatch`` inside ``tal.py``). Disabling
                 end2end keeps the standard ``one2many`` head fully trainable —
                 you trade NMS-free inference for a working MPS run.
+            checkpoint: Optional path to a starting checkpoint. Accepts an
+                Ultralytics ``.pt`` (e.g. a previous run's ``best.pt`` /
+                ``last.pt``), a Lightning ``.ckpt``, or a plain state-dict.
+                When set, the model is initialized from these weights instead
+                of the variant's COCO-pretrained download — both ``pretrained``
+                and the variant-based selection are bypassed for weight init
+                (the variant still picks the architecture YAML in Flux mode).
+                For full epoch/optimizer-state resume of an interrupted run,
+                pair this (disk mode) with ``extra_overrides={"resume": True}``;
+                Flux mode currently supports weight-only init.
         """
         self.data = data
         self.variant = variant
@@ -326,6 +338,7 @@ class UltralyticsTrainer:
         self.name = name
         self.experiment_name = experiment_name
         self.end2end = end2end
+        self.checkpoint = checkpoint
         self.extra_overrides = dict(extra_overrides or {})
         self.metrics_output_path = metrics_output_path
 
@@ -341,7 +354,10 @@ class UltralyticsTrainer:
 
     def _run_disk_mode(self) -> None:
         """Hand off to ``ultralytics.YOLO.train`` verbatim."""
-        model_spec = f"yolo26{self.variant}.pt" if self.pretrained else f"yolo26{self.variant}.yaml"
+        if self.checkpoint is not None:
+            model_spec = self.checkpoint
+        else:
+            model_spec = f"yolo26{self.variant}.pt" if self.pretrained else f"yolo26{self.variant}.yaml"
         yolo = YOLO(model_spec, task="detect")
         if self.end2end is not None:
             yolo.model.set_head_attr(end2end=self.end2end)  # type: ignore[union-attr]
@@ -370,13 +386,18 @@ class UltralyticsTrainer:
         data_dict = _build_data_dict(flux_data, channels=3)
         nc = data_dict["nc"]
 
+        # When a user checkpoint is supplied its weights overwrite anything
+        # `build_yolo26` would graft on, so skip the COCO download in that case.
+        pretrained_detector = self.pretrained and self.checkpoint is None
         detection_model = build_yolo26(
             variant=self.variant,
             num_classes=nc,
-            pretrained_detector=self.pretrained,
+            pretrained_detector=pretrained_detector,
             agnostic_nms=False,
             end2end=self.end2end,
         )
+        if self.checkpoint is not None:
+            load_lightning_checkpoint(detection_model, self.checkpoint)
 
         overrides: Dict[str, Any] = {
             "task": "detect",

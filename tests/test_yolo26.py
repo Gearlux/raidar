@@ -359,6 +359,89 @@ def test_yolo26_agnostic_nms_true_propagates_to_head() -> None:
     assert step["predictions"] is not None and len(step["predictions"]) == 1
 
 
+def test_yolo26_end2end_default_leaves_yaml_setting() -> None:
+    """``end2end=None`` (default) must leave whatever ``yolo26{variant}.yaml``
+    specifies — currently ``True`` — so checkpoints trained in the default
+    end-to-end mode keep working through the wrapper."""
+    model = YOLO26Model(num_classes=2, variant="n", pretrained_detector=False, imgsz=IMGSZ)
+    head = cast(Detect, model.detector.model[-1])  # type: ignore[index, union-attr]
+    assert head.end2end is True
+
+
+def test_yolo26_end2end_false_propagates_to_head() -> None:
+    """When training disables the one2one head (e.g. to dodge the MPS
+    bool-indexing bug in ``E2EDetectLoss``), the predict path MUST be built
+    with ``end2end=False`` too — otherwise inference routes through the
+    untrained one2one head and predictions silently collapse to ~zero
+    confidence. This is the regression that produced "no boxes at all" for
+    a model that, on the matching one2many head, predicts perfectly."""
+    model = YOLO26Model(
+        num_classes=2,
+        variant="n",
+        pretrained_detector=False,
+        imgsz=IMGSZ,
+        end2end=False,
+    )
+    head = cast(Detect, model.detector.model[-1])  # type: ignore[index, union-attr]
+    assert head.end2end is False
+    assert model.end2end is False
+    # Forward must produce predictions in (B, max_det, 6)-equivalent shape
+    # via NMS — _decode_yolo_predictions has to handle the raw
+    # (B, 4+nc, num_anchors) layout that end2end=False emits.
+    model.eval()
+    batch = DetectionBatchInput(images=_make_images(2), targets=None)
+    step = model(batch)
+    preds = step["predictions"]
+    assert preds is not None and len(preds) == 2
+    for p in preds:
+        assert p["boxes"].ndim == 2 and p["boxes"].shape[1] == 4
+        assert p["scores"].ndim == 1
+        assert p["labels"].ndim == 1
+
+
+def test_decode_yolo_predictions_handles_end2end_false_raw_layout() -> None:
+    """_decode_yolo_predictions must accept the pre-NMS ``(B, 4+nc, anchors)``
+    shape that ``Detect.forward`` emits when ``end2end=False`` — not just the
+    post-NMS ``(B, max_det, 6)`` end-to-end layout. Pre-fix the function read
+    ``raw[b][:, 4]`` as scores, which on raw output points at *the fifth
+    anchor across all 4+nc channels* — random garbage. NMS unifies both
+    layouts."""
+    nc, num_anchors = 2, 64
+    # Box dist (xywh) followed by per-class scores (sigmoid range), shape (B, 4+nc, anchors).
+    raw = torch.zeros(1, 4 + nc, num_anchors)
+    # Box at anchor 0, class 1 (drone-signal): xywh = [10, 10, 8, 8], score class-1 = 0.9
+    raw[0, 0, 0] = 10.0  # cx
+    raw[0, 1, 0] = 10.0  # cy
+    raw[0, 2, 0] = 8.0   # w
+    raw[0, 3, 0] = 8.0   # h
+    raw[0, 4 + 1, 0] = 0.9   # class-1 score
+    preds = _decode_yolo_predictions(raw, score_threshold=0.5)
+    assert len(preds) == 1
+    assert preds[0]["boxes"].shape[0] >= 1, (
+        "NMS must keep the high-confidence anchor — pre-fix _decode read column 4 of "
+        "the channel dim and produced garbage."
+    )
+    # The kept prediction should be class 1.
+    assert int(preds[0]["labels"][0].item()) == 1
+
+
+def test_decode_yolo_predictions_still_handles_end2end_true_layout() -> None:
+    """The fix must not regress the end2end=True post-NMS layout
+    ``(B, N, 6)`` — that's what ``Detect.forward(end2end=True)`` returns and
+    what the original implementation supported."""
+    raw = torch.tensor(
+        [[
+            [0.0, 0.0, 10.0, 10.0, 0.9, 1.0],
+            [5.0, 5.0, 15.0, 15.0, 0.05, 0.0],
+        ]]
+    )
+    preds = _decode_yolo_predictions(raw, score_threshold=0.5)
+    assert len(preds) == 1
+    assert preds[0]["boxes"].shape[0] == 1
+    assert preds[0]["scores"].tolist() == pytest.approx([0.9])
+    assert preds[0]["labels"].tolist() == [1]
+
+
 # --- End-to-end: adapter pattern inside the unchanged base Trainer ---------
 
 
