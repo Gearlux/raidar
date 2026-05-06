@@ -197,6 +197,61 @@ def test_dataset_cache_labels_raises() -> None:
         cast(object, ds.cache_labels("/tmp/dummy"))
 
 
+def test_load_image_follows_rect_mode_permutation() -> None:
+    """In rect mode, ``BaseDataset.set_rectangle`` reorders ``self.im_files``
+    and ``self.labels`` together by aspect-ratio sort. ``load_image(i)`` must
+    return the sample that ``self.labels[i]`` describes — i.e. it must look
+    up the Flux index via ``self.im_files[i]`` (which carries ``flux://j``)
+    rather than indexing the Flux directly with ``i``.
+
+    Regression for a silent val-mode-only bug: training (rect=False) was
+    correct, but validation paired random images with random labels because
+    ``np.argsort`` permutes equal-AR slots non-trivially → every val mAP run
+    came back near zero.
+    """
+    n = 12
+    samples: List[Sample] = []
+    for i in range(n):
+        # Slightly varied (h, w) → argsort guaranteed to permute slots.
+        h, w = 60 + (i % 4), 64 - (i % 4)
+        # Tag each image with its source-flux index in pixel (0, 0, 0).
+        img = torch.full((3, h, w), float(i) / 255.0)
+        boxes = torch.tensor([[0.0, 0.0, 10.0, 10.0]], dtype=torch.float32)
+        labels = torch.tensor([1], dtype=torch.int64)
+        samples.append(Sample(img, {"boxes": boxes, "labels": labels}, {}))
+    flux = Flux(source=samples)
+
+    args = get_cfg(overrides={"task": "detect", "data": "<flux>", "imgsz": 64,
+                              "mode": "val", "plots": False})
+    ds = FluxYOLODataset(
+        flux=flux,
+        data={"path": ".", "train": ".", "val": ".", "names": {0: "bg", 1: "fg"}, "nc": 2, "channels": 3},
+        imgsz=64,
+        augment=False,
+        hyp=args,
+        batch_size=4,
+        stride=32,
+        rect=True,
+    )
+    # set_rectangle should have permuted at least some slots even with all-equal AR.
+    permuted_slots = sum(1 for i, f in enumerate(ds.im_files)
+                         if int(f.rsplit("/", 1)[-1]) != i)
+    assert permuted_slots > 0, (
+        "test precondition failed — set_rectangle did not permute any slot. "
+        "Adjust n until argsort returns a non-identity permutation, otherwise "
+        "this regression cannot bite."
+    )
+
+    for i in range(n):
+        arr, _, _ = ds.load_image(i)
+        decoded = int(arr[0, 0, 0])  # tag we wrote into the source image
+        expected = int(ds.im_files[i].rsplit("/", 1)[-1])
+        assert decoded == expected, (
+            f"slot i={i}: load_image returned image tagged source={decoded} "
+            f"but labels[{i}] describes flux index {expected}"
+        )
+
+
 def test_dataset_empty_flux_raises() -> None:
     flux = Flux(source=[])
     args = get_cfg(overrides={"task": "detect", "data": "<flux>", "imgsz": 64, "mode": "val", "plots": False})

@@ -36,6 +36,11 @@ trainer: !class:raidar.ultralytics_runner.UltralyticsTrainer
   batch: 16
   experiment_name: yolo26n_rfuav_flux
   metrics_output_path: ./runs/yolo26n_rfuav_flux/metrics.json
+  # Start from prior weights (Ultralytics .pt, Lightning .ckpt, or a plain
+  # state-dict). Suppresses the COCO download since the checkpoint overwrites
+  # those weights anyway. Flux mode currently grafts weights only — for full
+  # epoch/optimizer-state resume use disk mode + extra_overrides.resume=true.
+  # checkpoint: ./runs/yolo26n_rfuav_flux/weights/last.pt
   extra_overrides:
     workers: 4
     plots: false   # FluxDetectionTrainer overrides the plot helpers, but plots=false also suppresses ultralytics-side plotting

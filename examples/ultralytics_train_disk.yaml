@@ -19,3 +19,7 @@ trainer: !class:raidar.ultralytics_runner.UltralyticsTrainer
   batch: 16
   experiment_name: yolo26n_coco8_disk
   metrics_output_path: ./runs/yolo26n_coco8_disk/metrics.json
+  # Start from a previous run's checkpoint (overrides `pretrained` / variant
+  # default for weight init). For full epoch+optimizer-state resume of an
+  # interrupted run, also set `extra_overrides: { resume: true }`.
+  # checkpoint: ./runs/yolo26n_coco8_disk/weights/last.pt
