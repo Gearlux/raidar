@@ -412,9 +412,9 @@ def test_decode_yolo_predictions_handles_end2end_false_raw_layout() -> None:
     # Box at anchor 0, class 1 (drone-signal): xywh = [10, 10, 8, 8], score class-1 = 0.9
     raw[0, 0, 0] = 10.0  # cx
     raw[0, 1, 0] = 10.0  # cy
-    raw[0, 2, 0] = 8.0   # w
-    raw[0, 3, 0] = 8.0   # h
-    raw[0, 4 + 1, 0] = 0.9   # class-1 score
+    raw[0, 2, 0] = 8.0  # w
+    raw[0, 3, 0] = 8.0  # h
+    raw[0, 4 + 1, 0] = 0.9  # class-1 score
     preds = _decode_yolo_predictions(raw, score_threshold=0.5)
     assert len(preds) == 1
     assert preds[0]["boxes"].shape[0] >= 1, (
@@ -430,10 +430,12 @@ def test_decode_yolo_predictions_still_handles_end2end_true_layout() -> None:
     ``(B, N, 6)`` — that's what ``Detect.forward(end2end=True)`` returns and
     what the original implementation supported."""
     raw = torch.tensor(
-        [[
-            [0.0, 0.0, 10.0, 10.0, 0.9, 1.0],
-            [5.0, 5.0, 15.0, 15.0, 0.05, 0.0],
-        ]]
+        [
+            [
+                [0.0, 0.0, 10.0, 10.0, 0.9, 1.0],
+                [5.0, 5.0, 15.0, 15.0, 0.05, 0.0],
+            ]
+        ]
     )
     preds = _decode_yolo_predictions(raw, score_threshold=0.5)
     assert len(preds) == 1
