@@ -166,9 +166,7 @@ def _decode_yolo_predictions(
     """
     from ultralytics.utils.nms import non_max_suppression
 
-    nms_out = non_max_suppression(
-        raw, conf_thres=score_threshold, iou_thres=iou_threshold, max_det=max_det
-    )
+    nms_out = non_max_suppression(raw, conf_thres=score_threshold, iou_thres=iou_threshold, max_det=max_det)
     predictions: List[DetectionOutput] = []
     for rows in nms_out:
         predictions.append(

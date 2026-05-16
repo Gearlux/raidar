@@ -221,8 +221,7 @@ def test_load_image_follows_rect_mode_permutation() -> None:
         samples.append(Sample(img, {"boxes": boxes, "labels": labels}, {}))
     flux = Flux(source=samples)
 
-    args = get_cfg(overrides={"task": "detect", "data": "<flux>", "imgsz": 64,
-                              "mode": "val", "plots": False})
+    args = get_cfg(overrides={"task": "detect", "data": "<flux>", "imgsz": 64, "mode": "val", "plots": False})
     ds = FluxYOLODataset(
         flux=flux,
         data={"path": ".", "train": ".", "val": ".", "names": {0: "bg", 1: "fg"}, "nc": 2, "channels": 3},
@@ -234,8 +233,7 @@ def test_load_image_follows_rect_mode_permutation() -> None:
         rect=True,
     )
     # set_rectangle should have permuted at least some slots even with all-equal AR.
-    permuted_slots = sum(1 for i, f in enumerate(ds.im_files)
-                         if int(f.rsplit("/", 1)[-1]) != i)
+    permuted_slots = sum(1 for i, f in enumerate(ds.im_files) if int(f.rsplit("/", 1)[-1]) != i)
     assert permuted_slots > 0, (
         "test precondition failed — set_rectangle did not permute any slot. "
         "Adjust n until argsort returns a non-identity permutation, otherwise "
