@@ -1,5 +1,5 @@
 """Generic object-detection adapters that plug into Marainer's
-:class:`~marainer.trainer.Trainer`.
+:class:`~marainer.trainer.LightningTrainer`.
 
 This module provides the detector-agnostic plumbing needed to train and
 evaluate torchvision-style detectors through the **unchanged** base Trainer
@@ -74,7 +74,7 @@ class DetectionBatchInput:
     Torchvision detectors compute loss *inside* their forward by consuming a
     list of targets alongside the images — there is no way to split "run the
     model" from "compute loss". We smuggle both through ``batch.input`` so the
-    base :class:`~marainer.trainer.Trainer`'s step functions remain unmodified.
+    base :class:`~marainer.trainer.LightningTrainer`'s step functions remain unmodified.
 
     Attributes:
         images: List of ``[3, H_i, W_i]`` float tensors, one per image. Sizes
@@ -251,7 +251,7 @@ class DetectionMetricAdapter(MetricCollection):
     The inner metric's ``compute()`` may return a dict (as MAP does). Lightning's
     ``log_dict`` path iterates a MetricCollection's items and calls ``compute()``
     per entry, and crashes when it finds a non-scalar. To keep the base
-    :class:`~marainer.trainer.Trainer`'s ``self.log_dict(self.val_metrics, ...)``
+    :class:`~marainer.trainer.LightningTrainer`'s ``self.log_dict(self.val_metrics, ...)``
     call unchanged, we expose each scalar key as its own :class:`Metric`-shaped
     view over the shared inner state.
 

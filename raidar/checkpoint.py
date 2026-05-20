@@ -5,8 +5,8 @@ Three on-disk formats are tolerated by a single helper:
 1. **PyTorch Lightning ``.ckpt``** — produced by ``trainer.save_checkpoint``.
    Top-level ``state_dict`` key whose entries are prefixed with ``model.``
    (Lightning's :class:`pytorch_lightning.LightningModule` wrapper adds it).
-   Marainer's :class:`marainer.trainer.Trainer` /
-   :class:`marainer.evaluator.Evaluator` both produce this.
+   Marainer's :class:`marainer.trainer.LightningTrainer` /
+   :class:`marainer.evaluator.LightningEvaluator` both produce this.
 
 2. **Ultralytics ``.pt``** — produced by ``ultralytics.YOLO.train`` (and
    :class:`raidar.ultralytics_runner.UltralyticsTrainer`). The top-level

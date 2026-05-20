@@ -11,7 +11,7 @@
 # `check_det_dataset(args.data)` is never invoked.
 #
 # Metrics are written as a JSON sidecar at `metrics_output_path`, matching
-# `marainer.evaluator.Evaluator.metrics_sidecar_path` so Navigaitor's
+# `marainer.evaluator.LightningEvaluator.metrics_sidecar_path` so Navigaitor's
 # `read_run_metrics` reads them uniformly across Lightning- and
 # Ultralytics-driven runs.
 

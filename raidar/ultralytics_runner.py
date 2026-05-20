@@ -22,7 +22,7 @@ Two ``@configurable`` classes form the user-facing surface:
 
 Both classes accept a ``metrics_output_path: Optional[str]`` — when set, the
 final ``DetMetrics.results_dict`` is dumped as JSON, matching the
-metrics-sidecar convention :class:`marainer.evaluator.Evaluator` already
+metrics-sidecar convention :class:`marainer.evaluator.LightningEvaluator` already
 ships, so downstream tooling (e.g. Navigaitor's ``read_run_metrics``) doesn't
 need to care which trainer produced the run.
 """

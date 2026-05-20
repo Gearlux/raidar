@@ -7,7 +7,7 @@ import torch
 from confluid import Class
 from dataflux.core import Flux
 from dataflux.sample import Sample
-from marainer.evaluator import Evaluator
+from marainer.evaluator import LightningEvaluator
 from torch.utils.data import DataLoader
 from torchmetrics.detection import MeanAveragePrecision
 
@@ -52,7 +52,7 @@ def test_evaluator_runs_on_detection_task(tmp_path: Any) -> None:
     flux = Flux(source=samples)
 
     sink = _RecordingSink()
-    evaluator = Evaluator(
+    evaluator = LightningEvaluator(
         model=model,
         dataset=flux,
         loader=Class(DataLoader, batch_size=2, collate_fn=detection_collate_fn),
