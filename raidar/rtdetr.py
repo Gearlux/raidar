@@ -11,7 +11,7 @@ so the existing generic adapters
 
 The high-level ``ultralytics.RTDETR`` class bundles its own trainer / validator /
 predictor — none of which we want, since raidar's whole value-add is plugging
-into the unchanged base :class:`~marainer.trainer.Trainer`. We therefore drive
+into the unchanged base :class:`~marainer.trainer.LightningTrainer`. We therefore drive
 the underlying ``RTDETRDetectionModel`` directly.
 
 Loss contract: unlike YOLO26's ``(per_component_tensor[3], detached_items[3])``,
