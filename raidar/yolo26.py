@@ -10,7 +10,7 @@ generic adapters (:class:`~raidar.detection.TorchvisionDetectionLoss`,
 
 The high-level ``ultralytics.YOLO`` class bundles its own trainer / validator /
 predictor — none of which we want, since raidar's whole value-add is plugging
-into the unchanged base :class:`~marainer.trainer.Trainer`. We therefore drive
+into the unchanged base :class:`~marainer.trainer.LightningTrainer`. We therefore drive
 the underlying ``DetectionModel`` directly.
 
 Loss contract: Ultralytics' ``DetectionModel.loss(batch_dict)`` returns a

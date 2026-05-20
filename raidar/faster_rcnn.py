@@ -1,7 +1,7 @@
 """Faster R-CNN model wrapper for the Marainer Trainer flow.
 
 This module provides a torchvision Faster R-CNN wrapped to plug into the
-**unchanged** base :class:`~marainer.trainer.Trainer`. The generic detection
+**unchanged** base :class:`~marainer.trainer.LightningTrainer`. The generic detection
 plumbing it relies on (:class:`~raidar.detection.DetectionBatchInput`,
 :class:`~raidar.detection.DetectionStepOutput`,
 :class:`~raidar.detection.TorchvisionDetectionLoss`,
