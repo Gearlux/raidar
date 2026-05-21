@@ -51,13 +51,14 @@ from typing import Any, Dict, List, Optional, Tuple, TypedDict, Union
 
 import torch
 import torch.nn as nn
+from torch import Tensor
+from torchmetrics import Metric, MetricCollection
+from torchvision.ops import box_iou
+
 from confluid import configurable
 from dataflux.sample import Sample
 from logflow import get_logger
 from marainer.outputs import DetectionOutput, DetectionPredictions
-from torch import Tensor
-from torchmetrics import Metric, MetricCollection
-from torchvision.ops import box_iou
 
 logger = get_logger(__name__)
 
@@ -289,7 +290,9 @@ class DetectionMetricAdapter(MetricCollection):
             inner = _confluid_flow(inner)
 
         # Wider element type satisfies MetricCollection's invariant dict signature.
-        views: Dict[str, Union[Metric, MetricCollection]] = {key: _ScalarKeyView(inner, key) for key in scalar_keys}
+        views: Dict[str, Union[Metric, MetricCollection]] = {
+            key: _ScalarKeyView(inner, key) for key in scalar_keys
+        }
         super().__init__(views, prefix=prefix)
         # Keep a named reference to the shared inner without re-registering it
         # as an extra submodule — each view already holds it under .inner.
@@ -363,19 +366,31 @@ class _DetectionConfusionInner(Metric):
     fp: Tensor
     fn: Tensor
 
-    def __init__(self, iou_threshold: float = 0.5, score_threshold: float = 0.25) -> None:
+    def __init__(
+        self, iou_threshold: float = 0.5, score_threshold: float = 0.25
+    ) -> None:
         super().__init__()
         if not 0.0 < iou_threshold <= 1.0:
             raise ValueError(f"iou_threshold must be in (0, 1]; got {iou_threshold}.")
         if not 0.0 <= score_threshold <= 1.0:
-            raise ValueError(f"score_threshold must be in [0, 1]; got {score_threshold}.")
+            raise ValueError(
+                f"score_threshold must be in [0, 1]; got {score_threshold}."
+            )
         self.iou_threshold = float(iou_threshold)
         self.score_threshold = float(score_threshold)
-        self.add_state("tp", default=torch.tensor(0, dtype=torch.long), dist_reduce_fx="sum")
-        self.add_state("fp", default=torch.tensor(0, dtype=torch.long), dist_reduce_fx="sum")
-        self.add_state("fn", default=torch.tensor(0, dtype=torch.long), dist_reduce_fx="sum")
+        self.add_state(
+            "tp", default=torch.tensor(0, dtype=torch.long), dist_reduce_fx="sum"
+        )
+        self.add_state(
+            "fp", default=torch.tensor(0, dtype=torch.long), dist_reduce_fx="sum"
+        )
+        self.add_state(
+            "fn", default=torch.tensor(0, dtype=torch.long), dist_reduce_fx="sum"
+        )
 
-    def update(self, preds: List[DetectionOutput], target: List[Dict[str, Tensor]]) -> None:
+    def update(
+        self, preds: List[DetectionOutput], target: List[Dict[str, Tensor]]
+    ) -> None:
         if preds is None or target is None:
             return
         if len(preds) != len(target):
@@ -451,10 +466,22 @@ class _DetectionConfusionInner(Metric):
         tp = self.tp.float()
         fp = self.fp.float()
         fn = self.fn.float()
-        precision = tp / (tp + fp) if (tp + fp).item() > 0 else torch.tensor(0.0, device=tp.device)
-        recall = tp / (tp + fn) if (tp + fn).item() > 0 else torch.tensor(0.0, device=tp.device)
+        precision = (
+            tp / (tp + fp)
+            if (tp + fp).item() > 0
+            else torch.tensor(0.0, device=tp.device)
+        )
+        recall = (
+            tp / (tp + fn)
+            if (tp + fn).item() > 0
+            else torch.tensor(0.0, device=tp.device)
+        )
         denom = precision + recall
-        f1 = (2 * precision * recall / denom) if denom.item() > 0 else torch.tensor(0.0, device=tp.device)
+        f1 = (
+            (2 * precision * recall / denom)
+            if denom.item() > 0
+            else torch.tensor(0.0, device=tp.device)
+        )
         return {
             "tp": self.tp.detach().clone(),
             "fp": self.fp.detach().clone(),
@@ -467,7 +494,14 @@ class _DetectionConfusionInner(Metric):
 
 # Scalar keys surfaced by DetectionConfusionMatrix. Order is stable so logged
 # metrics appear in the same TB column order across runs.
-DEFAULT_CONFUSION_SCALAR_KEYS: Tuple[str, ...] = ("tp", "fp", "fn", "precision", "recall", "f1")
+DEFAULT_CONFUSION_SCALAR_KEYS: Tuple[str, ...] = (
+    "tp",
+    "fp",
+    "fn",
+    "precision",
+    "recall",
+    "f1",
+)
 
 
 @configurable
@@ -518,7 +552,9 @@ class DetectionConfusionMatrix(MetricCollection):
         score_threshold: float = 0.25,
         prefix: str = "",
     ) -> None:
-        inner = _DetectionConfusionInner(iou_threshold=iou_threshold, score_threshold=score_threshold)
+        inner = _DetectionConfusionInner(
+            iou_threshold=iou_threshold, score_threshold=score_threshold
+        )
         views: Dict[str, Union[Metric, MetricCollection]] = {
             key: _ScalarKeyView(inner, key) for key in DEFAULT_CONFUSION_SCALAR_KEYS
         }

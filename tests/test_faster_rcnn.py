@@ -11,16 +11,21 @@ import pytest
 import pytorch_lightning as L
 import torch
 import torch.nn as nn
-from confluid import Class
-from dataflux.core import Flux
-from dataflux.sample import Sample
-from marainer.trainer import LightningTrainer
 from torch import Tensor
 from torch.utils.data import DataLoader
 from torchmetrics.detection import MeanAveragePrecision
 from torchvision.models.detection.faster_rcnn import FastRCNNPredictor
 
-from raidar.detection import DetectionBatchInput, DetectionMetricAdapter, TorchvisionDetectionLoss, detection_collate_fn
+from confluid import Class
+from dataflux.core import Flux
+from dataflux.sample import Sample
+from marainer.trainer import LightningTrainer
+from raidar.detection import (
+    DetectionBatchInput,
+    DetectionMetricAdapter,
+    TorchvisionDetectionLoss,
+    detection_collate_fn,
+)
 from raidar.faster_rcnn import FasterRCNNModel, _compute_losses_without_bn_drift
 
 # --- fixtures & helpers ----------------------------------------------------
@@ -49,7 +54,9 @@ def _synthetic_detection_samples(n: int, size: int = 64) -> List[Sample]:
             Sample(
                 input=torch.rand(3, size, size),
                 target={
-                    "boxes": torch.tensor([[4.0, 4.0, 28.0, 28.0]], dtype=torch.float32),
+                    "boxes": torch.tensor(
+                        [[4.0, 4.0, 28.0, 28.0]], dtype=torch.float32
+                    ),
                     "labels": torch.tensor([1], dtype=torch.int64),
                 },
                 metadata={},
@@ -153,7 +160,9 @@ def test_faster_rcnn_train_mode_returns_losses_only(
     small_faster_rcnn: FasterRCNNModel,
 ) -> None:
     small_faster_rcnn.train()
-    batch = DetectionBatchInput(images=_make_images(2, size=64), targets=_make_targets(2))
+    batch = DetectionBatchInput(
+        images=_make_images(2, size=64), targets=_make_targets(2)
+    )
     step = small_faster_rcnn(batch)
     assert step["predictions"] is None
     assert step["losses"] is not None
@@ -172,7 +181,9 @@ def test_faster_rcnn_eval_with_targets_returns_both(
     small_faster_rcnn: FasterRCNNModel,
 ) -> None:
     small_faster_rcnn.eval()
-    batch = DetectionBatchInput(images=_make_images(2, size=64), targets=_make_targets(2))
+    batch = DetectionBatchInput(
+        images=_make_images(2, size=64), targets=_make_targets(2)
+    )
     step = small_faster_rcnn(batch)
     assert step["losses"] is not None
     assert step["predictions"] is not None
@@ -201,7 +212,9 @@ def test_faster_rcnn_compute_val_loss_false_skips_dual_forward(
     small_faster_rcnn.compute_val_loss = False
     small_faster_rcnn.eval()
     try:
-        batch = DetectionBatchInput(images=_make_images(2, size=64), targets=_make_targets(2))
+        batch = DetectionBatchInput(
+            images=_make_images(2, size=64), targets=_make_targets(2)
+        )
         step = small_faster_rcnn(batch)
         assert step["losses"] is None
         assert step["predictions"] is not None
@@ -313,8 +326,12 @@ def test_end_to_end_base_trainer_runs_with_detection_adapters(tmp_path: Any) -> 
         weights={"loss_classifier": 1.0, "loss_box_reg": 1.0}
     )
     trainer.val_metrics = DetectionMetricAdapter(MeanAveragePrecision(iou_type="bbox"))
-    trainer.train_loader = DataLoader(train_flux, batch_size=2, collate_fn=detection_collate_fn)
-    trainer.val_loader = DataLoader(val_flux, batch_size=2, collate_fn=detection_collate_fn)
+    trainer.train_loader = DataLoader(
+        train_flux, batch_size=2, collate_fn=detection_collate_fn
+    )
+    trainer.val_loader = DataLoader(
+        val_flux, batch_size=2, collate_fn=detection_collate_fn
+    )
 
     lightning_trainer = L.Trainer(
         max_epochs=1,
@@ -335,10 +352,14 @@ def test_end_to_end_base_trainer_runs_with_detection_adapters(tmp_path: Any) -> 
 
     metrics = lightning_trainer.callback_metrics
     # train/loss logged by the base Trainer step.
-    assert any(k.startswith("train/loss") for k in metrics), f"expected train/loss in {list(metrics)}"
+    assert any(
+        k.startswith("train/loss") for k in metrics
+    ), f"expected train/loss in {list(metrics)}"
     train_loss = next(v for k, v in metrics.items() if k.startswith("train/loss"))
     assert torch.isfinite(train_loss), f"train/loss not finite: {train_loss}"
     # val/loss is now a REAL scalar (from the BN-frozen dual-forward), not a zero placeholder.
-    assert any(k.startswith("val/loss") for k in metrics), f"expected val/loss in {list(metrics)}"
+    assert any(
+        k.startswith("val/loss") for k in metrics
+    ), f"expected val/loss in {list(metrics)}"
     val_loss = next(v for k, v in metrics.items() if k.startswith("val/loss"))
     assert torch.isfinite(val_loss)

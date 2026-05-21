@@ -53,11 +53,11 @@ from typing import Any, Dict, List, Literal, Optional, cast
 
 import torch
 import torch.nn as nn
+from torch import Tensor
+
 from confluid import configurable
 from logflow import get_logger
 from marainer.outputs import DetectionOutput
-from torch import Tensor
-
 from raidar.checkpoint import load_lightning_checkpoint
 from raidar.detection import DetectionBatchInput, DetectionStepOutput
 
@@ -269,7 +269,9 @@ class RFDETRModel(nn.Module):
 
         super().__init__()
         if variant not in _VARIANT_CLASSES:
-            raise ValueError(f"variant must be one of {sorted(_VARIANT_CLASSES)}, got {variant!r}.")
+            raise ValueError(
+                f"variant must be one of {sorted(_VARIANT_CLASSES)}, got {variant!r}."
+            )
         self.num_classes = int(num_classes)
         self.variant = variant
         self.score_threshold = float(score_threshold)
@@ -310,7 +312,9 @@ class RFDETRModel(nn.Module):
         std = cast(Tensor, self._std)
         return (stacked - mean) / std
 
-    def _criterion_loss(self, outputs: Dict[str, Any], targets_detr: List[Dict[str, Tensor]]) -> Tensor:
+    def _criterion_loss(
+        self, outputs: Dict[str, Any], targets_detr: List[Dict[str, Tensor]]
+    ) -> Tensor:
         loss_dict = self.criterion(outputs, targets_detr)
         weight_dict = self.criterion.weight_dict
         device = outputs["pred_logits"].device
@@ -324,9 +328,13 @@ class RFDETRModel(nn.Module):
     def forward(self, x: DetectionBatchInput) -> DetectionStepOutput:
         if self.training:
             if x.targets is None:
-                raise ValueError("RFDETRModel in train mode requires targets on DetectionBatchInput.")
+                raise ValueError(
+                    "RFDETRModel in train mode requires targets on DetectionBatchInput."
+                )
             images = self._preprocess(x.images)
-            targets_detr = _build_rfdetr_targets(x.targets, self.resolution, images.device)
+            targets_detr = _build_rfdetr_targets(
+                x.targets, self.resolution, images.device
+            )
             outputs = self.detector(images, targets_detr)
             loss_total = self._criterion_loss(outputs, targets_detr)
             n_imgs = len(x.images)
@@ -349,7 +357,9 @@ class RFDETRModel(nn.Module):
         outputs = self.detector(images)
         losses: Optional[Dict[str, Tensor]] = None
         if x.targets is not None and self.compute_val_loss:
-            targets_detr = _build_rfdetr_targets(x.targets, self.resolution, images.device)
+            targets_detr = _build_rfdetr_targets(
+                x.targets, self.resolution, images.device
+            )
             with torch.no_grad():
                 loss_total = self._criterion_loss(outputs, targets_detr)
             losses = {"loss": loss_total}
@@ -359,7 +369,9 @@ class RFDETRModel(nn.Module):
             device=images.device,
         )
         results = self.postprocess(outputs, target_sizes)
-        predictions = _decode_rfdetr_predictions(results, self.num_classes, self.score_threshold)
+        predictions = _decode_rfdetr_predictions(
+            results, self.num_classes, self.score_threshold
+        )
 
         per_image_summaries = []
         for i, p in enumerate(predictions):
@@ -381,7 +393,9 @@ class RFDETRModel(nn.Module):
             )
         else:
             loss_summary = f"loss={float(losses['loss']):.4f}" if losses else "loss=n/a"
-            logger.debug(f"[diag][rfdetr][eval] {' '.join(per_image_summaries)} | {loss_summary}")
+            logger.debug(
+                f"[diag][rfdetr][eval] {' '.join(per_image_summaries)} | {loss_summary}"
+            )
         return DetectionStepOutput(losses=losses, predictions=predictions)
 
 

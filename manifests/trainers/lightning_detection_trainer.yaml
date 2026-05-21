@@ -1,0 +1,70 @@
+description: "LightningDetectionTrainer: specialised object-detection trainer with baked-in TorchvisionDetectionLoss, detection_collate_fn, and MAP-based val/test metrics."
+use_case: "Drop-in replacement for LightningTrainer when training detection models (Faster R-CNN, YOLO26, RT-DETR, RF-DETR). Only requires model, train_set, num_classes — loss, collate, and metrics are wired automatically. Invoke via `raidar train` or `marainer detection train`."
+category: "Detection"
+flux_type: "LightningDetectionTrainer"
+class_path: "raidar.trainer.LightningDetectionTrainer"
+params:
+  model:
+    type: "torch.nn.Module"
+    required: true
+    description: "Detection model that returns DetectionStepOutput ({losses, predictions}). Any of FasterRCNNModel, YOLO26Model, RTDETRModel, RFDETRModel."
+  train_set:
+    type: "Any"
+    required: true
+    description: "Training dataset or Flux pipeline. Each sample carries input=[3,H,W] image, target={boxes:[N,4], labels:[N]}."
+  num_classes:
+    type: "int"
+    required: true
+    description: "Number of output classes (including background where applicable). Surfaced for parity; metrics are class-count-agnostic."
+  val_set:
+    type: "Any | null"
+    default: null
+    description: "Validation dataset or Flux pipeline."
+  test_set:
+    type: "Any | null"
+    default: null
+    description: "Held-out test dataset. When set, lightning.test() runs after fit()."
+  optimizer:
+    type: "Lazy[torch.optim.Optimizer]"
+    default: "Class(torch.optim.AdamW, lr=1e-4, weight_decay=0.05)"
+    description: "Optimizer (deferred). Default: AdamW with learning rate 1e-4."
+  train_loader:
+    type: "Lazy[DataLoader]"
+    default: "Class(DataLoader, collate_fn=detection_collate_fn)"
+    description: "DataLoader config for training data. detection_collate_fn is baked in (preserves variable-length per-image targets)."
+  val_loader:
+    type: "Lazy[DataLoader]"
+    default: "Class(DataLoader, collate_fn=detection_collate_fn)"
+    description: "DataLoader config for validation data."
+  test_loader:
+    type: "Lazy[DataLoader]"
+    default: "Class(DataLoader, collate_fn=detection_collate_fn)"
+    description: "DataLoader config for test data."
+  lightning:
+    type: "Lazy[pytorch_lightning.Trainer]"
+    default: "Class(L.Trainer)"
+    description: "PyTorch Lightning Trainer config."
+  experiment_name:
+    type: "str"
+    default: "raidar_detection"
+    description: "MLflow experiment name."
+  run_name:
+    type: "str"
+    default: "train"
+    description: "MLflow run name."
+  loss_fn:
+    type: "Callable | null"
+    default: "TorchvisionDetectionLoss()"
+    description: "Loss function (post-construction). Default sums the model's losses dict. Override via YAML for custom loss shapes."
+  train_metrics:
+    type: "torchmetrics.MetricCollection | null"
+    default: null
+    description: "Train MetricCollection. Default None — detection training metrics break gradient flow on most detectors."
+  val_metrics:
+    type: "torchmetrics.MetricCollection | null"
+    default: "DetectionMetricAdapter(MeanAveragePrecision(iou_type=bbox), prefix=val/)"
+    description: "Validation MetricCollection. Default surfaces map / map_50 / map_75 / mar_* as Lightning-loggable scalars."
+  test_metrics:
+    type: "torchmetrics.MetricCollection | null"
+    default: "DetectionMetricAdapter(MeanAveragePrecision(iou_type=bbox), prefix=test/)"
+    description: "Test MetricCollection."

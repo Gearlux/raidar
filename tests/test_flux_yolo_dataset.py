@@ -17,11 +17,16 @@ from typing import List, cast
 import numpy as np
 import pytest
 import torch
-from dataflux.core import Flux
-from dataflux.sample import Sample
 from ultralytics.cfg import get_cfg
 
-from raidar.flux_yolo_dataset import FluxYOLODataset, _input_hw, _sample_image_to_bgr_hwc_uint8, _target_to_yolo_label
+from dataflux.core import Flux
+from dataflux.sample import Sample
+from raidar.flux_yolo_dataset import (
+    FluxYOLODataset,
+    _input_hw,
+    _sample_image_to_bgr_hwc_uint8,
+    _target_to_yolo_label,
+)
 
 
 def _tiny_flux(n: int = 4, h: int = 64, w: int = 64) -> Flux:
@@ -38,7 +43,10 @@ def _tiny_flux(n: int = 4, h: int = 64, w: int = 64) -> Flux:
             labels = torch.tensor([0], dtype=torch.int64)
             target = {"boxes": boxes, "labels": labels}
         else:
-            target = {"boxes": torch.zeros((0, 4)), "labels": torch.zeros((0,), dtype=torch.int64)}
+            target = {
+                "boxes": torch.zeros((0, 4)),
+                "labels": torch.zeros((0,), dtype=torch.int64),
+            }
         samples.append(Sample(img, target, {}))
     return Flux(source=samples)
 
@@ -92,7 +100,9 @@ def test_target_to_yolo_label_xyxy_to_cxcywh_normalized() -> None:
     assert bboxes.shape == (1, 4)
     assert bboxes.dtype == np.float32
     # cx = 20/100 = 0.2, cy = 26/80 = 0.325, w = 20/100 = 0.2, h = 28/80 = 0.35
-    np.testing.assert_allclose(bboxes[0], [0.2, 26.0 / 80.0, 0.2, 28.0 / 80.0], rtol=1e-5)
+    np.testing.assert_allclose(
+        bboxes[0], [0.2, 26.0 / 80.0, 0.2, 28.0 / 80.0], rtol=1e-5
+    )
 
 
 def test_target_to_yolo_label_empty_target() -> None:
@@ -124,7 +134,14 @@ def _make_dataset(augment: bool = False) -> FluxYOLODataset:
     )
     return FluxYOLODataset(
         flux=flux,
-        data={"path": ".", "train": ".", "val": ".", "names": {0: "thing"}, "nc": 1, "channels": 3},
+        data={
+            "path": ".",
+            "train": ".",
+            "val": ".",
+            "names": {0: "thing"},
+            "nc": 1,
+            "channels": 3,
+        },
         imgsz=64,
         augment=augment,
         hyp=args,
@@ -138,7 +155,15 @@ def test_dataset_get_labels_shape_keys() -> None:
     ds = _make_dataset(augment=False)
     assert len(ds.labels) == 4
     for lb in ds.labels:
-        assert {"im_file", "cls", "bboxes", "segments", "keypoints", "normalized", "bbox_format"} <= set(lb.keys()) | {
+        assert {
+            "im_file",
+            "cls",
+            "bboxes",
+            "segments",
+            "keypoints",
+            "normalized",
+            "bbox_format",
+        } <= set(lb.keys()) | {
             "shape",
             "rect_shape",
         }
@@ -221,10 +246,25 @@ def test_load_image_follows_rect_mode_permutation() -> None:
         samples.append(Sample(img, {"boxes": boxes, "labels": labels}, {}))
     flux = Flux(source=samples)
 
-    args = get_cfg(overrides={"task": "detect", "data": "<flux>", "imgsz": 64, "mode": "val", "plots": False})
+    args = get_cfg(
+        overrides={
+            "task": "detect",
+            "data": "<flux>",
+            "imgsz": 64,
+            "mode": "val",
+            "plots": False,
+        }
+    )
     ds = FluxYOLODataset(
         flux=flux,
-        data={"path": ".", "train": ".", "val": ".", "names": {0: "bg", 1: "fg"}, "nc": 2, "channels": 3},
+        data={
+            "path": ".",
+            "train": ".",
+            "val": ".",
+            "names": {0: "bg", 1: "fg"},
+            "nc": 2,
+            "channels": 3,
+        },
         imgsz=64,
         augment=False,
         hyp=args,
@@ -233,7 +273,9 @@ def test_load_image_follows_rect_mode_permutation() -> None:
         rect=True,
     )
     # set_rectangle should have permuted at least some slots even with all-equal AR.
-    permuted_slots = sum(1 for i, f in enumerate(ds.im_files) if int(f.rsplit("/", 1)[-1]) != i)
+    permuted_slots = sum(
+        1 for i, f in enumerate(ds.im_files) if int(f.rsplit("/", 1)[-1]) != i
+    )
     assert permuted_slots > 0, (
         "test precondition failed — set_rectangle did not permute any slot. "
         "Adjust n until argsort returns a non-identity permutation, otherwise "
@@ -252,11 +294,26 @@ def test_load_image_follows_rect_mode_permutation() -> None:
 
 def test_dataset_empty_flux_raises() -> None:
     flux = Flux(source=[])
-    args = get_cfg(overrides={"task": "detect", "data": "<flux>", "imgsz": 64, "mode": "val", "plots": False})
+    args = get_cfg(
+        overrides={
+            "task": "detect",
+            "data": "<flux>",
+            "imgsz": 64,
+            "mode": "val",
+            "plots": False,
+        }
+    )
     with pytest.raises(RuntimeError, match="empty"):
         FluxYOLODataset(
             flux=flux,
-            data={"path": ".", "train": ".", "val": ".", "names": {0: "thing"}, "nc": 1, "channels": 3},
+            data={
+                "path": ".",
+                "train": ".",
+                "val": ".",
+                "names": {0: "thing"},
+                "nc": 1,
+                "channels": 3,
+            },
             imgsz=64,
             augment=False,
             hyp=args,

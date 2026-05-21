@@ -1,0 +1,74 @@
+# Train an object-detection model via the Lightning specialisation
+# (LightningDetectionTrainer) — the sonair-style trainer subclass that
+# bakes in TorchvisionDetectionLoss, detection_collate_fn, MAP-based val/test
+# metrics, and an AdamW optimizer.
+#
+# Run:
+#   marainer detection train examples/lightning_train_disk.yaml
+#   raidar train             examples/lightning_train_disk.yaml
+#
+# This example uses Faster R-CNN with a torchvision ResNet50 FPN backbone on
+# a tiny synthetic stand-in dataset so the file is self-contained. Replace
+# `train_set:` / `val_set:` with real `dataflux.core.Flux` pipelines (e.g.
+# a waivefront op chain over annotated COCO / RFUAV detection windows) to
+# run a real training job.
+
+num_classes: 91   # 90 COCO classes + background
+
+# -- Model: torchvision Faster R-CNN. The wrapper returns DetectionStepOutput
+# -- so it plugs into the Trainer's preds = self(batch.input);
+# --                                  loss  = self.loss_fn(preds, batch.target)
+# -- pattern unchanged.
+model: !class:raidar.faster_rcnn.FasterRCNNModel
+  num_classes: !ref:num_classes
+
+# -- Tiny synthetic dataset stand-ins. Each Sample carries:
+#      sample.input  = [3, H, W] float tensor
+#      sample.target = {"boxes": [N, 4] float xyxy, "labels": [N] int64}
+#    See raidar/tests/test_detection.py for the shape produced by
+#    detection_collate_fn — the trainer wires that collate by default.
+train_set: !class:raidar.examples_helpers.SyntheticDetectionDataset
+  n: 16
+  num_classes: !ref:num_classes
+  image_size: 256
+
+val_set: !class:raidar.examples_helpers.SyntheticDetectionDataset
+  n: 4
+  num_classes: !ref:num_classes
+  image_size: 256
+
+# -- Lightning runtime knobs. Everything else (loss_fn, train_loader,
+# -- val_loader, val_metrics, test_metrics, optimizer) is baked into
+# -- LightningDetectionTrainer.
+lightning: !class:pytorch_lightning.Trainer
+  max_epochs: 1
+  accelerator: cpu
+  devices: 1
+  log_every_n_steps: 1
+  enable_progress_bar: true
+
+trainer: !class:raidar.trainer.LightningDetectionTrainer
+  experiment_name: raidar_detection_smoke
+  run_name: faster_rcnn_resnet50_fpn
+  num_classes: !ref:num_classes
+  model: !ref:model
+  train_set: !ref:train_set
+  val_set: !ref:val_set
+  lightning: !ref:lightning
+
+# Override examples (all optional — uncomment to use). No raidar wrapper is
+# required around the upstream classes:
+#
+#   loss_fn: !class:raidar.detection.TorchvisionDetectionLoss
+#     weights: { loss_classifier: 1.0, loss_box_reg: 2.0 }
+#
+#   val_metrics: !class:raidar.detection.DetectionMetricAdapter
+#     inner: !class:torchmetrics.detection.MeanAveragePrecision
+#       iou_type: bbox
+#       class_metrics: true
+#     prefix: "val/"
+#
+#   optimizer: !class:torch.optim.SGD
+#     lr: 0.005
+#     momentum: 0.9
+#     weight_decay: 0.0005

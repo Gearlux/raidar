@@ -20,16 +20,23 @@ from typing import List
 
 import pytest
 import torch
+
 from dataflux.core import Flux
 from dataflux.sample import Sample
-
-from raidar.ultralytics_runner import UltralyticsEvaluator, UltralyticsTrainer, _build_data_dict, _write_metrics_sidecar
+from raidar.ultralytics_runner import (
+    UltralyticsEvaluator,
+    UltralyticsTrainer,
+    _build_data_dict,
+    _write_metrics_sidecar,
+)
 
 # --- helper unit tests -------------------------------------------------------
 
 
 def test_build_data_dict_happy_path() -> None:
-    data = _build_data_dict({"train": object(), "val": object(), "names": {0: "a"}, "nc": 1})
+    data = _build_data_dict(
+        {"train": object(), "val": object(), "names": {0: "a"}, "nc": 1}
+    )
     assert data["nc"] == 1
     assert data["names"] == {0: "a"}
     assert data["channels"] == 3
@@ -97,7 +104,9 @@ def test_trainer_flux_mode_requires_train_and_val() -> None:
         trainer.run()
 
 
-def test_trainer_disk_mode_checkpoint_overrides_model_spec(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_trainer_disk_mode_checkpoint_overrides_model_spec(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     """Disk mode must hand the user's checkpoint path to ``YOLO()`` instead of
     the variant-based default.
     """
@@ -131,7 +140,9 @@ def test_trainer_disk_mode_checkpoint_overrides_model_spec(monkeypatch: pytest.M
     assert captured["task"] == "detect"
 
 
-def test_trainer_flux_mode_grafts_checkpoint_weights(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_trainer_flux_mode_grafts_checkpoint_weights(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     """Flux mode must (a) skip the COCO download when a checkpoint is supplied
     and (b) call ``load_lightning_checkpoint`` with the user's path before
     handing the model to ``FluxDetectionTrainer``.
@@ -179,12 +190,16 @@ def test_trainer_flux_mode_grafts_checkpoint_weights(monkeypatch: pytest.MonkeyP
     ).run()
 
     assert len(build_calls) == 1
-    assert build_calls[0]["pretrained_detector"] is False, "checkpoint should suppress the redundant COCO download"
+    assert (
+        build_calls[0]["pretrained_detector"] is False
+    ), "checkpoint should suppress the redundant COCO download"
     assert len(load_calls) == 1
     assert load_calls[0]["path"] == str(ckpt_path)
 
 
-def test_trainer_flux_mode_no_checkpoint_keeps_pretrained(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_trainer_flux_mode_no_checkpoint_keeps_pretrained(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """When no checkpoint is supplied, ``pretrained=True`` must still drive the
     COCO download path through ``build_yolo26``.
     """
@@ -226,7 +241,9 @@ def test_trainer_flux_mode_no_checkpoint_keeps_pretrained(monkeypatch: pytest.Mo
     ).run()
 
     assert build_calls[0]["pretrained_detector"] is True
-    assert load_calls == [], "load_lightning_checkpoint must not be called when checkpoint=None"
+    assert (
+        load_calls == []
+    ), "load_lightning_checkpoint must not be called when checkpoint=None"
 
 
 def test_build_yolo26_end2end_toggle_disables_head_branch() -> None:
@@ -235,7 +252,9 @@ def test_build_yolo26_end2end_toggle_disables_head_branch() -> None:
     """
     from raidar.ultralytics_common import build_yolo26
 
-    detector = build_yolo26(variant="n", num_classes=1, pretrained_detector=False, end2end=False)
+    detector = build_yolo26(
+        variant="n", num_classes=1, pretrained_detector=False, end2end=False
+    )
     head = detector.model[-1]  # type: ignore[index]  # Detect head is always the last module
     assert head.end2end is False, "end2end=False didn't reach the Detect head"  # type: ignore[union-attr]
 
@@ -244,7 +263,9 @@ def test_build_yolo26_end2end_none_leaves_head_default() -> None:
     """``end2end=None`` (default) must NOT touch the head — yolo26 ships True."""
     from raidar.ultralytics_common import build_yolo26
 
-    detector = build_yolo26(variant="n", num_classes=1, pretrained_detector=False, end2end=None)
+    detector = build_yolo26(
+        variant="n", num_classes=1, pretrained_detector=False, end2end=None
+    )
     head = detector.model[-1]  # type: ignore[index]
     assert head.end2end is True, "end2end=None should leave the model's default (True)"  # type: ignore[union-attr]
 
@@ -281,7 +302,12 @@ def test_ultralytics_evaluator_flux_smoke(tmp_path: Path) -> None:
             project=str(tmp_path),
             name="train",
             metrics_output_path=str(train_metrics),
-            extra_overrides={"workers": 0, "save": True, "verbose": False, "amp": False},
+            extra_overrides={
+                "workers": 0,
+                "save": True,
+                "verbose": False,
+                "amp": False,
+            },
         ).run()
     except Exception as exc:  # pragma: no cover - environment-dependent
         pytest.skip(f"FluxDetectionTrainer setup failed: {exc}")
@@ -333,7 +359,12 @@ def test_ultralytics_trainer_flux_smoke(tmp_path: Path) -> None:
             project=str(tmp_path),
             name="smoke",
             metrics_output_path=str(metrics_out),
-            extra_overrides={"workers": 0, "save": False, "verbose": False, "amp": False},
+            extra_overrides={
+                "workers": 0,
+                "save": False,
+                "verbose": False,
+                "amp": False,
+            },
         )
         trainer.run()
     except Exception as exc:  # pragma: no cover - environment-dependent
