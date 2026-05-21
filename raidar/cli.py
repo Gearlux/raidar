@@ -14,8 +14,8 @@ from liquifai import LiquifyApp
 from logflow import get_logger
 
 from raidar.evaluator import LightningDetectionEvaluator
-from raidar.trainer import LightningDetectionTrainer
-from raidar.ultralytics_runner import UltralyticsEvaluator, UltralyticsTrainer
+from raidar.lightning_trainer import LightningDetectionTrainer
+from raidar.ultralytics_trainer import UltralyticsEvaluator, UltralyticsTrainer
 
 logger = get_logger(__name__)
 

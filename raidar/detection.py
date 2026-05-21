@@ -321,10 +321,27 @@ class DetectionMetricAdapter(MetricCollection):
 # ---------------------------------------------------------------------------
 
 
-class _DetectionConfusionInner(Metric):
+class DetectionConfusionMatrixNative(Metric):
     """Single inner ``Metric`` that accumulates TP / FP / FN over a stream of
     ``(predictions, targets)`` pairs and exposes the derived precision /
     recall / F1 in its ``compute()`` dict.
+
+    Public, **native-API** confusion matrix for the specialised
+    :class:`~raidar.lightning_trainer.LightningDetectionTrainer`: its
+    ``update(predictions: List[DetectionOutput], targets: List[Dict])``
+    consumes the same per-image lists torchmetrics ``MeanAveragePrecision``
+    does, so it drops straight into a ``MetricCollection``::
+
+        val_metrics: !class:torchmetrics.MetricCollection
+          metrics:
+            - !class:torchmetrics.detection.MeanAveragePrecision
+              iou_type: bbox
+            - !class:raidar.detection.DetectionConfusionMatrixNative
+              iou_threshold: 0.5
+
+    The marainer-generic counterpart :class:`DetectionConfusionMatrix` (below)
+    wraps this metric to consume :class:`DetectionStepOutput` instead — both
+    share the same underlying matching logic.
 
     Matching is greedy and class-aware:
 
@@ -525,7 +542,7 @@ class DetectionConfusionMatrix(MetricCollection):
         score_threshold: float = 0.25,
         prefix: str = "",
     ) -> None:
-        inner = _DetectionConfusionInner(iou_threshold=iou_threshold, score_threshold=score_threshold)
+        inner = DetectionConfusionMatrixNative(iou_threshold=iou_threshold, score_threshold=score_threshold)
         views: Dict[str, Union[Metric, MetricCollection]] = {
             key: _ScalarKeyView(inner, key) for key in DEFAULT_CONFUSION_SCALAR_KEYS
         }
@@ -594,11 +611,28 @@ def detection_collate_fn(batch: List[Sample]) -> Sample:
     )
 
 
+def _default_detection_metrics(prefix: str) -> DetectionMetricAdapter:
+    """Build the default marainer-generic detection metric adapter.
+
+    Returns a fresh :class:`DetectionMetricAdapter` over a fresh
+    :class:`torchmetrics.detection.MeanAveragePrecision` instance — independent
+    state per split so val and test accumulations don't bleed into each other.
+    Used by the marainer-generic detection evaluator
+    (:class:`raidar.evaluator.LightningDetectionEvaluator`); the specialised
+    :class:`raidar.lightning_trainer.LightningDetectionTrainer` uses
+    ``torchmetrics`` MAP directly without this adapter.
+    """
+    from torchmetrics.detection import MeanAveragePrecision
+
+    return DetectionMetricAdapter(MeanAveragePrecision(iou_type="bbox"), prefix=prefix)
+
+
 __all__ = [
     "DEFAULT_CONFUSION_SCALAR_KEYS",
     "DEFAULT_MEAN_AP_SCALAR_KEYS",
     "DetectionBatchInput",
     "DetectionConfusionMatrix",
+    "DetectionConfusionMatrixNative",
     "DetectionMetricAdapter",
     "DetectionOutput",
     "DetectionPredictions",

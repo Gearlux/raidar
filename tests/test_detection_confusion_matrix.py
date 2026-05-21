@@ -1,7 +1,7 @@
 """Tests for :class:`raidar.detection.DetectionConfusionMatrix`.
 
 Synthetic-box scenarios drive every TP / FP / FN branch of the greedy
-class-aware matcher in :class:`raidar.detection._DetectionConfusionInner`.
+class-aware matcher in :class:`raidar.detection.DetectionConfusionMatrixNative`.
 """
 
 from typing import Dict, List
@@ -13,9 +13,9 @@ from torch import Tensor
 from raidar.detection import (
     DEFAULT_CONFUSION_SCALAR_KEYS,
     DetectionConfusionMatrix,
+    DetectionConfusionMatrixNative,
     DetectionOutput,
     DetectionStepOutput,
-    _DetectionConfusionInner,
 )
 
 
@@ -38,11 +38,11 @@ def _step(preds: List[DetectionOutput]) -> DetectionStepOutput:
     return DetectionStepOutput(losses=None, predictions=preds)
 
 
-# --- _DetectionConfusionInner: pure matching branches ----------------------
+# --- DetectionConfusionMatrixNative: pure matching branches ----------------------
 
 
 def test_confusion_inner_perfect_overlap_counts_tp() -> None:
-    inner = _DetectionConfusionInner(iou_threshold=0.5, score_threshold=0.0)
+    inner = DetectionConfusionMatrixNative(iou_threshold=0.5, score_threshold=0.0)
     preds = [_pred([[0.0, 0.0, 10.0, 10.0]], [0.9], [1])]
     targets = [_gt([[0.0, 0.0, 10.0, 10.0]], [1])]
     inner.update(preds, targets)
@@ -55,7 +55,7 @@ def test_confusion_inner_perfect_overlap_counts_tp() -> None:
 
 def test_confusion_inner_low_iou_is_fp_plus_fn() -> None:
     """An IoU below the threshold leaves the prediction as FP and the GT as FN."""
-    inner = _DetectionConfusionInner(iou_threshold=0.5, score_threshold=0.0)
+    inner = DetectionConfusionMatrixNative(iou_threshold=0.5, score_threshold=0.0)
     # Boxes barely touch — IoU = 0
     preds = [_pred([[0.0, 0.0, 5.0, 5.0]], [0.9], [1])]
     targets = [_gt([[20.0, 20.0, 25.0, 25.0]], [1])]
@@ -66,7 +66,7 @@ def test_confusion_inner_low_iou_is_fp_plus_fn() -> None:
 
 def test_confusion_inner_class_mismatch_is_fp_plus_fn() -> None:
     """Same-IoU but different class: prediction is FP, GT is FN."""
-    inner = _DetectionConfusionInner(iou_threshold=0.5, score_threshold=0.0)
+    inner = DetectionConfusionMatrixNative(iou_threshold=0.5, score_threshold=0.0)
     preds = [_pred([[0.0, 0.0, 10.0, 10.0]], [0.9], [2])]
     targets = [_gt([[0.0, 0.0, 10.0, 10.0]], [1])]
     inner.update(preds, targets)
@@ -76,7 +76,7 @@ def test_confusion_inner_class_mismatch_is_fp_plus_fn() -> None:
 
 def test_confusion_inner_score_below_threshold_drops_pred() -> None:
     """Predictions filtered by score: the GT becomes an FN with no FP."""
-    inner = _DetectionConfusionInner(iou_threshold=0.5, score_threshold=0.5)
+    inner = DetectionConfusionMatrixNative(iou_threshold=0.5, score_threshold=0.5)
     preds = [_pred([[0.0, 0.0, 10.0, 10.0]], [0.2], [1])]
     targets = [_gt([[0.0, 0.0, 10.0, 10.0]], [1])]
     inner.update(preds, targets)
@@ -85,7 +85,7 @@ def test_confusion_inner_score_below_threshold_drops_pred() -> None:
 
 
 def test_confusion_inner_no_predictions_all_fn() -> None:
-    inner = _DetectionConfusionInner()
+    inner = DetectionConfusionMatrixNative()
     preds = [_pred([], [], [])]
     targets = [_gt([[0.0, 0.0, 10.0, 10.0], [20.0, 20.0, 30.0, 30.0]], [1, 1])]
     inner.update(preds, targets)
@@ -97,7 +97,7 @@ def test_confusion_inner_no_predictions_all_fn() -> None:
 
 
 def test_confusion_inner_no_ground_truth_all_fp() -> None:
-    inner = _DetectionConfusionInner(iou_threshold=0.5, score_threshold=0.0)
+    inner = DetectionConfusionMatrixNative(iou_threshold=0.5, score_threshold=0.0)
     preds = [_pred([[0.0, 0.0, 10.0, 10.0], [20.0, 20.0, 30.0, 30.0]], [0.9, 0.8], [1, 1])]
     targets = [_gt([], [])]
     inner.update(preds, targets)
@@ -107,7 +107,7 @@ def test_confusion_inner_no_ground_truth_all_fp() -> None:
 
 def test_confusion_inner_greedy_consumes_high_score_first() -> None:
     """Two predictions overlap one GT: only the highest-score wins TP, the other becomes FP."""
-    inner = _DetectionConfusionInner(iou_threshold=0.5, score_threshold=0.0)
+    inner = DetectionConfusionMatrixNative(iou_threshold=0.5, score_threshold=0.0)
     preds = [
         _pred(
             [[0.0, 0.0, 10.0, 10.0], [0.0, 0.0, 9.0, 9.0]],
@@ -123,7 +123,7 @@ def test_confusion_inner_greedy_consumes_high_score_first() -> None:
 
 def test_confusion_inner_class_aware_matching_with_two_gts() -> None:
     """Predictions can only match same-class GTs, even when IoU favors a wrong-class one."""
-    inner = _DetectionConfusionInner(iou_threshold=0.5, score_threshold=0.0)
+    inner = DetectionConfusionMatrixNative(iou_threshold=0.5, score_threshold=0.0)
     # Two GTs at the same location but different classes; pred is class 2.
     preds = [_pred([[0.0, 0.0, 10.0, 10.0]], [0.9], [2])]
     targets = [
@@ -141,7 +141,7 @@ def test_confusion_inner_class_aware_matching_with_two_gts() -> None:
 
 def test_confusion_inner_partial_iou_at_threshold_boundary_is_tp() -> None:
     """IoU == iou_threshold counts as TP (>= comparison)."""
-    inner = _DetectionConfusionInner(iou_threshold=0.5, score_threshold=0.0)
+    inner = DetectionConfusionMatrixNative(iou_threshold=0.5, score_threshold=0.0)
     # Two unit squares overlapping by 0.5 area → IoU = 0.5 / 1.5 = 1/3.
     # So pick boxes that yield exactly 0.5 IoU: two unit squares with 1/3 overlap give 1/5.
     # Use 10x10 vs 10x10 shifted by 5 in x → intersection 5x10=50, union 100+100-50=150, IoU=1/3.
@@ -162,17 +162,17 @@ def test_confusion_inner_partial_iou_at_threshold_boundary_is_tp() -> None:
 
 def test_confusion_inner_rejects_invalid_thresholds() -> None:
     with pytest.raises(ValueError, match="iou_threshold"):
-        _DetectionConfusionInner(iou_threshold=0.0)
+        DetectionConfusionMatrixNative(iou_threshold=0.0)
     with pytest.raises(ValueError, match="iou_threshold"):
-        _DetectionConfusionInner(iou_threshold=1.5)
+        DetectionConfusionMatrixNative(iou_threshold=1.5)
     with pytest.raises(ValueError, match="score_threshold"):
-        _DetectionConfusionInner(score_threshold=-0.1)
+        DetectionConfusionMatrixNative(score_threshold=-0.1)
     with pytest.raises(ValueError, match="score_threshold"):
-        _DetectionConfusionInner(score_threshold=1.5)
+        DetectionConfusionMatrixNative(score_threshold=1.5)
 
 
 def test_confusion_inner_rejects_mismatched_lengths() -> None:
-    inner = _DetectionConfusionInner()
+    inner = DetectionConfusionMatrixNative()
     with pytest.raises(ValueError, match="must match per-image"):
         inner.update(
             [_pred([[0, 0, 1, 1]], [0.9], [1])],
@@ -182,7 +182,7 @@ def test_confusion_inner_rejects_mismatched_lengths() -> None:
 
 def test_confusion_inner_update_silent_on_none_inputs() -> None:
     """update(None, anything) and update(anything, None) are no-ops, not errors."""
-    inner = _DetectionConfusionInner()
+    inner = DetectionConfusionMatrixNative()
     inner.update(None, None)  # type: ignore[arg-type]
     inner.update([_pred([], [], [])], None)  # type: ignore[arg-type]
     out = inner.compute()
@@ -191,7 +191,7 @@ def test_confusion_inner_update_silent_on_none_inputs() -> None:
 
 def test_confusion_inner_target_without_boxes_treated_as_empty() -> None:
     """A target dict missing 'boxes'/'labels' should be treated as empty GT, not crash."""
-    inner = _DetectionConfusionInner(iou_threshold=0.5, score_threshold=0.0)
+    inner = DetectionConfusionMatrixNative(iou_threshold=0.5, score_threshold=0.0)
     inner.update(
         [_pred([[0, 0, 10, 10]], [0.9], [1])],
         [{}],  # type: ignore[list-item]
@@ -210,7 +210,7 @@ def test_confusion_inner_handles_inputs_on_non_cpu_device_via_implicit_move() ->
     predictions on the trainer's accelerator (MPS / CUDA) but the metric
     state is registered on CPU via ``add_state``.
     """
-    inner = _DetectionConfusionInner(iou_threshold=0.5, score_threshold=0.0)
+    inner = DetectionConfusionMatrixNative(iou_threshold=0.5, score_threshold=0.0)
 
     # Construct a "fake non-CPU" scenario by using a synthetic device tag.
     # We can't always assume MPS is present in CI, so use ``meta`` as a stand-
@@ -241,7 +241,7 @@ def test_confusion_inner_handles_inputs_on_non_cpu_device_via_implicit_move() ->
 
 
 def test_confusion_inner_reset_clears_state() -> None:
-    inner = _DetectionConfusionInner(iou_threshold=0.5, score_threshold=0.0)
+    inner = DetectionConfusionMatrixNative(iou_threshold=0.5, score_threshold=0.0)
     inner.update(
         [_pred([[0, 0, 10, 10]], [0.9], [1])],
         [_gt([[0, 0, 10, 10]], [1])],

@@ -29,8 +29,7 @@ from confluid import Class, Lazy, configurable
 from marainer.evaluator import LightningEvaluator
 from torch.utils.data import DataLoader
 
-from raidar.detection import detection_collate_fn
-from raidar.trainer import _default_detection_metrics
+from raidar.detection import _default_detection_metrics, detection_collate_fn
 
 
 @configurable

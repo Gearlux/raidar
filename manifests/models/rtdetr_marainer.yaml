@@ -1,0 +1,40 @@
+description: "Marainer-generic wrapper around raidar.rtdetr.RTDETRModel — returns DetectionStepOutput for the unchanged base LightningTrainer flow."
+use_case: "Use with marainer.trainer.LightningTrainer + raidar.detection.TorchvisionDetectionLoss + raidar.detection.DetectionMetricAdapter. Inherits the native RTDETRModel build and overrides forward to consume DetectionBatchInput. Adds a BN-frozen recompute path so val/loss is directly comparable to train/loss. For the specialised trainer path (no adapter layer), use raidar.rtdetr.RTDETRModel directly."
+category: "Detection"
+flux_type: "Model"
+task: "object_detection"
+class_path: "raidar.rtdetr_marainer.RTDETRMarainerModel"
+params:
+  num_classes:
+    type: "int"
+    default: 1
+    description: "Foreground class count."
+  variant:
+    type: "str"
+    default: "l"
+    choices: ["l", "x", "resnet50", "resnet101"]
+    description: "Model size — l/x ship COCO weights; resnet variants are architecture-only."
+  pretrained_detector:
+    type: "bool"
+    default: true
+    description: "Load full COCO-pretrained RT-DETR weights."
+  imgsz:
+    type: "int"
+    default: 640
+    description: "Square input size (multiple of 32)."
+  score_threshold:
+    type: "float"
+    default: 0.25
+    description: "Eval-time confidence cutoff."
+  compute_val_loss:
+    type: "bool"
+    default: true
+    description: "When False, skips the BN-frozen loss recomputation during eval."
+  checkpoint_path:
+    type: "str | null"
+    default: null
+    description: "Optional Lightning .ckpt path."
+  checkpoint_strict:
+    type: "bool"
+    default: false
+    description: "Forwarded to load_state_dict(strict=...)."
