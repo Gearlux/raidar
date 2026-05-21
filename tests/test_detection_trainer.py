@@ -4,9 +4,9 @@ from typing import Any, List
 
 import torch
 import torch.nn as nn
+from dataflux.sample import Sample
 from torchmetrics.detection import MeanAveragePrecision
 
-from dataflux.sample import Sample
 from raidar.detection import (
     DetectionBatchInput,
     DetectionMetricAdapter,
@@ -63,9 +63,7 @@ def _make_samples(n: int = 4, size: int = 32) -> List[Sample]:
             Sample(
                 input=torch.rand(3, size, size),
                 target={
-                    "boxes": torch.tensor(
-                        [[4.0, 4.0, 20.0, 20.0]], dtype=torch.float32
-                    ),
+                    "boxes": torch.tensor([[4.0, 4.0, 20.0, 20.0]], dtype=torch.float32),
                     "labels": torch.tensor([1], dtype=torch.int64),
                 },
                 metadata={"idx": i},
@@ -119,12 +117,8 @@ def test_metrics_are_wired_with_correct_prefixes() -> None:
     assert isinstance(trainer.test_metrics, DetectionMetricAdapter)
     val_keys = [str(k) for k in trainer.val_metrics.keys()]
     test_keys = [str(k) for k in trainer.test_metrics.keys()]
-    assert all(
-        k.startswith("val/") for k in val_keys
-    ), f"val/ prefix expected, got {val_keys}"
-    assert all(
-        k.startswith("test/") for k in test_keys
-    ), f"test/ prefix expected, got {test_keys}"
+    assert all(k.startswith("val/") for k in val_keys), f"val/ prefix expected, got {val_keys}"
+    assert all(k.startswith("test/") for k in test_keys), f"test/ prefix expected, got {test_keys}"
 
 
 def test_val_and_test_metrics_are_independent_instances() -> None:
@@ -198,9 +192,7 @@ def test_user_can_override_val_metrics_with_custom_adapter() -> None:
         train_set=_make_samples(4),
         num_classes=2,
     )
-    custom = DetectionMetricAdapter(
-        MeanAveragePrecision(iou_type="bbox", class_metrics=True), prefix="val/"
-    )
+    custom = DetectionMetricAdapter(MeanAveragePrecision(iou_type="bbox", class_metrics=True), prefix="val/")
     trainer.val_metrics = custom
     assert trainer.val_metrics is custom
 
@@ -218,9 +210,7 @@ def test_user_can_override_loss_fn_with_any_callable() -> None:
             losses = step_output["losses"]
             assert losses is not None
             total = 0.5 * sum(losses.values())
-            return (
-                total if isinstance(total, torch.Tensor) else torch.tensor(float(total))
-            )
+            return total if isinstance(total, torch.Tensor) else torch.tensor(float(total))
 
     trainer.loss_fn = _CustomLoss()
     batch = _make_batch(n=2)

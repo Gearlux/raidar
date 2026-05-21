@@ -10,20 +10,15 @@ from typing import Any, Dict, List
 import pytest
 import pytorch_lightning as L
 import torch
-from torch import Tensor
-from torch.utils.data import DataLoader
-from torchmetrics.detection import MeanAveragePrecision
-
 from confluid import Class
 from dataflux.core import Flux
 from dataflux.sample import Sample
 from marainer.trainer import LightningTrainer
-from raidar.detection import (
-    DetectionBatchInput,
-    DetectionMetricAdapter,
-    TorchvisionDetectionLoss,
-    detection_collate_fn,
-)
+from torch import Tensor
+from torch.utils.data import DataLoader
+from torchmetrics.detection import MeanAveragePrecision
+
+from raidar.detection import DetectionBatchInput, DetectionMetricAdapter, TorchvisionDetectionLoss, detection_collate_fn
 from raidar.rfdetr import RFDETRModel, _build_rfdetr_targets, _decode_rfdetr_predictions
 
 # --- fixtures & helpers ----------------------------------------------------
@@ -61,9 +56,7 @@ def _synthetic_detection_samples(n: int, size: int = RESOLUTION) -> List[Sample]
             Sample(
                 input=torch.rand(3, size, size),
                 target={
-                    "boxes": torch.tensor(
-                        [[8.0, 8.0, 24.0, 24.0]], dtype=torch.float32
-                    ),
+                    "boxes": torch.tensor([[8.0, 8.0, 24.0, 24.0]], dtype=torch.float32),
                     "labels": torch.tensor([0], dtype=torch.int64),
                 },
                 metadata={},
@@ -81,21 +74,15 @@ def test_build_rfdetr_targets_translates_xyxy_to_cxcywh_normalized() -> None:
     a per-image basis and preserves int64 labels."""
     targets = [
         {
-            "boxes": torch.tensor(
-                [[32.0, 32.0, 96.0, 96.0]]
-            ),  # cxcywh = (0.5, 0.5, 0.5, 0.5)
+            "boxes": torch.tensor([[32.0, 32.0, 96.0, 96.0]]),  # cxcywh = (0.5, 0.5, 0.5, 0.5)
             "labels": torch.tensor([1], dtype=torch.int64),
         },
         {
-            "boxes": torch.tensor(
-                [[0.0, 0.0, 64.0, 128.0]]
-            ),  # cxcywh = (0.25, 0.5, 0.5, 1.0)
+            "boxes": torch.tensor([[0.0, 0.0, 64.0, 128.0]]),  # cxcywh = (0.25, 0.5, 0.5, 1.0)
             "labels": torch.tensor([0], dtype=torch.int64),
         },
     ]
-    out = _build_rfdetr_targets(
-        targets, resolution=RESOLUTION, device=torch.device("cpu")
-    )
+    out = _build_rfdetr_targets(targets, resolution=RESOLUTION, device=torch.device("cpu"))
     assert len(out) == 2
     assert torch.allclose(out[0]["boxes"], torch.tensor([[0.5, 0.5, 0.5, 0.5]]))
     assert torch.allclose(out[1]["boxes"], torch.tensor([[0.25, 0.5, 0.5, 1.0]]))
@@ -105,12 +92,8 @@ def test_build_rfdetr_targets_translates_xyxy_to_cxcywh_normalized() -> None:
 
 
 def test_build_rfdetr_targets_handles_empty_targets() -> None:
-    targets: List[Dict[str, Tensor]] = [
-        {"boxes": torch.zeros((0, 4)), "labels": torch.zeros((0,), dtype=torch.int64)}
-    ]
-    out = _build_rfdetr_targets(
-        targets, resolution=RESOLUTION, device=torch.device("cpu")
-    )
+    targets: List[Dict[str, Tensor]] = [{"boxes": torch.zeros((0, 4)), "labels": torch.zeros((0,), dtype=torch.int64)}]
+    out = _build_rfdetr_targets(targets, resolution=RESOLUTION, device=torch.device("cpu"))
     assert out[0]["boxes"].shape == (0, 4)
     assert out[0]["labels"].shape == (0,)
 
@@ -144,9 +127,7 @@ def test_decode_rfdetr_predictions_filters_background_and_threshold() -> None:
             "boxes": torch.tensor([[1.0, 1.0, 5.0, 5.0], [2.0, 2.0, 6.0, 6.0]]),
         },
     ]
-    preds = _decode_rfdetr_predictions(
-        results, num_classes=num_classes, score_threshold=0.5
-    )
+    preds = _decode_rfdetr_predictions(results, num_classes=num_classes, score_threshold=0.5)
 
     assert len(preds) == 2
     # Image 0: two survivors (background and low-score dropped).
@@ -259,9 +240,7 @@ def test_rfdetr_class_embed_matches_num_classes(small_rfdetr: RFDETRModel) -> No
     """RF-DETR uses ``num_classes + 1`` output logits internally — the +1 is
     the no-object/background slot. The decode helper drops the background
     class so callers see exactly ``num_classes`` real labels."""
-    assert (
-        small_rfdetr.detector.class_embed.out_features == small_rfdetr.num_classes + 1
-    )
+    assert small_rfdetr.detector.class_embed.out_features == small_rfdetr.num_classes + 1
     assert small_rfdetr.detector.num_queries == 300
 
 
@@ -294,9 +273,7 @@ def test_rfdetr_pretrained_detector_swaps_head_for_num_classes() -> None:
 
 def test_rfdetr_pretrained_detector_default_off() -> None:
     """``pretrained_detector=False`` runs offline (no checkpoint download)."""
-    model = RFDETRModel(
-        num_classes=2, variant="nano", pretrained_detector=False, resolution=RESOLUTION
-    )
+    model = RFDETRModel(num_classes=2, variant="nano", pretrained_detector=False, resolution=RESOLUTION)
     assert model.detector.class_embed.out_features == 3  # num_classes + 1
 
 
@@ -321,12 +298,8 @@ def test_end_to_end_base_trainer_runs_with_rfdetr(tmp_path: Any) -> None:
     )
     trainer.loss_fn = TorchvisionDetectionLoss()  # type: ignore[assignment]
     trainer.val_metrics = DetectionMetricAdapter(MeanAveragePrecision(iou_type="bbox"))
-    trainer.train_loader = DataLoader(
-        train_flux, batch_size=2, collate_fn=detection_collate_fn
-    )
-    trainer.val_loader = DataLoader(
-        val_flux, batch_size=2, collate_fn=detection_collate_fn
-    )
+    trainer.train_loader = DataLoader(train_flux, batch_size=2, collate_fn=detection_collate_fn)
+    trainer.val_loader = DataLoader(val_flux, batch_size=2, collate_fn=detection_collate_fn)
 
     lightning_trainer = L.Trainer(
         max_epochs=1,
@@ -346,13 +319,9 @@ def test_end_to_end_base_trainer_runs_with_rfdetr(tmp_path: Any) -> None:
     )
 
     metrics = lightning_trainer.callback_metrics
-    assert any(
-        k.startswith("train/loss") for k in metrics
-    ), f"expected train/loss in {list(metrics)}"
+    assert any(k.startswith("train/loss") for k in metrics), f"expected train/loss in {list(metrics)}"
     train_loss = next(v for k, v in metrics.items() if k.startswith("train/loss"))
     assert torch.isfinite(train_loss), f"train/loss not finite: {train_loss}"
-    assert any(
-        k.startswith("val/loss") for k in metrics
-    ), f"expected val/loss in {list(metrics)}"
+    assert any(k.startswith("val/loss") for k in metrics), f"expected val/loss in {list(metrics)}"
     val_loss = next(v for k, v in metrics.items() if k.startswith("val/loss"))
     assert torch.isfinite(val_loss)

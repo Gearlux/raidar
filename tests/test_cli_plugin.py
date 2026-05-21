@@ -1,6 +1,7 @@
 """Tests for raidar's marainer CLI plugin registration."""
 
 from liquifai import LiquifyApp
+
 from raidar.cli_plugin import register
 
 

@@ -49,11 +49,11 @@ from typing import Dict, List, Literal, Optional, Tuple, cast
 
 import torch
 import torch.nn as nn
-from torch import Tensor
-
 from confluid import configurable
 from logflow import get_logger
 from marainer.outputs import DetectionOutput
+from torch import Tensor
+
 from raidar.checkpoint import load_lightning_checkpoint
 from raidar.detection import DetectionBatchInput, DetectionStepOutput
 
@@ -103,9 +103,7 @@ def _build_rtdetr(
     if pretrained_detector:
         weights_path = attempt_download_asset(f"rtdetr-{variant}.pt")
         ckpt = torch.load(weights_path, map_location="cpu", weights_only=False)
-        src_model = (
-            ckpt["model"] if isinstance(ckpt, dict) and "model" in ckpt else ckpt
-        )
+        src_model = ckpt["model"] if isinstance(ckpt, dict) and "model" in ckpt else ckpt
         src_state = src_model.float().state_dict()
         dst_state = detector.state_dict()
         for k, v in src_state.items():
@@ -151,9 +149,7 @@ def _compute_rtdetr_loss_without_bn_drift(
     """
     was_training = detector.training
     detector.train()
-    bn_layers = [
-        m for m in detector.modules() if isinstance(m, nn.modules.batchnorm._BatchNorm)
-    ]
+    bn_layers = [m for m in detector.modules() if isinstance(m, nn.modules.batchnorm._BatchNorm)]
     for m in bn_layers:
         m.eval()
     try:
@@ -326,9 +322,7 @@ class RTDETRModel(nn.Module):
     ) -> None:
         super().__init__()
         if imgsz % 32 != 0:
-            raise ValueError(
-                f"imgsz must be a multiple of 32 (RT-DETR stride), got {imgsz}."
-            )
+            raise ValueError(f"imgsz must be a multiple of 32 (RT-DETR stride), got {imgsz}.")
         self.num_classes = int(num_classes)
         self.variant = variant
         self.imgsz = int(imgsz)
@@ -345,9 +339,7 @@ class RTDETRModel(nn.Module):
     def forward(self, x: DetectionBatchInput) -> DetectionStepOutput:
         if self.training:
             if x.targets is None:
-                raise ValueError(
-                    "RTDETRModel in train mode requires targets on DetectionBatchInput."
-                )
+                raise ValueError("RTDETRModel in train mode requires targets on DetectionBatchInput.")
             batch_dict = _build_rtdetr_batch_dict(x.images, x.targets, self.imgsz)
             loss_total, _items = self.detector(batch_dict)
             n_imgs = len(x.images)
@@ -369,9 +361,7 @@ class RTDETRModel(nn.Module):
         losses: Optional[Dict[str, Tensor]] = None
         if x.targets is not None and self.compute_val_loss:
             batch_dict = _build_rtdetr_batch_dict(x.images, x.targets, self.imgsz)
-            loss_total, _items = _compute_rtdetr_loss_without_bn_drift(
-                self.detector, batch_dict
-            )
+            loss_total, _items = _compute_rtdetr_loss_without_bn_drift(self.detector, batch_dict)
             losses = {"loss": loss_total}
 
         img_tensor = torch.stack(x.images)
@@ -398,9 +388,7 @@ class RTDETRModel(nn.Module):
             )
         else:
             loss_summary = f"loss={float(losses['loss']):.4f}" if losses else "loss=n/a"
-            logger.debug(
-                f"[diag][rtdetr][eval] {' '.join(per_image_summaries)} | {loss_summary}"
-            )
+            logger.debug(f"[diag][rtdetr][eval] {' '.join(per_image_summaries)} | {loss_summary}")
         return DetectionStepOutput(losses=losses, predictions=predictions)
 
 

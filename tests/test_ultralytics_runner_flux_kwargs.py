@@ -6,16 +6,11 @@ from typing import Any, Dict, List, cast
 
 import pytest
 import torch
-
 from dataflux.core import Flux
 from dataflux.sample import Sample
+
 from raidar.flux_yolo_dataset import FluxYOLODataset
-from raidar.ultralytics_runner import (
-    _FLUX_CTX,
-    FluxDetectionTrainer,
-    UltralyticsEvaluator,
-    UltralyticsTrainer,
-)
+from raidar.ultralytics_runner import _FLUX_CTX, FluxDetectionTrainer, UltralyticsEvaluator, UltralyticsTrainer
 
 
 def _make_flux(n: int = 4, size: int = 64) -> Flux:
@@ -25,9 +20,7 @@ def _make_flux(n: int = 4, size: int = 64) -> Flux:
             Sample(
                 input=torch.rand(3, size, size),
                 target={
-                    "boxes": torch.tensor(
-                        [[4.0, 4.0, 28.0, 28.0]], dtype=torch.float32
-                    ),
+                    "boxes": torch.tensor([[4.0, 4.0, 28.0, 28.0]], dtype=torch.float32),
                     "labels": torch.tensor([1], dtype=torch.int64),
                 },
                 metadata={"idx": i},
@@ -164,9 +157,7 @@ def test_augment_false_disables_flux_yolo_dataset_augmentation() -> None:
     token = _FLUX_CTX.set(bundle)
     try:
         stub = cast(FluxDetectionTrainer, _StubTrainer(data=bundle["data"]))
-        ds = FluxDetectionTrainer.build_dataset(
-            stub, img_path=".", mode="train", batch=2
-        )
+        ds = FluxDetectionTrainer.build_dataset(stub, img_path=".", mode="train", batch=2)
         assert isinstance(ds, FluxYOLODataset)
         assert ds.augment is False
     finally:
@@ -185,13 +176,9 @@ def test_augment_true_explicit_keeps_augmentation_in_train_mode() -> None:
     token = _FLUX_CTX.set(bundle)
     try:
         stub = cast(FluxDetectionTrainer, _StubTrainer(data=bundle["data"]))
-        ds_train = FluxDetectionTrainer.build_dataset(
-            stub, img_path=".", mode="train", batch=2
-        )
+        ds_train = FluxDetectionTrainer.build_dataset(stub, img_path=".", mode="train", batch=2)
         # Even in val mode, augment_override=True forces augment=True.
-        ds_val = FluxDetectionTrainer.build_dataset(
-            stub, img_path=".", mode="val", batch=2
-        )
+        ds_val = FluxDetectionTrainer.build_dataset(stub, img_path=".", mode="val", batch=2)
         assert ds_train.augment is True
         assert ds_val.augment is True
     finally:
@@ -210,12 +197,8 @@ def test_augment_none_default_keeps_legacy_per_mode_behavior() -> None:
     token = _FLUX_CTX.set(bundle)
     try:
         stub = cast(FluxDetectionTrainer, _StubTrainer(data=bundle["data"]))
-        ds_train = FluxDetectionTrainer.build_dataset(
-            stub, img_path=".", mode="train", batch=2
-        )
-        ds_val = FluxDetectionTrainer.build_dataset(
-            stub, img_path=".", mode="val", batch=2
-        )
+        ds_train = FluxDetectionTrainer.build_dataset(stub, img_path=".", mode="train", batch=2)
+        ds_val = FluxDetectionTrainer.build_dataset(stub, img_path=".", mode="val", batch=2)
         assert ds_train.augment is True
         assert ds_val.augment is False
     finally:

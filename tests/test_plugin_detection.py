@@ -3,6 +3,7 @@ ultralytics-* verbs AND the new `detection` sub-app land on the host app.
 """
 
 from liquifai import LiquifyApp
+
 from raidar.plugin import register
 
 
@@ -17,9 +18,7 @@ def test_register_mounts_detection_subapp() -> None:
     if sub_app_names:
         assert "detection" in sub_app_names
     else:
-        assert "detection" in _surface_repr(
-            app
-        ), "register() must mount a `detection` sub-app on the host LiquifyApp."
+        assert "detection" in _surface_repr(app), "register() must mount a `detection` sub-app on the host LiquifyApp."
 
 
 def test_register_keeps_legacy_ultralytics_verbs() -> None:

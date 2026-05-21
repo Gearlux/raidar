@@ -4,13 +4,13 @@ from typing import Any, Dict, List
 
 import pytorch_lightning as L
 import torch
-from torch.utils.data import DataLoader
-from torchmetrics.detection import MeanAveragePrecision
-
 from confluid import Class
 from dataflux.core import Flux
 from dataflux.sample import Sample
 from marainer.evaluator import LightningEvaluator
+from torch.utils.data import DataLoader
+from torchmetrics.detection import MeanAveragePrecision
+
 from raidar.detection import DetectionMetricAdapter, detection_collate_fn
 from raidar.faster_rcnn import FasterRCNNModel
 
