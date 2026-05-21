@@ -51,17 +51,13 @@ from typing import Any, Optional
 
 import pytorch_lightning as L
 import torch
+from confluid import Class, Lazy, configurable
+from marainer.trainer import LightningTrainer
 from torch.utils.data import DataLoader
 from torchmetrics import MetricCollection
 from torchmetrics.detection import MeanAveragePrecision
 
-from confluid import Class, Lazy, configurable
-from marainer.trainer import LightningTrainer
-from raidar.detection import (
-    DetectionMetricAdapter,
-    TorchvisionDetectionLoss,
-    detection_collate_fn,
-)
+from raidar.detection import DetectionMetricAdapter, TorchvisionDetectionLoss, detection_collate_fn
 
 
 def _default_detection_metrics(prefix: str) -> DetectionMetricAdapter:
@@ -136,9 +132,5 @@ class LightningDetectionTrainer(LightningTrainer):
         # produced during training_step on most detectors). Leave None so the
         # base Trainer skips the train-metric path entirely.
         self.train_metrics: Optional[MetricCollection] = None
-        self.val_metrics: Optional[MetricCollection] = _default_detection_metrics(
-            prefix="val/"
-        )
-        self.test_metrics: Optional[MetricCollection] = _default_detection_metrics(
-            prefix="test/"
-        )
+        self.val_metrics: Optional[MetricCollection] = _default_detection_metrics(prefix="val/")
+        self.test_metrics: Optional[MetricCollection] = _default_detection_metrics(prefix="test/")

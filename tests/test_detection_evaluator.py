@@ -6,11 +6,11 @@ from typing import Any, Dict, List
 import pytorch_lightning as L
 import torch
 import torch.nn as nn
-from torch.utils.data import DataLoader
-
 from confluid import Class
 from dataflux.core import Flux
 from dataflux.sample import Sample
+from torch.utils.data import DataLoader
+
 from raidar.detection import (
     DetectionBatchInput,
     DetectionMetricAdapter,
@@ -94,9 +94,7 @@ def test_metrics_have_test_prefix() -> None:
         num_classes=2,
     )
     keys = list(ev.metrics.keys())  # type: ignore[union-attr]
-    assert all(
-        k.startswith("test/") for k in keys
-    ), f"Expected test/ prefix, got: {keys}"
+    assert all(k.startswith("test/") for k in keys), f"Expected test/ prefix, got: {keys}"
 
 
 def test_default_loader_uses_detection_collate_fn() -> None:

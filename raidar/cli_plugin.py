@@ -13,6 +13,7 @@ Wired in :file:`pyproject.toml` under
 from typing import TYPE_CHECKING
 
 from logflow import get_logger
+
 from raidar.ultralytics_runner import UltralyticsEvaluator, UltralyticsTrainer
 
 if TYPE_CHECKING:
@@ -30,9 +31,7 @@ def register(app: "LiquifyApp") -> None:
         (mosaic + albumentations + LOGGER) instead of PyTorch Lightning.
         """
         if trainer is None:
-            logger.error(
-                "'trainer' was not bound — provide one under 'trainer:' in your YAML."
-            )
+            logger.error("'trainer' was not bound — provide one under 'trainer:' in your YAML.")
             return
         logger.info(f"raidar ultralytics-train: {trainer.experiment_name}")
         trainer.run()
@@ -41,9 +40,7 @@ def register(app: "LiquifyApp") -> None:
     def ultralytics_evaluate(evaluator: UltralyticsEvaluator) -> None:
         """Evaluate a trained YOLO26 checkpoint via Ultralytics' native validator."""
         if evaluator is None:
-            logger.error(
-                "'evaluator' was not bound — provide one under 'evaluator:' in your YAML."
-            )
+            logger.error("'evaluator' was not bound — provide one under 'evaluator:' in your YAML.")
             return
         logger.info(f"raidar ultralytics-evaluate: {evaluator.experiment_name}")
         evaluator.run()

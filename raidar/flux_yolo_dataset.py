@@ -39,10 +39,9 @@ from typing import Any, Dict, List, Tuple
 import cv2
 import numpy as np
 import torch
-from ultralytics.data.dataset import YOLODataset
-
 from dataflux import Flux
 from logflow import get_logger
+from ultralytics.data.dataset import YOLODataset
 
 logger = get_logger(__name__)
 
@@ -116,18 +115,14 @@ def _input_hw(arr_in: Any) -> Tuple[int, int]:
     """Return (H, W) of a Sample.input regardless of CHW / HWC / HW layout."""
     shape = getattr(arr_in, "shape", None)
     if shape is None:
-        raise ValueError(
-            "Sample.input has no .shape attribute — expected a tensor or numpy array."
-        )
+        raise ValueError("Sample.input has no .shape attribute — expected a tensor or numpy array.")
     if len(shape) == 3 and shape[0] in (1, 3) and shape[-1] not in (1, 3):
         return int(shape[1]), int(shape[2])  # CHW
     if len(shape) == 3:
         return int(shape[0]), int(shape[1])  # HWC
     if len(shape) == 2:
         return int(shape[0]), int(shape[1])  # HW
-    raise ValueError(
-        f"Sample.input has unexpected shape {tuple(shape)}; expected 2D or 3D array."
-    )
+    raise ValueError(f"Sample.input has unexpected shape {tuple(shape)}; expected 2D or 3D array.")
 
 
 class FluxYOLODataset(YOLODataset):  # type: ignore[misc]
@@ -186,9 +181,7 @@ class FluxYOLODataset(YOLODataset):  # type: ignore[misc]
                 }
             )
         if not labels:
-            raise RuntimeError(
-                f"FluxYOLODataset: source flux is empty (len={len(self._flux)})."
-            )
+            raise RuntimeError(f"FluxYOLODataset: source flux is empty (len={len(self._flux)}).")
         return labels
 
     def _flux_index(self, i: int) -> int:
@@ -215,9 +208,7 @@ class FluxYOLODataset(YOLODataset):  # type: ignore[misc]
             return cached, self.im_hw0[i], self.im_hw[i]
 
         sample = self._flux[self._flux_index(i)]
-        arr = _sample_image_to_bgr_hwc_uint8(
-            sample.input, target_channels=self.channels
-        )
+        arr = _sample_image_to_bgr_hwc_uint8(sample.input, target_channels=self.channels)
         h0, w0 = arr.shape[:2]
 
         if rect_mode:
@@ -227,9 +218,7 @@ class FluxYOLODataset(YOLODataset):  # type: ignore[misc]
                 h_new = min(math.ceil(h0 * r), self.imgsz)
                 arr = cv2.resize(arr, (w_new, h_new), interpolation=cv2.INTER_LINEAR)
         elif not (h0 == w0 == self.imgsz):
-            arr = cv2.resize(
-                arr, (self.imgsz, self.imgsz), interpolation=cv2.INTER_LINEAR
-            )
+            arr = cv2.resize(arr, (self.imgsz, self.imgsz), interpolation=cv2.INTER_LINEAR)
         if arr.ndim == 2:
             arr = arr[..., None]
 

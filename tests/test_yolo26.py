@@ -10,21 +10,16 @@ import pytest
 import pytorch_lightning as L
 import torch
 import torch.nn as nn
+from confluid import Class
+from dataflux.core import Flux
+from dataflux.sample import Sample
+from marainer.trainer import LightningTrainer
 from torch import Tensor
 from torch.utils.data import DataLoader
 from torchmetrics.detection import MeanAveragePrecision
 from ultralytics.nn.modules.head import Detect
 
-from confluid import Class
-from dataflux.core import Flux
-from dataflux.sample import Sample
-from marainer.trainer import LightningTrainer
-from raidar.detection import (
-    DetectionBatchInput,
-    DetectionMetricAdapter,
-    TorchvisionDetectionLoss,
-    detection_collate_fn,
-)
+from raidar.detection import DetectionBatchInput, DetectionMetricAdapter, TorchvisionDetectionLoss, detection_collate_fn
 from raidar.yolo26 import (
     YOLO26Model,
     _build_yolo_batch_dict,
@@ -61,9 +56,7 @@ def _synthetic_detection_samples(n: int, size: int = IMGSZ) -> List[Sample]:
             Sample(
                 input=torch.rand(3, size, size),
                 target={
-                    "boxes": torch.tensor(
-                        [[4.0, 4.0, 28.0, 28.0]], dtype=torch.float32
-                    ),
+                    "boxes": torch.tensor([[4.0, 4.0, 28.0, 28.0]], dtype=torch.float32),
                     "labels": torch.tensor([0], dtype=torch.int64),
                 },
                 metadata={},
@@ -140,15 +133,11 @@ def test_build_yolo_batch_dict_translates_targets() -> None:
     images = [torch.rand(3, IMGSZ, IMGSZ), torch.rand(3, IMGSZ, IMGSZ)]
     targets = [
         {
-            "boxes": torch.tensor(
-                [[16.0, 16.0, 48.0, 48.0]]
-            ),  # cxcywh = (0.5, 0.5, 0.5, 0.5)
+            "boxes": torch.tensor([[16.0, 16.0, 48.0, 48.0]]),  # cxcywh = (0.5, 0.5, 0.5, 0.5)
             "labels": torch.tensor([1], dtype=torch.int64),
         },
         {
-            "boxes": torch.tensor(
-                [[0.0, 0.0, 32.0, 64.0]]
-            ),  # cxcywh = (0.25, 0.5, 0.5, 1.0)
+            "boxes": torch.tensor([[0.0, 0.0, 32.0, 64.0]]),  # cxcywh = (0.25, 0.5, 0.5, 1.0)
             "labels": torch.tensor([0], dtype=torch.int64),
         },
     ]
@@ -346,9 +335,7 @@ def test_yolo26_pretrained_detector_default_off() -> None:
 
 
 def test_yolo26_agnostic_nms_default_off_propagates_to_head() -> None:
-    model = YOLO26Model(
-        num_classes=2, variant="n", pretrained_detector=False, imgsz=IMGSZ
-    )
+    model = YOLO26Model(num_classes=2, variant="n", pretrained_detector=False, imgsz=IMGSZ)
     head = cast(Detect, model.detector.model[-1])  # type: ignore[index, union-attr]
     assert head.agnostic_nms is False
     assert model.agnostic_nms is False
@@ -376,9 +363,7 @@ def test_yolo26_end2end_default_leaves_yaml_setting() -> None:
     """``end2end=None`` (default) must leave whatever ``yolo26{variant}.yaml``
     specifies — currently ``True`` — so checkpoints trained in the default
     end-to-end mode keep working through the wrapper."""
-    model = YOLO26Model(
-        num_classes=2, variant="n", pretrained_detector=False, imgsz=IMGSZ
-    )
+    model = YOLO26Model(num_classes=2, variant="n", pretrained_detector=False, imgsz=IMGSZ)
     head = cast(Detect, model.detector.model[-1])  # type: ignore[index, union-attr]
     assert head.end2end is True
 
@@ -480,12 +465,8 @@ def test_end_to_end_base_trainer_runs_with_yolo26(tmp_path: Any) -> None:
     )
     trainer.loss_fn = TorchvisionDetectionLoss()  # type: ignore[assignment]
     trainer.val_metrics = DetectionMetricAdapter(MeanAveragePrecision(iou_type="bbox"))
-    trainer.train_loader = DataLoader(
-        train_flux, batch_size=2, collate_fn=detection_collate_fn
-    )
-    trainer.val_loader = DataLoader(
-        val_flux, batch_size=2, collate_fn=detection_collate_fn
-    )
+    trainer.train_loader = DataLoader(train_flux, batch_size=2, collate_fn=detection_collate_fn)
+    trainer.val_loader = DataLoader(val_flux, batch_size=2, collate_fn=detection_collate_fn)
 
     lightning_trainer = L.Trainer(
         max_epochs=1,
@@ -505,13 +486,9 @@ def test_end_to_end_base_trainer_runs_with_yolo26(tmp_path: Any) -> None:
     )
 
     metrics = lightning_trainer.callback_metrics
-    assert any(
-        k.startswith("train/loss") for k in metrics
-    ), f"expected train/loss in {list(metrics)}"
+    assert any(k.startswith("train/loss") for k in metrics), f"expected train/loss in {list(metrics)}"
     train_loss = next(v for k, v in metrics.items() if k.startswith("train/loss"))
     assert torch.isfinite(train_loss), f"train/loss not finite: {train_loss}"
-    assert any(
-        k.startswith("val/loss") for k in metrics
-    ), f"expected val/loss in {list(metrics)}"
+    assert any(k.startswith("val/loss") for k in metrics), f"expected val/loss in {list(metrics)}"
     val_loss = next(v for k, v in metrics.items() if k.startswith("val/loss"))
     assert torch.isfinite(val_loss)

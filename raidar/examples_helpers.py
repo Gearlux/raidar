@@ -10,11 +10,10 @@ end-to-end. Real training jobs should provide a real Flux pipeline
 from typing import Dict, List
 
 import torch
-from torch import Tensor
-from torch.utils.data import Dataset
-
 from confluid import configurable
 from dataflux.sample import Sample
+from torch import Tensor
+from torch.utils.data import Dataset
 
 
 @configurable
@@ -45,8 +44,7 @@ class SyntheticDetectionDataset(Dataset):
         self._rng = torch.Generator().manual_seed(int(seed))
         # Pre-generate consistent image content so __getitem__ is deterministic.
         self._images: List[Tensor] = [
-            torch.rand(3, self.image_size, self.image_size, generator=self._rng)
-            for _ in range(self.n)
+            torch.rand(3, self.image_size, self.image_size, generator=self._rng) for _ in range(self.n)
         ]
 
     def __len__(self) -> int:
@@ -61,11 +59,7 @@ class SyntheticDetectionDataset(Dataset):
         # One foreground box centred in the image, class id varies by index.
         s = self.image_size
         target: Dict[str, Tensor] = {
-            "boxes": torch.tensor(
-                [[s * 0.25, s * 0.25, s * 0.75, s * 0.75]], dtype=torch.float32
-            ),
-            "labels": torch.tensor(
-                [1 + (idx % max(self.num_classes - 1, 1))], dtype=torch.int64
-            ),
+            "boxes": torch.tensor([[s * 0.25, s * 0.25, s * 0.75, s * 0.75]], dtype=torch.float32),
+            "labels": torch.tensor([1 + (idx % max(self.num_classes - 1, 1))], dtype=torch.int64),
         }
         return Sample(input=image, target=target, metadata={"idx": idx})

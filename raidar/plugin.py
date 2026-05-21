@@ -18,6 +18,7 @@ The two ultralytics-native verbs are kept registered via
 """
 
 from liquifai import LiquifyApp
+
 from raidar.cli import evaluate, train
 from raidar.cli_plugin import register as _register_ultralytics_verbs
 

@@ -7,10 +7,10 @@ helper) live in :mod:`tests.test_faster_rcnn`.
 from typing import Dict, List
 
 import torch
+from dataflux.sample import Sample
 from torch import Tensor
 from torchmetrics.detection import MeanAveragePrecision
 
-from dataflux.sample import Sample
 from raidar.detection import (
     DetectionBatchInput,
     DetectionMetricAdapter,
@@ -46,9 +46,7 @@ def _synthetic_detection_samples(n: int, size: int = 64) -> List[Sample]:
             Sample(
                 input=torch.rand(3, size, size),
                 target={
-                    "boxes": torch.tensor(
-                        [[4.0, 4.0, 28.0, 28.0]], dtype=torch.float32
-                    ),
+                    "boxes": torch.tensor([[4.0, 4.0, 28.0, 28.0]], dtype=torch.float32),
                     "labels": torch.tensor([1], dtype=torch.int64),
                 },
                 metadata={},
@@ -142,11 +140,7 @@ def test_metric_adapter_forwards_to_inner_when_predictions_present() -> None:
     computed = adapter.compute()
     assert isinstance(computed, dict)
     # MeanAveragePrecision emits scalar `map` among other keys.
-    assert (
-        "map" in computed
-        or "MeanAveragePrecision_map" in computed
-        or any("map" in str(k) for k in computed.keys())
-    )
+    assert "map" in computed or "MeanAveragePrecision_map" in computed or any("map" in str(k) for k in computed.keys())
 
 
 # --- detection_collate_fn --------------------------------------------------

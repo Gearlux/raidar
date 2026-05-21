@@ -49,9 +49,7 @@ def build_yolo26(
     if pretrained_detector:
         weights_path = attempt_download_asset(f"yolo26{variant}.pt")
         ckpt = torch.load(weights_path, map_location="cpu", weights_only=False)
-        src_model = (
-            ckpt["model"] if isinstance(ckpt, dict) and "model" in ckpt else ckpt
-        )
+        src_model = ckpt["model"] if isinstance(ckpt, dict) and "model" in ckpt else ckpt
         src_state = src_model.float().state_dict()
         dst_state = detector.state_dict()
         for k, v in src_state.items():
