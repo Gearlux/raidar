@@ -42,11 +42,11 @@ from typing import Dict, List, Literal, Optional, Tuple, cast
 
 import torch
 import torch.nn as nn
+from torch import Tensor
+
 from confluid import configurable
 from logflow import get_logger
 from marainer.outputs import DetectionOutput
-from torch import Tensor
-
 from raidar.checkpoint import load_lightning_checkpoint
 from raidar.detection import DetectionBatchInput, DetectionStepOutput
 from raidar.ultralytics_common import build_yolo26 as _build_yolo26
@@ -70,7 +70,9 @@ def _compute_yolo_loss_without_bn_drift(
     """
     was_training = detector.training
     detector.train()
-    bn_layers = [m for m in detector.modules() if isinstance(m, nn.modules.batchnorm._BatchNorm)]
+    bn_layers = [
+        m for m in detector.modules() if isinstance(m, nn.modules.batchnorm._BatchNorm)
+    ]
     for m in bn_layers:
         m.eval()
     try:
@@ -166,7 +168,9 @@ def _decode_yolo_predictions(
     """
     from ultralytics.utils.nms import non_max_suppression
 
-    nms_out = non_max_suppression(raw, conf_thres=score_threshold, iou_thres=iou_threshold, max_det=max_det)
+    nms_out = non_max_suppression(
+        raw, conf_thres=score_threshold, iou_thres=iou_threshold, max_det=max_det
+    )
     predictions: List[DetectionOutput] = []
     for rows in nms_out:
         predictions.append(
@@ -257,7 +261,9 @@ class YOLO26Model(nn.Module):
     ) -> None:
         super().__init__()
         if imgsz % 32 != 0:
-            raise ValueError(f"imgsz must be a multiple of 32 (YOLO stride), got {imgsz}.")
+            raise ValueError(
+                f"imgsz must be a multiple of 32 (YOLO stride), got {imgsz}."
+            )
         self.num_classes = int(num_classes)
         self.variant = variant
         self.imgsz = int(imgsz)
@@ -278,7 +284,9 @@ class YOLO26Model(nn.Module):
     def forward(self, x: DetectionBatchInput) -> DetectionStepOutput:
         if self.training:
             if x.targets is None:
-                raise ValueError("YOLO26Model in train mode requires targets on DetectionBatchInput.")
+                raise ValueError(
+                    "YOLO26Model in train mode requires targets on DetectionBatchInput."
+                )
             batch_dict = _build_yolo_batch_dict(x.images, x.targets, self.imgsz)
             loss_components, _items = self.detector(batch_dict)
             loss_total = loss_components.sum()
@@ -302,7 +310,9 @@ class YOLO26Model(nn.Module):
         losses: Optional[Dict[str, Tensor]] = None
         if x.targets is not None and self.compute_val_loss:
             batch_dict = _build_yolo_batch_dict(x.images, x.targets, self.imgsz)
-            loss_components, _items = _compute_yolo_loss_without_bn_drift(self.detector, batch_dict)
+            loss_components, _items = _compute_yolo_loss_without_bn_drift(
+                self.detector, batch_dict
+            )
             losses = {"loss": loss_components.sum()}
 
         img_tensor = torch.stack(x.images)
@@ -329,7 +339,9 @@ class YOLO26Model(nn.Module):
             )
         else:
             loss_summary = f"loss={float(losses['loss']):.4f}" if losses else "loss=n/a"
-            logger.trace(f"[diag][yolo26][eval] {' '.join(per_image_summaries)} | {loss_summary}")
+            logger.trace(
+                f"[diag][yolo26][eval] {' '.join(per_image_summaries)} | {loss_summary}"
+            )
         return DetectionStepOutput(losses=losses, predictions=predictions)
 
 

@@ -19,18 +19,34 @@ from raidar.detection import (
 )
 
 
-def _pred(boxes: List[List[float]], scores: List[float], labels: List[int]) -> DetectionOutput:
+def _pred(
+    boxes: List[List[float]], scores: List[float], labels: List[int]
+) -> DetectionOutput:
     return DetectionOutput(
-        boxes=torch.tensor(boxes, dtype=torch.float32) if boxes else torch.zeros((0, 4)),
-        scores=torch.tensor(scores, dtype=torch.float32) if scores else torch.zeros((0,)),
-        labels=torch.tensor(labels, dtype=torch.int64) if labels else torch.zeros((0,), dtype=torch.int64),
+        boxes=(
+            torch.tensor(boxes, dtype=torch.float32) if boxes else torch.zeros((0, 4))
+        ),
+        scores=(
+            torch.tensor(scores, dtype=torch.float32) if scores else torch.zeros((0,))
+        ),
+        labels=(
+            torch.tensor(labels, dtype=torch.int64)
+            if labels
+            else torch.zeros((0,), dtype=torch.int64)
+        ),
     )
 
 
 def _gt(boxes: List[List[float]], labels: List[int]) -> Dict[str, Tensor]:
     return {
-        "boxes": torch.tensor(boxes, dtype=torch.float32) if boxes else torch.zeros((0, 4)),
-        "labels": torch.tensor(labels, dtype=torch.int64) if labels else torch.zeros((0,), dtype=torch.int64),
+        "boxes": (
+            torch.tensor(boxes, dtype=torch.float32) if boxes else torch.zeros((0, 4))
+        ),
+        "labels": (
+            torch.tensor(labels, dtype=torch.int64)
+            if labels
+            else torch.zeros((0,), dtype=torch.int64)
+        ),
     }
 
 
@@ -98,7 +114,9 @@ def test_confusion_inner_no_predictions_all_fn() -> None:
 
 def test_confusion_inner_no_ground_truth_all_fp() -> None:
     inner = _DetectionConfusionInner(iou_threshold=0.5, score_threshold=0.0)
-    preds = [_pred([[0.0, 0.0, 10.0, 10.0], [20.0, 20.0, 30.0, 30.0]], [0.9, 0.8], [1, 1])]
+    preds = [
+        _pred([[0.0, 0.0, 10.0, 10.0], [20.0, 20.0, 30.0, 30.0]], [0.9, 0.8], [1, 1])
+    ]
     targets = [_gt([], [])]
     inner.update(preds, targets)
     out = inner.compute()
@@ -262,7 +280,9 @@ def test_confusion_matrix_surfaces_all_default_keys() -> None:
         assert expected in keys, f"missing surfaced key {expected!r}; got {keys!r}"
 
 
-def test_confusion_matrix_consumes_step_output_and_skips_when_predictions_none() -> None:
+def test_confusion_matrix_consumes_step_output_and_skips_when_predictions_none() -> (
+    None
+):
     cm = DetectionConfusionMatrix(iou_threshold=0.5, score_threshold=0.0)
     # No predictions present (training step path) — must no-op silently.
     cm.update(_step(None), target=None)  # type: ignore[arg-type]
@@ -271,7 +291,11 @@ def test_confusion_matrix_consumes_step_output_and_skips_when_predictions_none()
     targets = [_gt([[0, 0, 10, 10]], [1])]
     cm.update(_step(preds), targets)
     computed = cm.compute()
-    assert int(computed["tp"]) == 1 and int(computed["fp"]) == 0 and int(computed["fn"]) == 0
+    assert (
+        int(computed["tp"]) == 1
+        and int(computed["fp"]) == 0
+        and int(computed["fn"]) == 0
+    )
 
 
 def test_confusion_matrix_forward_returns_dict() -> None:

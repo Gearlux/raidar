@@ -20,7 +20,10 @@ dependencies = [
 requires-python = ">=3.12"
 
 [project.entry-points."marainer.commands"]
-raidar = "raidar.cli_plugin:register"
+raidar = "raidar.plugin:register"
+
+[project.scripts]
+raidar = "raidar.cli:main"
 
 [project.optional-dependencies]
 dev = [

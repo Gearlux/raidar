@@ -1,0 +1,80 @@
+# Train YOLO26 via Ultralytics' native trainer over `dataflux.Flux` objects
+# with augmentation supplied UPSTREAM via dataflux ops — NOT by ultralytics'
+# built-in mosaic + albumentations pipeline.
+#
+# Run:
+#   marainer ultralytics-train raidar/examples/ultralytics_train_flux_dataflux_aug.yaml
+#
+# Tradeoff vs ultralytics_train_flux.yaml (which uses augment: true and the
+# `augmentation:` knobs):
+#
+#   • augment: true  + augmentation: {mosaic, ...}
+#       Use this when you want ultralytics' battle-tested aug pipeline
+#       (mosaic, mixup, hsv jitter, perspective warp, ...) on top of
+#       per-sample images coming out of your Flux. The Flux ops are
+#       responsible for producing one composed image per sample; ultralytics
+#       then mixes/jitters across the batch.
+#
+#   • augment: false + Flux ops that do their own augmentation
+#       Use this when you want full control of augmentation as Confluid-wired
+#       waivefront ops in the Flux pipeline. Ultralytics' aug machinery is
+#       disabled entirely so there's no double-augmentation. Ideal for
+#       non-natural domains (spectrograms, ToF, range-doppler) where
+#       ultralytics' colour/perspective transforms don't match the data
+#       distribution.
+#
+# This example sketches the augment: false path.
+
+class_names:
+  0: drone-signal
+num_classes: 1
+
+# -- Source: replace with your real DataSource (e.g. RegionsJsonSource over
+# -- waivefront-rfuav/data). Kept as an empty placeholder so the file
+# -- doesn't try to read non-existent data on a fresh checkout.
+raw_source: !class:dataflux.core.Flux()
+  source: []
+  ops: []
+
+# -- Augmentation as a sequence of dataflux ops on the train Flux. Add the
+# -- waivefront op chain you actually use here — examples might include:
+# --
+# --   - !class:waivefront.augmentations.RandomHorizontalFlipOp(p=0.5)
+# --   - !class:waivefront.augmentations.RandomBrightnessContrastOp()
+# --   - !class:waivefront.augmentations.RandomShiftScaleRotateOp()
+# --   - !class:waivefront.augmentations.NoiseInjectionOp(sigma=0.02)
+# --
+# -- Each op consumes a `Sample(input, target, metadata)` and returns the
+# -- augmented Sample. Target boxes/labels must be transformed alongside the
+# -- image when applicable (the op author owns this — that's why
+# -- augmentation belongs in dataflux ops, where the full Sample is in scope).
+train_aug_ops: []   # populate with the augmentation pipeline you want
+
+train_set: !class:dataflux.core.Flux()
+  source: !ref:raw_source
+  ops: !ref:train_aug_ops
+
+val_set: !class:dataflux.core.Flux()
+  source: []   # replace with the held-out val source — no aug ops here
+  ops: []
+
+trainer: !class:raidar.ultralytics_runner.UltralyticsTrainer
+  train_set: !ref:train_set
+  val_set: !ref:val_set
+  num_classes: !ref:num_classes
+  class_names: !ref:class_names
+  variant: n
+  pretrained: true
+  imgsz: 640
+  epochs: 50
+  batch: 16
+  experiment_name: yolo26n_rfuav_flux_dataflux_aug
+  metrics_output_path: ./runs/yolo26n_rfuav_flux_dataflux_aug/metrics.json
+  # The key knob: disable ultralytics' own mosaic + albumentations so the
+  # Flux op chain above is the SOLE source of augmentation. Setting any
+  # `augmentation: {...}` block alongside `augment: false` is a config
+  # smell and is rejected at construction time.
+  augment: false
+  extra_overrides:
+    workers: 4
+    plots: false

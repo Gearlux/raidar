@@ -1,0 +1,46 @@
+description: "LightningDetectionEvaluator: specialised object-detection evaluator with baked-in detection_collate_fn and MAP-based test metrics."
+use_case: "Drop-in replacement for LightningEvaluator when evaluating detection models. Only requires model, dataset, num_classes. Invoke via `raidar evaluate` or `marainer detection evaluate`."
+category: "Detection"
+flux_type: "LightningDetectionEvaluator"
+class_path: "raidar.evaluator.LightningDetectionEvaluator"
+params:
+  model:
+    type: "torch.nn.Module"
+    required: true
+    description: "Detection model that returns DetectionStepOutput. Pass checkpoint_path on the model class to load trained weights."
+  dataset:
+    type: "Any"
+    required: true
+    description: "Evaluation dataset or Flux pipeline."
+  num_classes:
+    type: "int"
+    required: true
+    description: "Number of output classes (surfaced for parity)."
+  loader:
+    type: "Lazy[DataLoader]"
+    default: "Class(DataLoader, collate_fn=detection_collate_fn)"
+    description: "Evaluation DataLoader."
+  predictions_sink:
+    type: "Any | null"
+    default: null
+    description: "Optional sink with .write(prediction, metadata) and .close()."
+  lightning:
+    type: "Lazy[pytorch_lightning.Trainer]"
+    default: "Class(L.Trainer)"
+    description: "PyTorch Lightning Trainer config."
+  experiment_name:
+    type: "str"
+    default: "raidar_detection_eval"
+    description: "MLflow experiment name."
+  run_name:
+    type: "str"
+    default: "evaluate"
+    description: "MLflow run name."
+  metrics_sidecar_path:
+    type: "str | null"
+    default: null
+    description: "Optional path; when set, writes a logger-agnostic JSON dump of final metrics."
+  metrics:
+    type: "torchmetrics.MetricCollection | null"
+    default: "DetectionMetricAdapter(MeanAveragePrecision(iou_type=bbox), prefix=test/)"
+    description: "Test MetricCollection. Override via YAML to swap MAP for another detection metric."

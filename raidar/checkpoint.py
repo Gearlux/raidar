@@ -31,6 +31,7 @@ from typing import Any, Mapping
 
 import torch
 import torch.nn as nn
+
 from logflow import get_logger
 
 logger = get_logger(__name__)
@@ -38,7 +39,9 @@ logger = get_logger(__name__)
 _LIGHTNING_PREFIX = "model."
 
 
-def load_lightning_checkpoint(model: nn.Module, path: str, strict: bool = False) -> None:
+def load_lightning_checkpoint(
+    model: nn.Module, path: str, strict: bool = False
+) -> None:
     """Load weights from a Lightning, Ultralytics, or plain state-dict checkpoint.
 
     See module docstring for the three accepted on-disk shapes.
@@ -69,7 +72,8 @@ def load_lightning_checkpoint(model: nn.Module, path: str, strict: bool = False)
     #    (the `DetectionModel.model` ModuleList).
     if not ultralytics_format:
         state_dict = {
-            (k[len(_LIGHTNING_PREFIX) :] if k.startswith(_LIGHTNING_PREFIX) else k): v for k, v in state_dict.items()
+            (k[len(_LIGHTNING_PREFIX) :] if k.startswith(_LIGHTNING_PREFIX) else k): v
+            for k, v in state_dict.items()
         }
 
     # 3. Auto-retarget to a named child when the wrapper's state_dict doesn't
@@ -80,7 +84,9 @@ def load_lightning_checkpoint(model: nn.Module, path: str, strict: bool = False)
 
     where = f" → child '{retargeted_to}'" if retargeted_to else ""
     if missing:
-        logger.info(f"{type(model).__name__}: checkpoint missing {len(missing)} key(s){where} (e.g. {missing[:3]})")
+        logger.info(
+            f"{type(model).__name__}: checkpoint missing {len(missing)} key(s){where} (e.g. {missing[:3]})"
+        )
     if unexpected:
         logger.info(
             f"{type(model).__name__}: checkpoint had {len(unexpected)} unexpected key(s){where} "
@@ -103,7 +109,9 @@ def _extract_state_dict(raw: Any) -> tuple[Mapping[str, Any], bool]:
     return raw, False
 
 
-def _resolve_load_target(model: nn.Module, state_dict: Mapping[str, Any]) -> tuple[nn.Module, str]:
+def _resolve_load_target(
+    model: nn.Module, state_dict: Mapping[str, Any]
+) -> tuple[nn.Module, str]:
     """Pick the right module to load ``state_dict`` into.
 
     If the source keys overlap ``model``'s own state_dict, the model itself

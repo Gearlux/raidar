@@ -35,8 +35,6 @@ from pathlib import Path
 from typing import Any, Dict, Literal, Optional
 
 import torch
-from confluid import configurable
-from logflow import get_logger
 from ultralytics import YOLO
 from ultralytics.cfg import get_cfg, get_save_dir
 from ultralytics.data.build import build_dataloader
@@ -45,6 +43,8 @@ from ultralytics.models.yolo.detect.val import DetectionValidator
 from ultralytics.utils import callbacks
 from ultralytics.utils.torch_utils import unwrap_model
 
+from confluid import configurable
+from logflow import get_logger
 from raidar.checkpoint import load_lightning_checkpoint
 from raidar.flux_yolo_dataset import FluxYOLODataset
 from raidar.ultralytics_common import build_yolo26
@@ -53,9 +53,19 @@ logger = get_logger(__name__)
 
 
 _FluxBundle = Dict[str, Any]
-"""ContextVar payload: ``{"train": Flux, "val": Flux, "data": data_dict}``."""
+"""ContextVar payload: ``{"train": Flux, "val": Flux, "data": data_dict,
+"augment_override": Optional[bool]}``.
 
-_FLUX_CTX: ContextVar[Optional[_FluxBundle]] = ContextVar("raidar_ultralytics_flux_ctx", default=None)
+``augment_override`` lets the surrounding :class:`UltralyticsTrainer` /
+:class:`UltralyticsEvaluator` force-on or force-off ultralytics' built-in
+mosaic + albumentations pipeline for Flux mode. When ``None`` (default),
+:meth:`FluxDetectionTrainer.build_dataset` keeps the legacy behaviour of
+augmenting only in train mode.
+"""
+
+_FLUX_CTX: ContextVar[Optional[_FluxBundle]] = ContextVar(
+    "raidar_ultralytics_flux_ctx", default=None
+)
 
 
 def _get_flux_bundle() -> _FluxBundle:
@@ -79,16 +89,25 @@ class FluxDetectionTrainer(DetectionTrainer):
         data: Dict[str, Any] = _get_flux_bundle()["data"]
         return data
 
-    def build_dataset(self, img_path: str, mode: str = "train", batch: Optional[int] = None) -> FluxYOLODataset:
+    def build_dataset(
+        self, img_path: str, mode: str = "train", batch: Optional[int] = None
+    ) -> FluxYOLODataset:
         bundle = _get_flux_bundle()
         flux_key = "val" if mode == "val" else "train"
         flux = bundle[flux_key]
         gs = max(int(unwrap_model(self.model).stride.max()), 32)  # type: ignore[operator,arg-type]
+        # Honour the surrounding trainer's augment override when set; fall back
+        # to the legacy "augment only in train mode" default otherwise.
+        override = bundle.get("augment_override")
+        if override is None:
+            augment = mode == "train"
+        else:
+            augment = bool(override)
         return FluxYOLODataset(
             flux=flux,
             data=self.data,
             imgsz=self.args.imgsz,
-            augment=(mode == "train"),
+            augment=augment,
             hyp=self.args,
             batch_size=batch or self.args.batch,
             stride=gs,
@@ -97,13 +116,17 @@ class FluxDetectionTrainer(DetectionTrainer):
             task=self.args.task,
         )
 
-    def auto_batch(self, max_num_obj: int = 0, dataset_size: int = 0) -> int:  # noqa: ARG002
+    def auto_batch(
+        self, max_num_obj: int = 0, dataset_size: int = 0
+    ) -> int:  # noqa: ARG002
         # Ultralytics' default auto_batch calls build_dataset(self.data["train"], ...) —
         # safe under our overrides, but the parent path also assumes self.data["train"]
         # is a string path. Just disable autobatch and require an explicit batch.
         return int(self.args.batch)
 
-    def plot_training_samples(self, batch: Dict[str, Any], ni: int) -> None:  # noqa: ARG002
+    def plot_training_samples(
+        self, batch: Dict[str, Any], ni: int
+    ) -> None:  # noqa: ARG002
         # Synthetic flux:// paths in batch["im_file"] would crash matplotlib.
         return
 
@@ -168,7 +191,11 @@ class FluxDetectionValidator(DetectionValidator):
             if isinstance(model, (str, Path)):
                 wrapped = AutoBackend(
                     model=str(model),
-                    device=select_device(self.args.device) if self.args.device else torch.device("cpu"),
+                    device=(
+                        select_device(self.args.device)
+                        if self.args.device
+                        else torch.device("cpu")
+                    ),
                     dnn=False,
                     data=None,  # don't resolve self.args.data — we already pre-set self.data
                     fp16=self.args.half,
@@ -178,7 +205,11 @@ class FluxDetectionValidator(DetectionValidator):
                 self.device = wrapped.device
                 stride = wrapped.stride
             else:
-                self.device = select_device(self.args.device) if self.args.device else next(model.parameters()).device
+                self.device = (
+                    select_device(self.args.device)
+                    if self.args.device
+                    else next(model.parameters()).device
+                )
                 model.to(self.device)
                 model.half() if self.args.half else model.float()
                 model.eval()
@@ -194,7 +225,9 @@ class FluxDetectionValidator(DetectionValidator):
                 Profile(device=self.device),
                 Profile(device=self.device),
             )
-            bar = TQDM(self.dataloader, desc=self.get_desc(), total=len(self.dataloader))
+            bar = TQDM(
+                self.dataloader, desc=self.get_desc(), total=len(self.dataloader)
+            )
             self.init_metrics(unwrap_model(inference_model))  # type: ignore[arg-type]
             self.jdict: list[Any] = []  # type: ignore[assignment]
             for batch_i, batch in enumerate(bar):
@@ -209,7 +242,12 @@ class FluxDetectionValidator(DetectionValidator):
 
             self.gather_stats()
             stats: Dict[str, Any] = self.get_stats()
-            self.speed = dict(zip(self.speed.keys(), (x.t / max(len(self.dataloader.dataset), 1) * 1e3 for x in dt)))
+            self.speed = dict(
+                zip(
+                    self.speed.keys(),
+                    (x.t / max(len(self.dataloader.dataset), 1) * 1e3 for x in dt),
+                )
+            )
             self.finalize_metrics()
             self.print_results()
             LOGGER.info(
@@ -234,9 +272,13 @@ def _build_data_dict(
         channels: Image channel count (passed to YOLODataset as ``data["channels"]``).
     """
     if not isinstance(flux_data, dict):
-        raise TypeError(f"Flux-mode `data` must be a dict; got {type(flux_data).__name__}.")
+        raise TypeError(
+            f"Flux-mode `data` must be a dict; got {type(flux_data).__name__}."
+        )
     if "train" not in flux_data and "val" not in flux_data:
-        raise ValueError("Flux-mode `data` must include at least `train` or `val` keys.")
+        raise ValueError(
+            "Flux-mode `data` must include at least `train` or `val` keys."
+        )
     names = flux_data.get("names")
     nc = flux_data.get("nc")
     if names is None or nc is None:
@@ -261,7 +303,9 @@ def _write_metrics_sidecar(metrics: Any, out_path: Optional[str]) -> None:
     if not out_path or metrics is None:
         return
     if hasattr(metrics, "results_dict"):
-        payload: Dict[str, float] = {k: float(v) for k, v in metrics.results_dict.items()}
+        payload: Dict[str, float] = {
+            k: float(v) for k, v in metrics.results_dict.items()
+        }
     elif isinstance(metrics, dict):
         payload = {k: float(v) for k, v in metrics.items()}
     else:
@@ -281,17 +325,38 @@ class UltralyticsTrainer:
     """Native-Ultralytics trainer (mosaic + albumentations + LOGGER) for
     marainer's CLI.
 
-    ``data`` polymorphism:
-        * **str / Path**: a YOLO data.yaml on disk. Disk mode — forwards
-          verbatim to ``YOLO.train(data=...)``.
-        * **dict** ``{"train": Flux, "val": Flux, "names": dict, "nc": int}``:
-          Flux mode — bypasses disk entirely; the trainer reads samples
-          from the supplied :class:`dataflux.Flux` objects.
+    Three accepted input shapes:
+
+    * ``data: str | Path`` — a YOLO ``data.yaml`` on disk. Disk mode —
+      forwards verbatim to ``YOLO.train(data=...)``.
+    * ``data: dict`` ``{"train": Flux, "val": Flux, "names": dict, "nc": int}``
+      — legacy Flux mode. Kept for back-compat.
+    * ``train_set: Flux``, ``val_set: Flux``, ``num_classes: int``,
+      ``class_names: dict[int, str]`` — ergonomic Flux mode, matches the
+      sonair / deltaid / lightning-detection convention. Internally rebuilt
+      into the legacy dict form.
+
+    Augmentation control:
+
+    * ``augment: Optional[bool]`` — when ``None`` (default), ultralytics'
+      built-in mosaic + albumentations fire only during training (legacy
+      behaviour). Set ``True`` to force-enable, or ``False`` to disable the
+      built-in pipeline entirely so dataflux Flux ops upstream are the sole
+      source of augmentation.
+    * ``augmentation: Optional[Dict[str, Any]]`` — ultralytics augmentation
+      hyperparams (``mosaic``, ``mixup``, ``hsv_h``, ``hsv_s``, ``hsv_v``,
+      ``degrees``, ``translate``, ``scale``, ``shear``, ``perspective``,
+      ``fliplr``, ``flipud``, ``copy_paste``, …). Key names match
+      ultralytics' own config vocabulary; values are merged into the
+      ultralytics overrides dict. Distinct from the raw ``extra_overrides``
+      escape-hatch; reserved for the aug-scoped subset for readability.
+      Setting ``augmentation`` while ``augment=False`` is a config smell and
+      raises a ``ValueError``.
     """
 
     def __init__(
         self,
-        data: Any,
+        data: Any = None,
         variant: Literal["n", "s", "m", "l", "x"] = "n",
         pretrained: bool = True,
         imgsz: int = 640,
@@ -305,6 +370,12 @@ class UltralyticsTrainer:
         checkpoint: Optional[str] = None,
         extra_overrides: Optional[Dict[str, Any]] = None,
         metrics_output_path: Optional[str] = None,
+        train_set: Any = None,
+        val_set: Any = None,
+        num_classes: Optional[int] = None,
+        class_names: Optional[Dict[int, str]] = None,
+        augment: Optional[bool] = None,
+        augmentation: Optional[Dict[str, Any]] = None,
     ) -> None:
         """
         Args:
@@ -327,6 +398,40 @@ class UltralyticsTrainer:
                 pair this (disk mode) with ``extra_overrides={"resume": True}``;
                 Flux mode currently supports weight-only init.
         """
+        # --- Input-form validation ----------------------------------------
+        ergonomic_provided = train_set is not None or val_set is not None
+        if data is not None and ergonomic_provided:
+            raise ValueError(
+                "UltralyticsTrainer: pass EITHER `data` (legacy str/dict) OR the ergonomic "
+                "`train_set` + `val_set` (+ `num_classes` + `class_names`) form — not both."
+            )
+        if data is None and not ergonomic_provided:
+            raise ValueError(
+                "UltralyticsTrainer: must supply EITHER `data` OR `train_set` + `val_set` "
+                "(+ `num_classes` + `class_names`)."
+            )
+        if ergonomic_provided:
+            if train_set is None or val_set is None:
+                raise ValueError(
+                    "UltralyticsTrainer ergonomic form requires BOTH `train_set` and `val_set`."
+                )
+            if num_classes is None or class_names is None:
+                raise ValueError(
+                    "UltralyticsTrainer ergonomic form requires `num_classes` and `class_names: dict[int, str]`."
+                )
+            data = {
+                "train": train_set,
+                "val": val_set,
+                "names": dict(class_names),
+                "nc": int(num_classes),
+            }
+        # --- Augmentation knob validation ---------------------------------
+        if augment is False and augmentation:
+            raise ValueError(
+                "UltralyticsTrainer: `augmentation=...` is meaningless when `augment=False`. "
+                "Either set `augment=True`/`None` to enable ultralytics' aug pipeline, or drop "
+                "the `augmentation` dict and supply augmentation via dataflux Flux ops upstream."
+            )
         self.data = data
         self.variant = variant
         self.pretrained = pretrained
@@ -341,6 +446,8 @@ class UltralyticsTrainer:
         self.checkpoint = checkpoint
         self.extra_overrides = dict(extra_overrides or {})
         self.metrics_output_path = metrics_output_path
+        self.augment = augment
+        self.augmentation = dict(augmentation) if augmentation else {}
 
     def run(self) -> None:
         if isinstance(self.data, (str, Path)):
@@ -349,7 +456,8 @@ class UltralyticsTrainer:
             self._run_flux_mode()
         else:
             raise TypeError(
-                f"UltralyticsTrainer.data must be a str path or a Flux-mode dict; " f"got {type(self.data).__name__}."
+                f"UltralyticsTrainer.data must be a str path or a Flux-mode dict; "
+                f"got {type(self.data).__name__}."
             )
 
     def _run_disk_mode(self) -> None:
@@ -357,7 +465,11 @@ class UltralyticsTrainer:
         if self.checkpoint is not None:
             model_spec = self.checkpoint
         else:
-            model_spec = f"yolo26{self.variant}.pt" if self.pretrained else f"yolo26{self.variant}.yaml"
+            model_spec = (
+                f"yolo26{self.variant}.pt"
+                if self.pretrained
+                else f"yolo26{self.variant}.yaml"
+            )
         yolo = YOLO(model_spec, task="detect")
         if self.end2end is not None:
             yolo.model.set_head_attr(end2end=self.end2end)  # type: ignore[union-attr]
@@ -379,9 +491,13 @@ class UltralyticsTrainer:
         """
         flux_data = self.data
         if "train" not in flux_data:
-            raise ValueError("UltralyticsTrainer.data (Flux mode) must include a `train` Flux.")
+            raise ValueError(
+                "UltralyticsTrainer.data (Flux mode) must include a `train` Flux."
+            )
         if "val" not in flux_data:
-            raise ValueError("UltralyticsTrainer.data (Flux mode) must include a `val` Flux.")
+            raise ValueError(
+                "UltralyticsTrainer.data (Flux mode) must include a `val` Flux."
+            )
 
         data_dict = _build_data_dict(flux_data, channels=3)
         nc = data_dict["nc"]
@@ -415,16 +531,23 @@ class UltralyticsTrainer:
             overrides["project"] = self.project
         if self.name is not None or self.experiment_name:
             overrides["name"] = self.name or self.experiment_name
+        # Augmentation hyperparams (mosaic, mixup, hsv_h, ...) merge before
+        # extra_overrides so users can still override any single key via the
+        # raw escape-hatch dict.
+        overrides.update(self.augmentation)
         overrides.update(self.extra_overrides)
 
         bundle: _FluxBundle = {
             "train": flux_data["train"],
             "val": flux_data["val"],
             "data": data_dict,
+            "augment_override": self.augment,
         }
         token = _FLUX_CTX.set(bundle)
         try:
-            trainer = FluxDetectionTrainer(overrides=overrides, _callbacks=callbacks.get_default_callbacks())
+            trainer = FluxDetectionTrainer(
+                overrides=overrides, _callbacks=callbacks.get_default_callbacks()
+            )
             # Inject our pre-built DetectionModel; setup_model() returns
             # immediately when self.model is already an nn.Module.
             trainer.model = detection_model  # type: ignore[assignment]
@@ -433,7 +556,11 @@ class UltralyticsTrainer:
             _FLUX_CTX.reset(token)
 
         _write_metrics_sidecar(
-            getattr(trainer.validator, "metrics", None) if getattr(trainer, "validator", None) else None,
+            (
+                getattr(trainer.validator, "metrics", None)
+                if getattr(trainer, "validator", None)
+                else None
+            ),
             self.metrics_output_path,
         )
 
@@ -441,20 +568,45 @@ class UltralyticsTrainer:
 @configurable
 class UltralyticsEvaluator:
     """Native-Ultralytics validator. Same disk/Flux duality as
-    :class:`UltralyticsTrainer`.
+    :class:`UltralyticsTrainer`, including the ergonomic
+    ``val_set`` / ``num_classes`` / ``class_names`` form.
     """
 
     def __init__(
         self,
         weights: str,
-        data: Any,
+        data: Any = None,
         variant: Literal["n", "s", "m", "l", "x"] = "n",
         imgsz: int = 640,
         batch: int = 16,
         device: Optional[str] = None,
         experiment_name: str = "ultralytics_eval",
         metrics_output_path: Optional[str] = None,
+        val_set: Any = None,
+        num_classes: Optional[int] = None,
+        class_names: Optional[Dict[int, str]] = None,
     ) -> None:
+        # Ergonomic form: build the legacy `data` dict from val_set + class_names + num_classes.
+        ergonomic_provided = val_set is not None
+        if data is not None and ergonomic_provided:
+            raise ValueError(
+                "UltralyticsEvaluator: pass EITHER `data` (legacy str/dict) OR the ergonomic "
+                "`val_set` (+ `num_classes` + `class_names`) form — not both."
+            )
+        if data is None and not ergonomic_provided:
+            raise ValueError(
+                "UltralyticsEvaluator: must supply EITHER `data` OR `val_set` (+ `num_classes` + `class_names`)."
+            )
+        if ergonomic_provided:
+            if num_classes is None or class_names is None:
+                raise ValueError(
+                    "UltralyticsEvaluator ergonomic form requires `num_classes` and `class_names: dict[int, str]`."
+                )
+            data = {
+                "val": val_set,
+                "names": dict(class_names),
+                "nc": int(num_classes),
+            }
         self.weights = weights
         self.data = data
         self.variant = variant
@@ -471,7 +623,8 @@ class UltralyticsEvaluator:
             self._run_flux_mode()
         else:
             raise TypeError(
-                f"UltralyticsEvaluator.data must be a str path or a Flux-mode dict; " f"got {type(self.data).__name__}."
+                f"UltralyticsEvaluator.data must be a str path or a Flux-mode dict; "
+                f"got {type(self.data).__name__}."
             )
 
     def _run_disk_mode(self) -> None:
@@ -488,7 +641,9 @@ class UltralyticsEvaluator:
     def _run_flux_mode(self) -> None:
         flux_data = self.data
         if "val" not in flux_data:
-            raise ValueError("UltralyticsEvaluator.data (Flux mode) must include a `val` Flux.")
+            raise ValueError(
+                "UltralyticsEvaluator.data (Flux mode) must include a `val` Flux."
+            )
 
         data_dict = _build_data_dict(flux_data, channels=3)
 
@@ -535,10 +690,14 @@ class UltralyticsEvaluator:
             drop_last=False,
         )
 
-        validator = FluxDetectionValidator(dataloader=dataloader, save_dir=save_dir, args=args_ns)
+        validator = FluxDetectionValidator(
+            dataloader=dataloader, save_dir=save_dir, args=args_ns
+        )
         validator.data = data_dict  # type: ignore[assignment]
         validator(model=detection_model)
-        _write_metrics_sidecar(getattr(validator, "metrics", None), self.metrics_output_path)
+        _write_metrics_sidecar(
+            getattr(validator, "metrics", None), self.metrics_output_path
+        )
 
 
 __all__ = [
