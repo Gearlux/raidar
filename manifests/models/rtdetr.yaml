@@ -1,5 +1,5 @@
-description: "Ultralytics RT-DETR (Real-Time DEtection TRansformer) wrapped for the Marainer Trainer flow."
-use_case: "Transformer-based NMS-free detector. Always emits 300 raw queries per image — score_threshold is the only mechanism keeping MeanAveragePrecision tractable on real data. Pair with TorchvisionDetectionLoss + DetectionMetricAdapter."
+description: "Ultralytics RT-DETR (Real-Time DEtection TRansformer) — torchvision-native wrapper for the specialised LightningDetectionTrainer."
+use_case: "Transformer-based NMS-free detector with native torchvision forward contract. Drops into raidar.lightning_trainer.LightningDetectionTrainer directly — no raidar adapter layer. Always emits 300 raw queries per image — score_threshold keeps MAP tractable. For the marainer-generic path, see raidar.rtdetr_marainer.RTDETRMarainerModel."
 category: "Detection"
 flux_type: "Model"
 task: "object_detection"
@@ -26,10 +26,6 @@ params:
     type: "float"
     default: 0.25
     description: "Eval-time confidence cutoff applied to per-query max class probability."
-  compute_val_loss:
-    type: "bool"
-    default: true
-    description: "When False, skips the loss recomputation during eval."
   checkpoint_path:
     type: "str | null"
     default: null

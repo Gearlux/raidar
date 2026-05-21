@@ -1,5 +1,5 @@
-description: "Roboflow RF-DETR wrapped for the Marainer Trainer flow."
-use_case: "DETR-family detector with Roboflow's lightweight backbones. Pair with TorchvisionDetectionLoss + DetectionMetricAdapter."
+description: "Roboflow RF-DETR — torchvision-native wrapper for the specialised LightningDetectionTrainer."
+use_case: "DETR-family detector with Roboflow's lightweight DINOv2 backbones, native torchvision forward contract. Drops into raidar.lightning_trainer.LightningDetectionTrainer directly — no raidar adapter layer. For the marainer-generic path, see raidar.rfdetr_marainer.RFDETRMarainerModel."
 category: "Detection"
 flux_type: "Model"
 task: "object_detection"

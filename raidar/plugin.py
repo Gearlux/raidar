@@ -8,9 +8,9 @@ It adds:
 * ``marainer detection train``      → :func:`raidar.cli.train`
   (sonair-style Lightning detection trainer subclass).
 * ``marainer detection evaluate``   → :func:`raidar.cli.evaluate`.
-* ``marainer ultralytics-train``    → :class:`raidar.ultralytics_runner.UltralyticsTrainer`
+* ``marainer ultralytics-train``    → :class:`raidar.ultralytics_trainer.UltralyticsTrainer`
   (native Ultralytics trainer; back-compat with prior entry-point).
-* ``marainer ultralytics-evaluate`` → :class:`raidar.ultralytics_runner.UltralyticsEvaluator`.
+* ``marainer ultralytics-evaluate`` → :class:`raidar.ultralytics_trainer.UltralyticsEvaluator`.
 
 The two ultralytics-native verbs are kept registered via
 :func:`raidar.cli_plugin.register` for back-compat — any user invoking

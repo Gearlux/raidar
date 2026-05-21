@@ -1,5 +1,5 @@
 """Tests for the ergonomic Flux interface + augmentation knobs on
-:class:`raidar.ultralytics_runner.UltralyticsTrainer` / ``UltralyticsEvaluator``.
+:class:`raidar.ultralytics_trainer.UltralyticsTrainer` / ``UltralyticsEvaluator``.
 """
 
 from typing import Any, Dict, List, cast
@@ -10,7 +10,7 @@ from dataflux.core import Flux
 from dataflux.sample import Sample
 
 from raidar.flux_yolo_dataset import FluxYOLODataset
-from raidar.ultralytics_runner import _FLUX_CTX, FluxDetectionTrainer, UltralyticsEvaluator, UltralyticsTrainer
+from raidar.ultralytics_trainer import _FLUX_CTX, FluxDetectionTrainer, UltralyticsEvaluator, UltralyticsTrainer
 
 
 def _make_flux(n: int = 4, size: int = 64) -> Flux:

@@ -1,0 +1,48 @@
+description: "Marainer-generic wrapper around raidar.yolo26.YOLO26Model — returns DetectionStepOutput so it plugs into marainer.trainer.LightningTrainer with raidar's loss / metric adapters."
+use_case: "Use with the marainer-generic detection flow: marainer.trainer.LightningTrainer + raidar.detection.TorchvisionDetectionLoss + raidar.detection.DetectionMetricAdapter. The wrapper inherits the native YOLO26Model build and overrides forward to consume DetectionBatchInput and return {losses, predictions}. Adds a BN-frozen recompute path so val/loss is directly comparable to train/loss. For the specialised trainer path (no adapter layer), use raidar.yolo26.YOLO26Model directly."
+category: "Detection"
+flux_type: "Model"
+task: "object_detection"
+class_path: "raidar.yolo26_marainer.YOLO26MarainerModel"
+params:
+  num_classes:
+    type: "int"
+    default: 1
+    description: "Foreground class count."
+  variant:
+    type: "str"
+    default: "n"
+    choices: ["n", "s", "m", "l", "x"]
+    description: "Model size — nano (n) through xlarge (x)."
+  pretrained_detector:
+    type: "bool"
+    default: true
+    description: "Load full COCO-pretrained YOLO26 weights."
+  imgsz:
+    type: "int"
+    default: 640
+    description: "Square input size (multiple of 32)."
+  score_threshold:
+    type: "float"
+    default: 0.25
+    description: "Eval-time confidence cutoff."
+  agnostic_nms:
+    type: "bool"
+    default: false
+    description: "Class-agnostic top-k selection in the end-to-end head."
+  compute_val_loss:
+    type: "bool"
+    default: true
+    description: "When False, skips the BN-frozen loss recomputation during eval."
+  checkpoint_path:
+    type: "str | null"
+    default: null
+    description: "Optional Lightning .ckpt path."
+  checkpoint_strict:
+    type: "bool"
+    default: false
+    description: "Forwarded to load_state_dict(strict=...)."
+  end2end:
+    type: "bool | null"
+    default: null
+    description: "Toggle YOLO26's NMS-free one2one head."

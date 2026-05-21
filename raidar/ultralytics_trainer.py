@@ -1,11 +1,13 @@
-"""Native-Ultralytics training and evaluation, plug-compatible with marainer's Liquify CLI.
+"""Specialised Ultralytics trainer — native ultralytics training without a raidar adapter.
 
-The default marainer ``train`` / ``evaluate`` commands drive PyTorch Lightning.
-This module exposes parallel "Ultralytics-native" runners that drive
-``ultralytics.engine.trainer.DetectionTrainer`` / ``DetectionValidator``
-directly — keeping mosaic + albumentations + Ultralytics' own logger / TQDM
-output, and accepting either a YOLO data.yaml on disk or a
-:class:`dataflux.Flux` of detection samples.
+Companion to :class:`~raidar.lightning_trainer.LightningDetectionTrainer`.
+Both are specialised, framework-specific trainers; this one drives
+``ultralytics.engine.trainer.DetectionTrainer`` /
+``ultralytics.engine.validator.DetectionValidator`` directly so ultralytics'
+own mosaic + albumentations + LOGGER / TQDM pipeline stays in charge of the
+training loop, and the user pays no raidar adapter cost — the underlying
+``DetectionModel`` is the bare ultralytics module, never wrapped in a
+``DetectionStepOutput``-returning shape.
 
 Two ``@configurable`` classes form the user-facing surface:
 
@@ -14,7 +16,9 @@ Two ``@configurable`` classes form the user-facing surface:
   when ``data`` is a ``{"train": Flux, "val": Flux, "names": ..., "nc": ...}``
   dict it builds the model itself, swaps in a :class:`FluxDetectionTrainer`
   whose dataloaders draw from :class:`raidar.flux_yolo_dataset.FluxYOLODataset`,
-  and runs the training loop.
+  and runs the training loop. The ergonomic
+  ``train_set`` / ``val_set`` / ``num_classes`` / ``class_names`` form mirrors
+  :class:`~raidar.lightning_trainer.LightningDetectionTrainer`.
 
 * :class:`UltralyticsEvaluator` — same disk/Flux duality for validation. Disk
   mode uses ``YOLO.val``; Flux mode uses :class:`FluxDetectionValidator` over
@@ -22,9 +26,9 @@ Two ``@configurable`` classes form the user-facing surface:
 
 Both classes accept a ``metrics_output_path: Optional[str]`` — when set, the
 final ``DetMetrics.results_dict`` is dumped as JSON, matching the
-metrics-sidecar convention :class:`marainer.evaluator.LightningEvaluator` already
-ships, so downstream tooling (e.g. Navigaitor's ``read_run_metrics``) doesn't
-need to care which trainer produced the run.
+metrics-sidecar convention :class:`marainer.evaluator.LightningEvaluator`
+already ships, so downstream tooling (e.g. Navigaitor's ``read_run_metrics``)
+doesn't need to care which trainer produced the run.
 """
 
 from __future__ import annotations

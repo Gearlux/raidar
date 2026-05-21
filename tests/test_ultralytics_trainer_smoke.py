@@ -1,4 +1,4 @@
-"""Smoke + unit tests for :mod:`raidar.ultralytics_runner`.
+"""Smoke + unit tests for :mod:`raidar.ultralytics_trainer`.
 
 The fast tests exercise the helper logic and the type-validation paths in
 ``UltralyticsTrainer.run`` / ``UltralyticsEvaluator.run`` without invoking
@@ -23,7 +23,12 @@ import torch
 from dataflux.core import Flux
 from dataflux.sample import Sample
 
-from raidar.ultralytics_runner import UltralyticsEvaluator, UltralyticsTrainer, _build_data_dict, _write_metrics_sidecar
+from raidar.ultralytics_trainer import (
+    UltralyticsEvaluator,
+    UltralyticsTrainer,
+    _build_data_dict,
+    _write_metrics_sidecar,
+)
 
 # --- helper unit tests -------------------------------------------------------
 
@@ -101,7 +106,7 @@ def test_trainer_disk_mode_checkpoint_overrides_model_spec(monkeypatch: pytest.M
     """Disk mode must hand the user's checkpoint path to ``YOLO()`` instead of
     the variant-based default.
     """
-    import raidar.ultralytics_runner as runner_mod
+    import raidar.ultralytics_trainer as runner_mod
 
     captured: dict[str, object] = {}
 
@@ -136,7 +141,7 @@ def test_trainer_flux_mode_grafts_checkpoint_weights(monkeypatch: pytest.MonkeyP
     and (b) call ``load_lightning_checkpoint`` with the user's path before
     handing the model to ``FluxDetectionTrainer``.
     """
-    import raidar.ultralytics_runner as runner_mod
+    import raidar.ultralytics_trainer as runner_mod
 
     build_calls: list[dict[str, object]] = []
     load_calls: list[dict[str, object]] = []
@@ -190,7 +195,7 @@ def test_trainer_flux_mode_no_checkpoint_keeps_pretrained(
     """When no checkpoint is supplied, ``pretrained=True`` must still drive the
     COCO download path through ``build_yolo26``.
     """
-    import raidar.ultralytics_runner as runner_mod
+    import raidar.ultralytics_trainer as runner_mod
 
     build_calls: list[dict[str, object]] = []
     load_calls: list[dict[str, object]] = []

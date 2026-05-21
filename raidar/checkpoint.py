@@ -9,7 +9,7 @@ Three on-disk formats are tolerated by a single helper:
    :class:`marainer.evaluator.LightningEvaluator` both produce this.
 
 2. **Ultralytics ``.pt``** — produced by ``ultralytics.YOLO.train`` (and
-   :class:`raidar.ultralytics_runner.UltralyticsTrainer`). The top-level
+   :class:`raidar.ultralytics_trainer.UltralyticsTrainer`). The top-level
    ``model`` key holds a *live* ``DetectionModel`` instance (an ``nn.Module``);
    we pull its ``state_dict()`` and load that. Crucially, the ``model.<n>...``
    prefix on each weight here belongs to the ``DetectionModel``'s own

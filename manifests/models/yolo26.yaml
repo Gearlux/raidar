@@ -1,5 +1,5 @@
-description: "Ultralytics YOLO26 wrapped for the Marainer Trainer flow."
-use_case: "End-to-end NMS-free object detector. Body-pretrained / head-fresh by default; pair with TorchvisionDetectionLoss (no per-component weights — Ultralytics balances internally) and DetectionMetricAdapter+MeanAveragePrecision for val. Best for small-dataset edge inference."
+description: "Ultralytics YOLO26 — torchvision-native wrapper for the specialised LightningDetectionTrainer."
+use_case: "End-to-end NMS-free object detector with native torchvision forward contract: forward(images, targets)→loss dict in train; forward(images)→predictions list in eval. Drops into raidar.lightning_trainer.LightningDetectionTrainer directly — no raidar adapter layer needed between trainer and model. Best for small-dataset edge inference. For the marainer-generic path (DetectionStepOutput return shape), see raidar.yolo26_marainer.YOLO26MarainerModel."
 category: "Detection"
 flux_type: "Model"
 task: "object_detection"
@@ -30,10 +30,6 @@ params:
     type: "bool"
     default: false
     description: "Class-agnostic top-k selection in the end-to-end head."
-  compute_val_loss:
-    type: "bool"
-    default: true
-    description: "When False, skips the loss recomputation during eval (faster, but val/loss not reported)."
   checkpoint_path:
     type: "str | null"
     default: null

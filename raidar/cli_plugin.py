@@ -2,8 +2,8 @@
 
 Registers two CLI verbs on the marainer ``LiquifyApp``:
 
-* ``ultralytics-train``  → :class:`raidar.ultralytics_runner.UltralyticsTrainer`
-* ``ultralytics-evaluate`` → :class:`raidar.ultralytics_runner.UltralyticsEvaluator`
+* ``ultralytics-train``  → :class:`raidar.ultralytics_trainer.UltralyticsTrainer`
+* ``ultralytics-evaluate`` → :class:`raidar.ultralytics_trainer.UltralyticsEvaluator`
 
 Wired in :file:`pyproject.toml` under
 ``[project.entry-points."marainer.commands"]``. The marainer CLI calls
@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING
 
 from logflow import get_logger
 
-from raidar.ultralytics_runner import UltralyticsEvaluator, UltralyticsTrainer
+from raidar.ultralytics_trainer import UltralyticsEvaluator, UltralyticsTrainer
 
 if TYPE_CHECKING:
     from liquifai import LiquifyApp

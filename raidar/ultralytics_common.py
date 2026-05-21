@@ -1,7 +1,7 @@
 """Shared helpers for raidar's Ultralytics-backed model paths.
 
 The Lightning-driven :class:`raidar.yolo26.YOLO26Model` and the native-Ultralytics
-:class:`raidar.ultralytics_runner.UltralyticsTrainer` both need the same
+:class:`raidar.ultralytics_trainer.UltralyticsTrainer` both need the same
 "build a ``DetectionModel`` with the right ``nc`` and optionally graft on the
 COCO-pretrained .pt's shape-compatible weights" routine. Centralizing it here
 keeps the two paths in lockstep and avoids the silent drift that comes with
