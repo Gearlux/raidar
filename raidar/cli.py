@@ -8,8 +8,6 @@ ultralytics verbs are equivalent to ``marainer ultralytics-train`` /
 ``marainer ultralytics-evaluate``.
 """
 
-import sys
-
 from liquifai import LiquifyApp
 from logflow import get_logger
 
@@ -18,9 +16,6 @@ from raidar.lightning_trainer import LightningDetectionTrainer
 from raidar.ultralytics_trainer import UltralyticsEvaluator, UltralyticsTrainer
 
 logger = get_logger(__name__)
-
-if "." not in sys.path:
-    sys.path.insert(0, ".")
 
 app = LiquifyApp(name="raidar", description="Raidar object-detection commands")
 
