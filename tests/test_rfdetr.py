@@ -9,6 +9,7 @@ from typing import Dict, List
 
 import pytest
 import torch
+from pydantic import ValidationError
 from torch import Tensor
 
 from raidar.rfdetr import RFDETRModel, _build_rfdetr_targets, _decode_rfdetr_predictions
@@ -90,7 +91,12 @@ def test_decode_rfdetr_predictions_filters_background_and_threshold() -> None:
 
 
 def test_rfdetr_rejects_unknown_variant() -> None:
-    with pytest.raises(ValueError, match="variant must be one of"):
+    # Confluid's ``@configurable`` now validates kwargs against the
+    # auto-generated pydantic schema before the body runs. Since
+    # ``variant`` is annotated as ``Literal[...]``, pydantic surfaces the
+    # mismatch first; the body's hand-rolled ``ValueError`` would still
+    # fire if validation were skipped.
+    with pytest.raises((ValueError, ValidationError)):
         RFDETRModel(
             num_classes=2,
             variant="xxlarge",  # type: ignore[arg-type]
