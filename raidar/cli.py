@@ -1,11 +1,10 @@
 """Raidar CLI — object-detection training and evaluation commands.
 
-Provides ``raidar train`` / ``raidar evaluate`` (Lightning path) and
-``raidar ultralytics-train`` / ``raidar ultralytics-evaluate`` (native
-ultralytics escape hatch). The Lightning verbs are equivalent to
-``marainer detection train`` / ``marainer detection evaluate``; the
-ultralytics verbs are equivalent to ``marainer ultralytics-train`` /
-``marainer ultralytics-evaluate``.
+Provides ``raidar train`` / ``raidar evaluate`` for the Lightning detection
+flow. The native-ultralytics escape hatch lives in the
+[raidar-ultralytics](https://github.com/Gearlux/raidar-ultralytics) sibling
+package as ``raidar-ultralytics train`` / ``raidar-ultralytics evaluate``
+(or ``marainer ultralytics-train`` / ``marainer ultralytics-evaluate``).
 """
 
 from liquifai import LiquifyApp
@@ -13,7 +12,6 @@ from logflow import get_logger
 
 from raidar.evaluator import LightningDetectionEvaluator
 from raidar.lightning_trainer import LightningDetectionTrainer
-from raidar.ultralytics_trainer import UltralyticsEvaluator, UltralyticsTrainer
 
 logger = get_logger(__name__)
 
@@ -29,24 +27,6 @@ def train(trainer: LightningDetectionTrainer) -> None:
 @app.script_command(flow_mode="auto")
 def evaluate(evaluator: LightningDetectionEvaluator) -> None:
     """Evaluate a trained object-detection model via the Lightning evaluator subclass."""
-    evaluator.run()
-
-
-@app.script_command(flow_mode="auto")
-def ultralytics_train(trainer: UltralyticsTrainer) -> None:
-    """Train a YOLO26 model via Ultralytics' native trainer (mosaic + albumentations + LOGGER)."""
-    if trainer is None:
-        logger.error("'trainer' was not bound — provide one under 'trainer:' in your YAML.")
-        return
-    trainer.run()
-
-
-@app.script_command(flow_mode="auto")
-def ultralytics_evaluate(evaluator: UltralyticsEvaluator) -> None:
-    """Evaluate a trained YOLO26 checkpoint via Ultralytics' native validator."""
-    if evaluator is None:
-        logger.error("'evaluator' was not bound — provide one under 'evaluator:' in your YAML.")
-        return
     evaluator.run()
 
 

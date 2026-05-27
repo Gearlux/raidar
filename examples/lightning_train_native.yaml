@@ -15,21 +15,20 @@
 
 num_classes: 2
 
-# -- Model: torchvision-native YOLO26. `forward(images, targets)` returns a
+# -- Model: raw torchvision Faster R-CNN. `forward(images, targets)` returns a
 # -- `Dict[str, Tensor]` loss dict in train mode; `forward(images)` returns
 # -- a `List[Dict[str, Tensor]]` predictions list in eval mode — exactly what
 # -- `LightningDetectionTrainer.training_step` / `validation_step` consume.
 #
-# Alternative: pass raw torchvision Faster R-CNN with no raidar wrapper:
-#   model: !class:torchvision.models.detection.fasterrcnn_resnet50_fpn
+# Alternative ultralytics-family detectors (require raidar-ultralytics):
+#   model: !class:raidar_ultralytics.yolo26.YOLO26Model
 #     num_classes: !ref:num_classes
-#     weights_backbone: DEFAULT
-model: !class:raidar.yolo26.YOLO26Model
+#     variant: n
+#     pretrained_detector: false
+#     imgsz: 256
+model: !class:torchvision.models.detection.fasterrcnn_resnet50_fpn_v2
   num_classes: !ref:num_classes
-  variant: n
-  pretrained_detector: false
-  imgsz: 256
-  score_threshold: 0.25
+  weights_backbone: DEFAULT
 
 train_set: !class:raidar.examples_helpers.SyntheticDetectionDataset
   n: 16
@@ -50,7 +49,7 @@ lightning: !class:pytorch_lightning.Trainer
 
 trainer: !class:raidar.lightning_trainer.LightningDetectionTrainer
   experiment_name: raidar_native_smoke
-  run_name: yolo26_native
+  run_name: faster_rcnn_native
   num_classes: !ref:num_classes
   model: !ref:model
   train_set: !ref:train_set

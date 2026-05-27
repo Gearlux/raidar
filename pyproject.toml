@@ -14,13 +14,15 @@ dependencies = [
     "torchmetrics[detection]",
     "pycocotools",
     "pytorch-lightning",
-    "ultralytics>=8.4.0",
     "rfdetr>=1.6.0",
 ]
 requires-python = ">=3.12"
 
 [project.entry-points."marainer.commands"]
 raidar = "raidar.plugin:register"
+
+[project.entry-points."confluid.configurables"]
+raidar = "raidar"
 
 [project.scripts]
 raidar = "raidar.cli:main"

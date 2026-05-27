@@ -1,5 +1,5 @@
 description: "Sum a torchvision-style detector's loss dict with optional per-component weights."
-use_case: "Generic loss adapter for any raidar detector. Faster R-CNN emits a multi-component dict (loss_classifier / loss_box_reg / loss_objectness / loss_rpn_box_reg) — supply per-key weights to balance them. YOLO26 / RT-DETR emit a single 'loss' key already balanced internally — leave weights empty."
+use_case: "Generic loss adapter for any raidar detector. Faster R-CNN emits a multi-component dict (loss_classifier / loss_box_reg / loss_objectness / loss_rpn_box_reg) — supply per-key weights to balance them. Ultralytics-family detectors (raidar_ultralytics.yolo26 / raidar_ultralytics.rtdetr) emit a single 'loss' key already balanced internally — leave weights empty."
 category: "Detection"
 flux_type: "Loss"
 task: "object_detection"

@@ -14,9 +14,11 @@ Model contract (the same shape torchvision detection models already speak):
   ``{boxes, scores, labels}`` in xyxy-pixel space.
 
 Torchvision Faster R-CNN already conforms natively; pass it raw without a
-raidar wrapper. The ultralytics-family detectors ship native modules at
-:class:`raidar.yolo26.YOLO26Model`, :class:`raidar.rtdetr.RTDETRModel`,
-:class:`raidar.rfdetr.RFDETRModel`.
+raidar wrapper. RF-DETR ships a native module at
+:class:`raidar.rfdetr.RFDETRModel`. The ultralytics-family detectors ship
+native modules in the sibling ``raidar-ultralytics`` package, at
+:class:`raidar_ultralytics.yolo26.YOLO26Model` and
+:class:`raidar_ultralytics.rtdetr.RTDETRModel`.
 
 Metric contract: any ``torchmetrics.Metric`` or
 ``torchmetrics.MetricCollection`` whose ``update(preds, targets)`` consumes
@@ -28,7 +30,8 @@ The marainer-generic adapter path (model returns ``DetectionStepOutput``,
 summed by ``TorchvisionDetectionLoss``, surfaced by
 ``DetectionMetricAdapter``) is still supported via the base
 :class:`~marainer.trainer.LightningTrainer` plus the wrappers in
-``raidar.{yolo26,rtdetr,rfdetr}_marainer``.
+``raidar.rfdetr_marainer`` and
+``raidar_ultralytics.{yolo26,rtdetr}_marainer``.
 
 Minimal YAML (native Faster R-CNN — no raidar model wrapper)::
 
@@ -90,10 +93,11 @@ class LightningDetectionTrainer(LightningTrainer):
 
     Args:
         model: Torchvision-native detection model. Faster R-CNN works raw;
-            ultralytics-family detectors ship native modules at
-            :class:`raidar.yolo26.YOLO26Model`,
-            :class:`raidar.rtdetr.RTDETRModel`, and
-            :class:`raidar.rfdetr.RFDETRModel`.
+            RF-DETR ships a native module at
+            :class:`raidar.rfdetr.RFDETRModel`; ultralytics-family detectors
+            ship native modules in the ``raidar-ultralytics`` sibling
+            package (:class:`raidar_ultralytics.yolo26.YOLO26Model`,
+            :class:`raidar_ultralytics.rtdetr.RTDETRModel`).
         train_set: Training dataset or Flux pipeline. Each sample carries
             ``input=[3,H,W]`` image, ``target={"boxes":[N,4], "labels":[N]}``.
         num_classes: Number of output classes (including background where

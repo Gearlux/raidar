@@ -9,22 +9,23 @@ Three on-disk formats are tolerated by a single helper:
    :class:`marainer.evaluator.LightningEvaluator` both produce this.
 
 2. **Ultralytics ``.pt``** — produced by ``ultralytics.YOLO.train`` (and
-   :class:`raidar.ultralytics_trainer.UltralyticsTrainer`). The top-level
-   ``model`` key holds a *live* ``DetectionModel`` instance (an ``nn.Module``);
-   we pull its ``state_dict()`` and load that. Crucially, the ``model.<n>...``
-   prefix on each weight here belongs to the ``DetectionModel``'s own
-   ``nn.Sequential``; it is **not** Lightning's wrapping prefix and must
-   not be stripped.
+   :class:`raidar_ultralytics.ultralytics_trainer.UltralyticsTrainer`). The
+   top-level ``model`` key holds a *live* ``DetectionModel`` instance (an
+   ``nn.Module``); we pull its ``state_dict()`` and load that. Crucially, the
+   ``model.<n>...`` prefix on each weight here belongs to the
+   ``DetectionModel``'s own ``nn.Sequential``; it is **not** Lightning's
+   wrapping prefix and must not be stripped.
 
 3. **Plain state-dict** — ``torch.save(model.state_dict(), path)``. The
    loaded object IS the state dict.
 
 After format detection, the helper auto-detects whether to retarget the load
-to a wrapping module's named child. Raidar's :class:`raidar.yolo26.YOLO26Model`
-exposes the ``DetectionModel`` under ``self.detector``; if the source keys
-match the detector's state_dict but not the wrapping ``YOLO26Model``'s, the
-load is redirected to ``self.detector`` so the same checkpoint can also drop
-in via ``YOLO26Model(checkpoint_path=...)`` without the caller hand-prefixing.
+to a wrapping module's named child. Raidar-ultralytics'
+:class:`raidar_ultralytics.yolo26.YOLO26Model` exposes the ``DetectionModel``
+under ``self.detector``; if the source keys match the detector's state_dict
+but not the wrapping ``YOLO26Model``'s, the load is redirected to
+``self.detector`` so the same checkpoint can also drop in via
+``YOLO26Model(checkpoint_path=...)`` without the caller hand-prefixing.
 """
 
 from typing import Any, Mapping

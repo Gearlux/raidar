@@ -1,5 +1,5 @@
 description: "LightningDetectionTrainer: specialised object-detection trainer that overrides Lightning step functions to consume torchvision-native detection models and torchmetrics MAP directly — no raidar adapter layer."
-use_case: "Drop-in replacement for LightningTrainer when training detection models. Consumes models whose forward returns Dict[str, Tensor] in train (loss dict) and List[Dict[str, Tensor]] in eval (per-image predictions). Raw torchvision Faster R-CNN works out of the box; ultralytics-family detectors ship native modules at raidar.yolo26.YOLO26Model / raidar.rtdetr.RTDETRModel / raidar.rfdetr.RFDETRModel. Invoke via `raidar train` or `marainer detection train`. For the marainer-generic flow (model returns DetectionStepOutput; raidar adapters sum loss / unwrap predictions), use marainer.trainer.LightningTrainer with the *_marainer.py wrappers instead."
+use_case: "Drop-in replacement for LightningTrainer when training detection models. Consumes models whose forward returns Dict[str, Tensor] in train (loss dict) and List[Dict[str, Tensor]] in eval (per-image predictions). Raw torchvision Faster R-CNN works out of the box; RF-DETR ships a native module at raidar.rfdetr.RFDETRModel; ultralytics-family detectors (YOLO26 / RT-DETR) ship native modules in the raidar-ultralytics sibling package (raidar_ultralytics.yolo26.YOLO26Model / raidar_ultralytics.rtdetr.RTDETRModel). Invoke via `raidar train` or `marainer detection train`. For the marainer-generic flow (model returns DetectionStepOutput; raidar adapters sum loss / unwrap predictions), use marainer.trainer.LightningTrainer with the *_marainer.py wrappers instead."
 category: "Detection"
 flux_type: "LightningDetectionTrainer"
 class_path: "raidar.lightning_trainer.LightningDetectionTrainer"
@@ -7,7 +7,7 @@ params:
   model:
     type: "torch.nn.Module"
     required: true
-    description: "Torchvision-native detection model. forward(images, targets) returns a loss dict in train; forward(images) returns a per-image predictions list in eval. Raw torchvision Faster R-CNN works; ultralytics-family detectors via raidar.{yolo26,rtdetr,rfdetr}.*Model."
+    description: "Torchvision-native detection model. forward(images, targets) returns a loss dict in train; forward(images) returns a per-image predictions list in eval. Raw torchvision Faster R-CNN works; RF-DETR via raidar.rfdetr.RFDETRModel; ultralytics-family detectors via raidar_ultralytics.{yolo26,rtdetr}.*Model."
   train_set:
     type: "Any"
     required: true

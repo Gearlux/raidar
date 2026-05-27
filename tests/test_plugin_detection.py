@@ -1,5 +1,5 @@
-"""Tests for the raidar marainer plugin — verifies BOTH the legacy
-ultralytics-* verbs AND the new `detection` sub-app land on the host app.
+"""Tests for the raidar marainer plugin — verifies the `detection` sub-app
+lands on the host app.
 """
 
 from liquifai import LiquifyApp
@@ -19,14 +19,6 @@ def test_register_mounts_detection_subapp() -> None:
         assert "detection" in sub_app_names
     else:
         assert "detection" in _surface_repr(app), "register() must mount a `detection` sub-app on the host LiquifyApp."
-
-
-def test_register_keeps_legacy_ultralytics_verbs() -> None:
-    app = LiquifyApp(name="marainer", description="test marainer host")
-    register(app)
-    payload = _surface_repr(app)
-    assert "ultralytics_train" in payload or "ultralytics-train" in payload
-    assert "ultralytics_evaluate" in payload or "ultralytics-evaluate" in payload
 
 
 def test_register_exposes_detection_train_and_evaluate_commands() -> None:

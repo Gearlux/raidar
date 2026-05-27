@@ -99,7 +99,7 @@ class _UltralyticsLikeModel(nn.Module):
 
 
 class _Wrapper(nn.Module):
-    """Stand-in for raidar's :class:`~raidar.yolo26.YOLO26Model`: the real
+    """Stand-in for :class:`~raidar_ultralytics.yolo26.YOLO26Model`: the real
     detector lives under ``self.detector``, so the wrapper's state_dict
     keys are prefixed ``detector.<...>``."""
 

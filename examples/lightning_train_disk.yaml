@@ -1,8 +1,8 @@
 # Marainer-generic detection training — base LightningTrainer + raidar adapters.
 #
 # Demonstrates the marainer-generic path: a detector wrapped to return
-# `raidar.detection.DetectionStepOutput` (here `YOLO26MarainerModel`), plus
-# the adapters `TorchvisionDetectionLoss` (sums the loss dict) and
+# `raidar.detection.DetectionStepOutput` (here `FasterRCNNModel`), plus the
+# adapters `TorchvisionDetectionLoss` (sums the loss dict) and
 # `DetectionMetricAdapter` (wraps `MeanAveragePrecision` for the unchanged
 # base step-function pattern).
 #
@@ -14,16 +14,13 @@
 
 num_classes: 2
 
-# -- Model: YOLO26 wrapped to return DetectionStepOutput. The wrapper inherits
-# -- the torchvision-native YOLO26Model and overrides `forward` to expose the
+# -- Model: Faster R-CNN wrapped to return DetectionStepOutput. The wrapper
+# -- inherits torchvision's Faster R-CNN and overrides `forward` to expose the
 # -- {losses, predictions} shape the base trainer's adapter pattern expects.
-model: !class:raidar.yolo26_marainer.YOLO26MarainerModel
+model: !class:raidar.faster_rcnn.FasterRCNNModel
   num_classes: !ref:num_classes
-  variant: n
+  variant: v2
   pretrained_detector: false
-  imgsz: 256
-  score_threshold: 0.25
-  compute_val_loss: true
 
 train_set: !class:raidar.examples_helpers.SyntheticDetectionDataset
   n: 16
@@ -54,7 +51,7 @@ lightning: !class:pytorch_lightning.Trainer
 
 trainer: !class:marainer.trainer.LightningTrainer
   experiment_name: raidar_marainer_generic_smoke
-  run_name: yolo26_marainer_disk
+  run_name: faster_rcnn_marainer_disk
   model: !ref:model
   train_set: !ref:train_set
   val_set: !ref:val_set
