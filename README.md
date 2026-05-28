@@ -104,6 +104,8 @@ ultralytics trainer/evaluator (mosaic + albumentations + Ultralytics
 
 ## Manifests
 
+> Detection classes are also tagged with confluid categories — `FasterRCNNModel` / `RFDETRModel` (`detection_model`) and `TorchvisionDetectionLoss` (`detection_loss`) — so navigaitor's `list_configurable_classes(category=...)` and the visual-editor form-spec enumerate them by kind.
+
 Models, losses, and metrics live under `manifests/` so navigaitor's
 scanner can discover them:
 

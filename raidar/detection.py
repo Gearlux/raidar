@@ -122,7 +122,7 @@ class DetectionStepOutput(TypedDict):
 # ---------------------------------------------------------------------------
 
 
-@configurable
+@configurable(category="detection_loss")
 class TorchvisionDetectionLoss(nn.Module):
     """Sum a torchvision detector's loss dict with optional per-head weights.
 
