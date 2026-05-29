@@ -114,7 +114,7 @@ def _compute_losses_without_bn_drift(
             detector.eval()
 
 
-@configurable(category="detection_model")
+@configurable(task="detection", role="model")
 class FasterRCNNModel(nn.Module):
     """Torchvision Faster R-CNN wrapped for the Marainer Trainer flow.
 

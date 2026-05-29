@@ -140,7 +140,7 @@ def _decode_rfdetr_predictions(
     return predictions
 
 
-@configurable(category="detection_model")
+@configurable(task="detection", role="model")
 class RFDETRModel(nn.Module):
     """Torchvision-native RF-DETR wrapper for
     :class:`~raidar.lightning_trainer.LightningDetectionTrainer`.

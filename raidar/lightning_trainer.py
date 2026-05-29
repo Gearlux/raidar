@@ -87,7 +87,7 @@ def _log_scalar_dict(module: L.LightningModule, metric: Any, prefix: str) -> Non
         module.log(f"{prefix}{name}", result)
 
 
-@configurable
+@configurable(task="detection", role="trainer")
 class LightningDetectionTrainer(LightningTrainer):
     """Specialised object-detection trainer with overridden step functions.
 
@@ -123,7 +123,7 @@ class LightningDetectionTrainer(LightningTrainer):
         self,
         model: Any,
         train_set: Any,
-        num_classes: int,
+        num_classes: Optional[int] = None,
         val_set: Any = None,
         test_set: Any = None,
         optimizer: Lazy[Any] = Class(torch.optim.AdamW, lr=1e-4, weight_decay=0.05),
@@ -149,7 +149,11 @@ class LightningDetectionTrainer(LightningTrainer):
             experiment_name=experiment_name,
             run_name=run_name,
         )
-        self.num_classes = int(num_classes)
+        # Optional: when omitted, the detection model (a !lazy: slot) gets its
+        # num_classes derived from the dataset at run time (marainer.dimensions).
+        # The default MAP metric is class-count-agnostic, so the trainer only
+        # carries this for parity / the class_names sidecar.
+        self.num_classes = int(num_classes) if num_classes is not None else None
         # Native detection models compute loss inside forward — no separate
         # loss_fn callable is involved. Set to None to make that explicit (and
         # to detach the CrossEntropyLoss default the base trainer sets).
