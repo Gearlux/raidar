@@ -32,7 +32,7 @@ from torch.utils.data import DataLoader
 from raidar.detection import _default_detection_metrics, detection_collate_fn
 
 
-@configurable
+@configurable(task="detection", role="evaluator")
 class LightningDetectionEvaluator(LightningEvaluator):
     """Specialised object-detection evaluator with baked-in defaults.
 

@@ -26,3 +26,19 @@ def test_categories_enumerable_via_registry() -> None:
     registry = get_registry()
     assert {"FasterRCNNModel", "RFDETRModel"} <= registry.list_classes(category="detection_model")
     assert "TorchvisionDetectionLoss" in registry.list_classes(category="detection_loss")
+
+
+def test_task_role_tags() -> None:
+    """task/role drive navigaitor's scan-and-generate task surfaces."""
+    from raidar.evaluator import LightningDetectionEvaluator
+    from raidar.lightning_trainer import LightningDetectionTrainer
+
+    assert FasterRCNNModel.__confluid_task__ == "detection"
+    assert FasterRCNNModel.__confluid_role__ == "model"
+    assert TorchvisionDetectionLoss.__confluid_role__ == "loss"
+    assert LightningDetectionTrainer.__confluid_task__ == "detection"
+    assert LightningDetectionTrainer.__confluid_role__ == "trainer"
+    assert LightningDetectionEvaluator.__confluid_role__ == "evaluator"
+    registry = get_registry()
+    assert {"FasterRCNNModel", "RFDETRModel"} <= registry.list_classes(task="detection", role="model")
+    assert "LightningDetectionTrainer" in registry.list_classes(task="detection", role="trainer")
