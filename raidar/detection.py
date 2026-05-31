@@ -581,7 +581,7 @@ def detection_collate_fn(batch: List[Sample]) -> Sample:
     Each input ``Sample`` is expected to carry:
 
     * ``sample.input`` — a ``[3, H, W]`` float tensor (e.g. produced by
-      :class:`waivefront.detection_ops.SignalRegionsToDetectionTargetOp`).
+      :class:`waivefront.targets.RegionsToDetectionBoxesOp`).
     * ``sample.target`` — ``{"boxes": [N, 4] float32, "labels": [N] int64}``
       in torchvision xyxy-pixel format.
 
