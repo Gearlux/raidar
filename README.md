@@ -102,22 +102,9 @@ ultralytics trainer/evaluator (mosaic + albumentations + Ultralytics
 `LOGGER`) — live in
 [raidar-ultralytics](https://github.com/Gearlux/raidar-ultralytics).
 
-## Manifests
+## Discovery
 
-> Detection classes are also tagged with confluid categories — `FasterRCNNModel` / `RFDETRModel` (`detection_model`) and `TorchvisionDetectionLoss` (`detection_loss`) — so navigaitor's `list_configurable_classes(category=...)` and the visual-editor form-spec enumerate them by kind.
-
-Models, losses, and metrics live under `manifests/` so navigaitor's
-scanner can discover them:
-
-```
-raidar/manifests/
-├── losses/
-├── metrics/
-└── models/
-    ├── faster_rcnn.yaml
-    ├── rfdetr.yaml
-    └── rfdetr_marainer.yaml
-```
+Detection classes are tagged with confluid categories — `FasterRCNNModel` / `RFDETRModel` (`detection_model`) and `TorchvisionDetectionLoss` (`detection_loss`) — so navigaitor's `list_configurable_classes(category=...)` and the visual-editor form-spec enumerate them by kind. Discovery is automatic from the `@configurable` registry; there are no hand-written manifest files.
 
 ## Inherited from marainer
 
