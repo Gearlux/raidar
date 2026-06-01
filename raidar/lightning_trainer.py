@@ -57,7 +57,7 @@ from typing import Any, Dict, List, Optional
 
 import pytorch_lightning as L
 import torch
-from confluid import Class, Lazy, configurable
+from confluid import LazyClass, configurable
 from logflow import get_logger
 from marainer.trainer import LightningTrainer
 from torch import Tensor
@@ -91,32 +91,41 @@ def _log_scalar_dict(module: L.LightningModule, metric: Any, prefix: str) -> Non
 class LightningDetectionTrainer(LightningTrainer):
     """Specialised object-detection trainer with overridden step functions.
 
+    Mirrors :class:`~marainer.trainer.LightningTrainer`'s constructor discipline
+    (confluid "Lazy Initialization & Zero-Arg Construction"): the constructor
+    takes only ``model`` / ``train_set`` (+ identity ``num_classes`` /
+    ``experiment_name`` / ``run_name``) and does **no functional work** — every
+    other slot is a defaulted attribute set in the body and configured
+    post-construction (by YAML, or by Confluid broadcasting of flat top-level
+    keys). Detection baked-in attributes (all overridable post-construction):
+
+    * ``loss_fn`` — ``None``; native detection models compute loss inside
+      ``forward`` (no separate loss callable).
+    * ``optimizer`` — deferred ``AdamW(lr=1e-4, weight_decay=0.05)``.
+    * ``train/val/test_loader`` — deferred ``DataLoader`` with
+      :func:`~raidar.detection.detection_collate_fn`.
+    * ``val_metrics`` / ``test_metrics`` — deferred
+      ``MeanAveragePrecision(iou_type="bbox")`` (held separately so val and test
+      accumulators don't share state); ``train_metrics`` is unset because most
+      detection models return a loss dict (not predictions) in ``training_step``.
+
     Args:
         model: Torchvision-native detection model. Faster R-CNN works raw;
             RF-DETR ships a native module at
             :class:`raidar.rfdetr.RFDETRModel`; ultralytics-family detectors
             ship native modules in the ``raidar-ultralytics`` sibling
             package (:class:`raidar_ultralytics.yolo26.YOLO26Model`,
-            :class:`raidar_ultralytics.rtdetr.RTDETRModel`).
+            :class:`raidar_ultralytics.rtdetr.RTDETRModel`). Wire ``!lazy:`` to
+            auto-derive ``num_classes`` from the dataset at run time.
         train_set: Training dataset or Flux pipeline. Each sample carries
             ``input=[3,H,W]`` image, ``target={"boxes":[N,4], "labels":[N]}``.
         num_classes: Number of output classes (including background where
-            applicable). Surfaced for parity with sonair / deltaid trainers
-            and for downstream tooling (class_names sidecar). The default
-            MAP metric is class-count-agnostic.
-        val_set: Validation dataset or Flux pipeline.
-        test_set: Held-out test dataset (triggers ``lightning.test()`` after fit).
-        optimizer: Deferred optimizer (default: AdamW lr=1e-4, wd=0.05).
-        train_loader / val_loader / test_loader: Deferred DataLoaders. Default
-            collate is :func:`raidar.detection.detection_collate_fn`.
-        lightning: PyTorch Lightning Trainer config.
-        experiment_name / run_name: MLflow experiment / run names.
-        val_metrics: ``torchmetrics.Metric`` or ``MetricCollection`` consumed
-            via ``update(predictions, targets)`` in ``validation_step``.
-            Default: ``MeanAveragePrecision(iou_type="bbox")``.
-        test_metrics: Same shape as ``val_metrics`` — held separately so val
-            and test accumulators don't share state. Default: a fresh MAP
-            instance.
+            applicable); omit to derive from the dataset at run time
+            (``marainer.dimensions``). The default MAP metric is
+            class-count-agnostic, so the trainer only carries this for parity /
+            the class_names sidecar.
+        experiment_name: MLflow experiment name.
+        run_name: MLflow run name.
     """
 
     def __init__(
@@ -124,48 +133,32 @@ class LightningDetectionTrainer(LightningTrainer):
         model: Any,
         train_set: Any,
         num_classes: Optional[int] = None,
-        val_set: Any = None,
-        test_set: Any = None,
-        optimizer: Lazy[Any] = Class(torch.optim.AdamW, lr=1e-4, weight_decay=0.05),
-        train_loader: Lazy[Any] = Class(DataLoader, collate_fn=detection_collate_fn),
-        val_loader: Lazy[Any] = Class(DataLoader, collate_fn=detection_collate_fn),
-        test_loader: Lazy[Any] = Class(DataLoader, collate_fn=detection_collate_fn),
-        lightning: Any = Class(L.Trainer),
         experiment_name: str = "raidar_detection",
         run_name: str = "train",
-        val_metrics: Any = Class(MeanAveragePrecision, iou_type="bbox"),
-        test_metrics: Any = Class(MeanAveragePrecision, iou_type="bbox"),
     ) -> None:
-        super().__init__(
-            model=model,
-            train_set=train_set,
-            val_set=val_set,
-            test_set=test_set,
-            optimizer=optimizer,
-            train_loader=train_loader,
-            val_loader=val_loader,
-            test_loader=test_loader,
-            lightning=lightning,
-            experiment_name=experiment_name,
-            run_name=run_name,
-        )
+        super().__init__(model=model, train_set=train_set, experiment_name=experiment_name, run_name=run_name)
+        # Store config ONLY — no functional work. The optimizer/loaders/metrics are
+        # deferred (LazyClass); the base run() flows them (loaders with the dataset,
+        # optimizer with model params, metrics after dimension derivation). Every
+        # slot is overridable post-construction (YAML / Confluid broadcasting).
+        #
         # Optional: when omitted, the detection model (a !lazy: slot) gets its
         # num_classes derived from the dataset at run time (marainer.dimensions).
-        # The default MAP metric is class-count-agnostic, so the trainer only
-        # carries this for parity / the class_names sidecar.
         self.num_classes = int(num_classes) if num_classes is not None else None
         # Native detection models compute loss inside forward — no separate
         # loss_fn callable is involved. Set to None to make that explicit (and
         # to detach the CrossEntropyLoss default the base trainer sets).
         self.loss_fn = None  # type: ignore[assignment]
+        self.optimizer = LazyClass(torch.optim.AdamW, lr=1e-4, weight_decay=0.05)
+        self.train_loader = LazyClass(DataLoader, collate_fn=detection_collate_fn)
+        self.val_loader = LazyClass(DataLoader, collate_fn=detection_collate_fn)
+        self.test_loader = LazyClass(DataLoader, collate_fn=detection_collate_fn)
         # Predictions are unavailable during training_step for most detection
         # models (the model returns a loss dict, not predictions). Leave train
-        # metrics unset.
+        # metrics unset; val/test get a fresh deferred MAP each.
         self.train_metrics = None
-        # val / test metrics may arrive as a Lazy/Class (default) or already
-        # materialised. Base trainer's run() calls flow() to materialise them.
-        self.val_metrics = val_metrics
-        self.test_metrics = test_metrics
+        self.val_metrics = LazyClass(MeanAveragePrecision, iou_type="bbox")
+        self.test_metrics = LazyClass(MeanAveragePrecision, iou_type="bbox")
 
     # --- inference helper ----------------------------------------------------
 

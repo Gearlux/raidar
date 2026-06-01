@@ -52,20 +52,18 @@ def test_evaluator_runs_on_detection_task(tmp_path: Any) -> None:
     flux = Flux(source=samples)
 
     sink = _RecordingSink()
-    evaluator = LightningEvaluator(
-        model=model,
-        dataset=flux,
-        loader=Class(DataLoader, batch_size=2, collate_fn=detection_collate_fn),
-        metrics=DetectionMetricAdapter(MeanAveragePrecision(iou_type="bbox")),
-        predictions_sink=sink,
-        lightning=Class(
-            L.Trainer,
-            accelerator="cpu",
-            enable_progress_bar=False,
-            enable_model_summary=False,
-            logger=False,
-            default_root_dir=str(tmp_path),
-        ),
+    evaluator = LightningEvaluator(model=model, dataset=flux)
+    # Minimal-ctor pattern: configure the deferred slots post-construction.
+    evaluator.loader = Class(DataLoader, batch_size=2, collate_fn=detection_collate_fn)
+    evaluator.metrics = DetectionMetricAdapter(MeanAveragePrecision(iou_type="bbox"))
+    evaluator.predictions_sink = sink
+    evaluator.lightning = Class(
+        L.Trainer,
+        accelerator="cpu",
+        enable_progress_bar=False,
+        enable_model_summary=False,
+        logger=False,
+        default_root_dir=str(tmp_path),
     )
     evaluator.run()
 
