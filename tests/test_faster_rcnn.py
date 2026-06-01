@@ -303,12 +303,9 @@ def test_end_to_end_base_trainer_runs_with_detection_adapters(tmp_path: Any) -> 
     train_flux = Flux(source=train_samples)
     val_flux = Flux(source=val_samples)
 
-    trainer = LightningTrainer(
-        model=model,
-        train_set=train_flux,
-        val_set=val_flux,
-        optimizer=Class(torch.optim.SGD, lr=1e-3),
-    )
+    trainer = LightningTrainer(model=model, train_set=train_flux)
+    trainer.val_set = val_flux
+    trainer.optimizer = Class(torch.optim.SGD, lr=1e-3)
     trainer.loss_fn = TorchvisionDetectionLoss(  # type: ignore[assignment]
         weights={"loss_classifier": 1.0, "loss_box_reg": 1.0}
     )

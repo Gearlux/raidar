@@ -119,12 +119,9 @@ def test_end_to_end_base_trainer_runs_with_marainer_rfdetr(tmp_path: Any) -> Non
     train_flux = Flux(source=_synthetic_detection_samples(4))
     val_flux = Flux(source=_synthetic_detection_samples(2))
 
-    trainer = LightningTrainer(
-        model=model,
-        train_set=train_flux,
-        val_set=val_flux,
-        optimizer=Class(torch.optim.SGD, lr=1e-4),
-    )
+    trainer = LightningTrainer(model=model, train_set=train_flux)
+    trainer.val_set = val_flux
+    trainer.optimizer = Class(torch.optim.SGD, lr=1e-4)
     trainer.loss_fn = TorchvisionDetectionLoss()  # type: ignore[assignment]
     trainer.val_metrics = DetectionMetricAdapter(MeanAveragePrecision(iou_type="bbox"))
     trainer.train_loader = DataLoader(train_flux, batch_size=2, collate_fn=detection_collate_fn)

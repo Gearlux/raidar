@@ -128,12 +128,8 @@ def test_val_test_metrics_default_to_lazy_map() -> None:
 def test_user_supplied_instance_metric_passes_through() -> None:
     """An already-instantiated metric is held verbatim — no Lazy wrapping needed."""
     custom = MeanAveragePrecision(iou_type="bbox", class_metrics=True)
-    trainer = LightningDetectionTrainer(
-        model=_NativeDetector(),
-        train_set=_make_samples(4),
-        num_classes=2,
-        val_metrics=custom,
-    )
+    trainer = LightningDetectionTrainer(model=_NativeDetector(), train_set=_make_samples(4), num_classes=2)
+    trainer.val_metrics = custom
     assert trainer.val_metrics is custom
 
 
@@ -147,12 +143,8 @@ def test_metric_collection_with_native_confusion_matrix_construction() -> None:
             "confusion": DetectionConfusionMatrixNative(iou_threshold=0.5),
         }
     )
-    trainer = LightningDetectionTrainer(
-        model=_NativeDetector(),
-        train_set=_make_samples(4),
-        num_classes=2,
-        val_metrics=coll,
-    )
+    trainer = LightningDetectionTrainer(model=_NativeDetector(), train_set=_make_samples(4), num_classes=2)
+    trainer.val_metrics = coll
     assert trainer.val_metrics is coll
 
 
@@ -235,13 +227,9 @@ def test_training_step_rejects_non_dict_model_output() -> None:
 
 
 def test_validation_step_updates_metric_with_predictions() -> None:
-    trainer = LightningDetectionTrainer(
-        model=_NativeDetector(),
-        train_set=_make_samples(4),
-        val_set=_make_samples(2),
-        num_classes=2,
-        val_metrics=MeanAveragePrecision(iou_type="bbox"),
-    )
+    trainer = LightningDetectionTrainer(model=_NativeDetector(), train_set=_make_samples(4), num_classes=2)
+    trainer.val_set = _make_samples(2)
+    trainer.val_metrics = MeanAveragePrecision(iou_type="bbox")
     trainer.eval()
     batch = _make_batch(n=2)
     # validation_step doesn't return a loss in the native path; just executes.
@@ -251,13 +239,9 @@ def test_validation_step_updates_metric_with_predictions() -> None:
 
 
 def test_test_step_uses_test_metric() -> None:
-    trainer = LightningDetectionTrainer(
-        model=_NativeDetector(),
-        train_set=_make_samples(4),
-        test_set=_make_samples(2),
-        num_classes=2,
-        test_metrics=MeanAveragePrecision(iou_type="bbox"),
-    )
+    trainer = LightningDetectionTrainer(model=_NativeDetector(), train_set=_make_samples(4), num_classes=2)
+    trainer.test_set = _make_samples(2)
+    trainer.test_metrics = MeanAveragePrecision(iou_type="bbox")
     trainer.eval()
     batch = _make_batch(n=2)
     trainer.test_step(batch, 0)
@@ -277,12 +261,8 @@ def test_end_to_end_native_trainer_fit(tmp_path: Any) -> None:
     train_flux = Flux(source=_make_samples(4))
     val_flux = Flux(source=_make_samples(2))
 
-    trainer = LightningDetectionTrainer(
-        model=_NativeDetector(),
-        train_set=train_flux,
-        val_set=val_flux,
-        num_classes=2,
-    )
+    trainer = LightningDetectionTrainer(model=_NativeDetector(), train_set=train_flux, num_classes=2)
+    trainer.val_set = val_flux
 
     lightning_trainer = L.Trainer(
         max_epochs=1,

@@ -22,10 +22,9 @@ Minimal YAML example::
       dataset: !ref:val_set
 """
 
-from typing import Any, Optional
+from typing import Any
 
-import pytorch_lightning as L
-from confluid import Class, Lazy, configurable
+from confluid import LazyClass, configurable
 from marainer.evaluator import LightningEvaluator
 from torch.utils.data import DataLoader
 
@@ -36,6 +35,14 @@ from raidar.detection import _default_detection_metrics, detection_collate_fn
 class LightningDetectionEvaluator(LightningEvaluator):
     """Specialised object-detection evaluator with baked-in defaults.
 
+    Mirrors :class:`~marainer.evaluator.LightningEvaluator`'s minimal-ctor
+    discipline: only ``model`` / ``dataset`` / ``num_classes`` (+ identity
+    ``experiment_name`` / ``run_name``). The detection defaults — the ``test/``
+    MAP metric set and the ``detection_collate_fn`` loader — are body attributes;
+    ``predictions_sink`` / ``lightning`` / ``metrics_sidecar_path`` inherit the
+    base defaults and are configured post-construction (YAML / broadcasting; a
+    deferred slot uses ``!lazy:``).
+
     Args:
         model: Detection model that returns a
             :class:`~raidar.detection.DetectionStepOutput`. The model is
@@ -44,14 +51,8 @@ class LightningDetectionEvaluator(LightningEvaluator):
         dataset: Evaluation dataset or Flux pipeline.
         num_classes: Number of output classes. Surfaced for parity with
             sonair / deltaid evaluators.
-        loader: Deferred DataLoader (default includes ``detection_collate_fn``).
-        predictions_sink: Optional sink with ``.write(prediction, metadata)``
-            and ``.close()``.
-        lightning: PyTorch Lightning Trainer config.
         experiment_name: MLflow experiment name.
         run_name: MLflow run name.
-        metrics_sidecar_path: Optional path; when set, writes a logger-agnostic
-            JSON dump of the final metrics after evaluation completes.
     """
 
     def __init__(
@@ -59,23 +60,10 @@ class LightningDetectionEvaluator(LightningEvaluator):
         model: Any,
         dataset: Any,
         num_classes: int,
-        loader: Lazy[Any] = Class(DataLoader, collate_fn=detection_collate_fn),
-        predictions_sink: Any = None,
-        lightning: Any = Class(L.Trainer),
         experiment_name: str = "raidar_detection_eval",
         run_name: str = "evaluate",
-        metrics_sidecar_path: Optional[str] = None,
     ) -> None:
-        metrics = _default_detection_metrics(prefix="test/")
-        super().__init__(
-            model=model,
-            dataset=dataset,
-            loader=loader,
-            metrics=metrics,
-            predictions_sink=predictions_sink,
-            lightning=lightning,
-            experiment_name=experiment_name,
-            run_name=run_name,
-            metrics_sidecar_path=metrics_sidecar_path,
-        )
+        super().__init__(model=model, dataset=dataset, experiment_name=experiment_name, run_name=run_name)
         self.num_classes = int(num_classes)
+        self.metrics = _default_detection_metrics(prefix="test/")
+        self.loader = LazyClass(DataLoader, collate_fn=detection_collate_fn)

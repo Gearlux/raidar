@@ -69,7 +69,7 @@ val_metrics: !class:raidar.detection.DetectionMetricAdapter
   inner: !class:torchmetrics.detection.MeanAveragePrecision
     iou_type: bbox
 
-train_loader: !class:torch.utils.data.DataLoader
+train_loader: !lazy:torch.utils.data.DataLoader
   batch_size: 4
   shuffle: true
   collate_fn: !ref:raidar.detection.detection_collate_fn

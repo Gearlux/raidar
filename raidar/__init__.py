@@ -16,6 +16,7 @@ from raidar.faster_rcnn import FasterRCNNModel
 from raidar.lightning_trainer import LightningDetectionTrainer
 from raidar.rfdetr import RFDETRModel
 from raidar.rfdetr_marainer import RFDETRMarainerModel
+from raidar.ultralytics_sink import UltralyticsSink
 
 __all__ = [
     "DetectionBatchInput",
@@ -31,5 +32,6 @@ __all__ = [
     "RFDETRMarainerModel",
     "RFDETRModel",
     "TorchvisionDetectionLoss",
+    "UltralyticsSink",
     "detection_collate_fn",
 ]
