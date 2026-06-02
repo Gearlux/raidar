@@ -115,15 +115,15 @@ class LightningDetectionTrainer(LightningTrainer):
             :class:`raidar.rfdetr.RFDETRModel`; ultralytics-family detectors
             ship native modules in the ``raidar-ultralytics`` sibling
             package (:class:`raidar_ultralytics.yolo26.YOLO26Model`,
-            :class:`raidar_ultralytics.rtdetr.RTDETRModel`). Wire ``!lazy:`` to
-            auto-derive ``num_classes`` from the dataset at run time.
+            :class:`raidar_ultralytics.rtdetr.RTDETRModel`). Set the model's
+            ``num_classes`` explicitly in its config.
         train_set: Training dataset or Flux pipeline. Each sample carries
             ``input=[3,H,W]`` image, ``target={"boxes":[N,4], "labels":[N]}``.
         num_classes: Number of output classes (including background where
-            applicable); omit to derive from the dataset at run time
-            (``marainer.dimensions``). The default MAP metric is
-            class-count-agnostic, so the trainer only carries this for parity /
-            the class_names sidecar.
+            applicable). The default MAP metric is class-count-agnostic, so the
+            trainer carries this only for parity / the class_names sidecar; set it
+            on the detection model's config (dataset-derived num_classes was removed
+            with ``marainer.dimensions`` — TASKS follow-up to restore via initialize()).
         experiment_name: MLflow experiment name.
         run_name: MLflow run name.
     """
@@ -139,11 +139,10 @@ class LightningDetectionTrainer(LightningTrainer):
         super().__init__(model=model, train_set=train_set, experiment_name=experiment_name, run_name=run_name)
         # Store config ONLY — no functional work. The optimizer/loaders/metrics are
         # deferred (LazyClass); the base run() flows them (loaders with the dataset,
-        # optimizer with model params, metrics after dimension derivation). Every
-        # slot is overridable post-construction (YAML / Confluid broadcasting).
-        #
-        # Optional: when omitted, the detection model (a !lazy: slot) gets its
-        # num_classes derived from the dataset at run time (marainer.dimensions).
+        # optimizer with model params). Every slot is overridable post-construction
+        # (YAML / Confluid broadcasting). Set num_classes on the detection model's
+        # config explicitly — dataset-derived num_classes was removed with
+        # marainer.dimensions (TASKS follow-up: restore via an initialize() hook).
         self.num_classes = int(num_classes) if num_classes is not None else None
         # Native detection models compute loss inside forward — no separate
         # loss_fn callable is involved. Set to None to make that explicit (and
