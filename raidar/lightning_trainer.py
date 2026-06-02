@@ -53,15 +53,16 @@ Custom metric collection::
           iou_threshold: 0.5
 """
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union, cast
 
 import pytorch_lightning as L
 import torch
-from confluid import LazyClass, configurable
+import torch.nn as nn
+from confluid import Fluid, LazyClass, configurable
 from logflow import get_logger
 from marainer.trainer import LightningTrainer
 from torch import Tensor
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, Dataset
 from torchmetrics.detection import MeanAveragePrecision
 
 from raidar.detection import detection_collate_fn
@@ -130,8 +131,8 @@ class LightningDetectionTrainer(LightningTrainer):
 
     def __init__(
         self,
-        model: Any,
-        train_set: Any,
+        model: Union[nn.Module, Fluid],
+        train_set: Union[Dataset[Any], Fluid],
         num_classes: Optional[int] = None,
         experiment_name: str = "raidar_detection",
         run_name: str = "train",
@@ -162,7 +163,8 @@ class LightningDetectionTrainer(LightningTrainer):
     # --- inference helper ----------------------------------------------------
 
     def forward(self, images: List[Tensor]) -> List[Dict[str, Tensor]]:  # type: ignore[override]
-        return self.model(images)  # type: ignore[no-any-return]
+        model = cast(nn.Module, self.model)
+        return model(images)  # type: ignore[no-any-return]
 
     # --- step functions ------------------------------------------------------
 
@@ -171,7 +173,9 @@ class LightningDetectionTrainer(LightningTrainer):
         targets: Optional[List[Dict[str, Tensor]]] = batch.input.targets
         if targets is None:
             raise ValueError("LightningDetectionTrainer.training_step requires targets on the batch.")
-        loss_dict = self.model(images, targets)
+
+        model = cast(nn.Module, self.model)
+        loss_dict = model(images, targets)
         if not isinstance(loss_dict, dict):
             raise TypeError(
                 f"Detection model in train mode must return Dict[str, Tensor]; "
@@ -192,14 +196,16 @@ class LightningDetectionTrainer(LightningTrainer):
     def validation_step(self, batch: Any, batch_idx: int) -> None:  # type: ignore[override]
         images: List[Tensor] = batch.input.images
         targets: Optional[List[Dict[str, Tensor]]] = batch.input.targets
-        predictions = self.model(images)
+        model = cast(nn.Module, self.model)
+        predictions = model(images)
         if self.val_metrics is not None and targets is not None:
             self.val_metrics.update(predictions, targets)
 
     def test_step(self, batch: Any, batch_idx: int) -> None:  # type: ignore[override]
         images: List[Tensor] = batch.input.images
         targets: Optional[List[Dict[str, Tensor]]] = batch.input.targets
-        predictions = self.model(images)
+        model = cast(nn.Module, self.model)
+        predictions = model(images)
         if self.test_metrics is not None and targets is not None:
             self.test_metrics.update(predictions, targets)
 

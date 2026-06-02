@@ -603,7 +603,7 @@ def detection_collate_fn(batch: List[Sample]) -> Sample:
     for s in batch:
         images.append(s.input)
         targets.append(s.target)
-        metas.append(s.metadata if s.metadata is not None else {})
+        metas.append(s.meta if s.meta is not None else {})
     return Sample(
         input=DetectionBatchInput(images=images, targets=targets),
         target=targets,
