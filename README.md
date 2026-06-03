@@ -113,8 +113,8 @@ The marainer-generic path (`marainer.trainer.LightningTrainer` + raidar's
 `ModelCheckpoint` (`save_last=True` + best by the first val metric) and
 YAML-config artifact logging. The specialised `LightningDetectionTrainer`
 in `lightning_trainer.py` also inherits these behaviours through its
-marainer parent class. Use `marainer.loggers.Marainer*Logger` to enable
-per-logger `log_all_checkpoints`. See marainer's README →
+marainer parent class. Wire stock `pytorch_lightning.loggers.*` classes
+under `lightning.logger:`. See marainer's README →
 *Default checkpointing* for the full semantics.
 
 ## Examples
