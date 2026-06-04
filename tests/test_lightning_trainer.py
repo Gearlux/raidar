@@ -13,14 +13,15 @@ import pytest
 import pytorch_lightning as L
 import torch
 import torch.nn as nn
+from confluid import LazyClass
 from dataflux.core import Flux
 from dataflux.sample import Sample
 from torch import Tensor
 from torchmetrics import MetricCollection
 from torchmetrics.detection import MeanAveragePrecision
 
-from raidar.detection import DetectionConfusionMatrixNative, detection_collate_fn
-from raidar.lightning_trainer import LightningDetectionTrainer
+from raidar.detection import DetectionConfusionMatrix, detection_collate_fn
+from raidar.lightning_trainer import LightningDetectionTrainer, _model_num_classes
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -147,7 +148,7 @@ def test_metric_collection_with_native_confusion_matrix_construction() -> None:
     coll = MetricCollection(
         {
             "map": MeanAveragePrecision(iou_type="bbox"),
-            "confusion": DetectionConfusionMatrixNative(iou_threshold=0.5),
+            "confusion": DetectionConfusionMatrix(iou_threshold=0.5),
         }
     )
     trainer = LightningDetectionTrainer(model=_NativeDetector(), train_set=_make_flux(4), num_classes=2)
@@ -302,3 +303,103 @@ def test_end_to_end_native_trainer_fit(tmp_path: Any) -> None:
     assert torch.isfinite(train_loss)
     # MAP scalars should appear under val/ prefix.
     assert any(k.startswith("val/map") for k in metrics), f"expected val/map* in {list(metrics)}"
+
+
+# ---------------------------------------------------------------------------
+# initialize(): num_classes resolution + lazy-model flow (sonair-style)
+# ---------------------------------------------------------------------------
+
+
+class _NumClassesDetector(nn.Module):
+    """Stub whose ctor records ``num_classes`` — stands in for a ``!lazy:`` detector
+    builder (e.g. torchvision's ``fasterrcnn_resnet50_fpn``), so ``initialize()``'s
+    flow-injection of the resolved count is testable without a heavy download."""
+
+    def __init__(self, num_classes: int = 1) -> None:
+        super().__init__()
+        self.num_classes = int(num_classes)
+        self.alpha = nn.Parameter(torch.tensor(1.0))
+
+
+def _labelled_flux(label_sets: List[List[int]], size: int = 16) -> Flux:
+    """A detection Flux whose per-image targets carry the given label lists."""
+    samples = [
+        Sample(
+            input=torch.rand(3, size, size),
+            target={
+                "boxes": torch.zeros((len(lbls), 4), dtype=torch.float32),
+                "labels": torch.tensor(lbls, dtype=torch.int64),
+            },
+            metadata={},
+        )
+        for lbls in label_sets
+    ]
+    return Flux(source=samples)
+
+
+def test_initialize_derives_num_classes_from_targets_and_flows_lazy_model() -> None:
+    # Labels up to 2 → derived num_classes = max + 1 = 3; injected into the lazy model.
+    trainer = LightningDetectionTrainer(model=LazyClass(_NumClassesDetector), train_set=_labelled_flux([[1, 2], [1]]))
+    trainer.initialize()
+    assert trainer.num_classes == 3
+    assert isinstance(trainer.model, _NumClassesDetector)
+    assert trainer.model.num_classes == 3
+
+
+def test_initialize_explicit_num_classes_injected_into_lazy_model() -> None:
+    trainer = LightningDetectionTrainer(
+        model=LazyClass(_NumClassesDetector), train_set=_labelled_flux([[1]]), num_classes=7
+    )
+    trainer.initialize()
+    assert isinstance(trainer.model, _NumClassesDetector)
+    assert trainer.num_classes == 7 and trainer.model.num_classes == 7
+
+
+def test_initialize_lazy_model_pinned_num_classes_used() -> None:
+    # num_classes pinned on the lazy model's kwargs is used as-is.
+    trainer = LightningDetectionTrainer(
+        model=LazyClass(_NumClassesDetector, num_classes=9), train_set=_labelled_flux([[1]])
+    )
+    trainer.initialize()
+    assert isinstance(trainer.model, _NumClassesDetector)
+    assert trainer.num_classes == 9 and trainer.model.num_classes == 9
+
+
+def test_initialize_concrete_model_num_classes_is_authoritative() -> None:
+    # A concrete model's head wins over a (mismatched) explicit trainer arg.
+    model = _NumClassesDetector(num_classes=4)
+    trainer = LightningDetectionTrainer(model=model, train_set=_labelled_flux([[1]]), num_classes=99)
+    trainer.initialize()
+    assert trainer.num_classes == 4
+    assert trainer.model is model
+
+
+def test_initialize_model_without_num_classes_param_flowed_plainly() -> None:
+    # A lazy model whose builder takes no num_classes is flowed plainly (no kwarg error).
+    trainer = LightningDetectionTrainer(
+        model=LazyClass(_NativeDetector), train_set=_labelled_flux([[1]]), num_classes=3
+    )
+    trainer.initialize()
+    assert isinstance(trainer.model, _NativeDetector)
+    assert trainer.num_classes == 3
+
+
+def test_trained_model_output_raises_before_run_returns_after_flow() -> None:
+    trainer = LightningDetectionTrainer(model=LazyClass(_NumClassesDetector), train_set=_labelled_flux([[1]]))
+    with pytest.raises(RuntimeError, match="only available after run"):
+        _ = trainer.trained_model
+    trainer.initialize()  # flows the model into a live instance
+    assert isinstance(trainer.trained_model, _NumClassesDetector)
+
+
+def test_model_num_classes_reads_attr_and_torchvision_head() -> None:
+    # Explicit num_classes attribute (raidar/ultralytics wrappers).
+    assert _model_num_classes(_NumClassesDetector(num_classes=6)) == 6
+    # torchvision two-stage box-predictor head shape (Faster R-CNN).
+    m = nn.Module()
+    m.roi_heads = nn.Module()
+    m.roi_heads.box_predictor = nn.Module()
+    m.roi_heads.box_predictor.cls_score = nn.Linear(10, 5)
+    assert _model_num_classes(m) == 5
+    # Neither present → None.
+    assert _model_num_classes(nn.Linear(3, 3)) is None

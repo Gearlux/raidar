@@ -1,7 +1,9 @@
 """Tests for :class:`raidar.detection.DetectionConfusionMatrix`.
 
 Synthetic-box scenarios drive every TP / FP / FN branch of the greedy
-class-aware matcher in :class:`raidar.detection.DetectionConfusionMatrixNative`.
+class-aware matcher. ``DetectionConfusionMatrix`` is a native
+``torchmetrics.Metric`` (``update(preds, targets)`` over per-image lists) that
+drops straight into a ``MetricCollection`` alongside ``MeanAveragePrecision``.
 """
 
 from typing import Dict, List
@@ -10,13 +12,7 @@ import pytest
 import torch
 from torch import Tensor
 
-from raidar.detection import (
-    DEFAULT_CONFUSION_SCALAR_KEYS,
-    DetectionConfusionMatrix,
-    DetectionConfusionMatrixNative,
-    DetectionOutput,
-    DetectionStepOutput,
-)
+from raidar.detection import DetectionConfusionMatrix, DetectionOutput
 
 
 def _pred(boxes: List[List[float]], scores: List[float], labels: List[int]) -> DetectionOutput:
@@ -34,80 +30,76 @@ def _gt(boxes: List[List[float]], labels: List[int]) -> Dict[str, Tensor]:
     }
 
 
-def _step(preds: List[DetectionOutput]) -> DetectionStepOutput:
-    return DetectionStepOutput(losses=None, predictions=preds)
+# --- matching branches ------------------------------------------------------
 
 
-# --- DetectionConfusionMatrixNative: pure matching branches ----------------------
-
-
-def test_confusion_inner_perfect_overlap_counts_tp() -> None:
-    inner = DetectionConfusionMatrixNative(iou_threshold=0.5, score_threshold=0.0)
+def test_confusion_perfect_overlap_counts_tp() -> None:
+    cm = DetectionConfusionMatrix(iou_threshold=0.5, score_threshold=0.0)
     preds = [_pred([[0.0, 0.0, 10.0, 10.0]], [0.9], [1])]
     targets = [_gt([[0.0, 0.0, 10.0, 10.0]], [1])]
-    inner.update(preds, targets)
-    out = inner.compute()
+    cm.update(preds, targets)
+    out = cm.compute()
     assert int(out["tp"]) == 1 and int(out["fp"]) == 0 and int(out["fn"]) == 0
     assert float(out["precision"]) == 1.0
     assert float(out["recall"]) == 1.0
     assert float(out["f1"]) == 1.0
 
 
-def test_confusion_inner_low_iou_is_fp_plus_fn() -> None:
+def test_confusion_low_iou_is_fp_plus_fn() -> None:
     """An IoU below the threshold leaves the prediction as FP and the GT as FN."""
-    inner = DetectionConfusionMatrixNative(iou_threshold=0.5, score_threshold=0.0)
+    cm = DetectionConfusionMatrix(iou_threshold=0.5, score_threshold=0.0)
     # Boxes barely touch — IoU = 0
     preds = [_pred([[0.0, 0.0, 5.0, 5.0]], [0.9], [1])]
     targets = [_gt([[20.0, 20.0, 25.0, 25.0]], [1])]
-    inner.update(preds, targets)
-    out = inner.compute()
+    cm.update(preds, targets)
+    out = cm.compute()
     assert int(out["tp"]) == 0 and int(out["fp"]) == 1 and int(out["fn"]) == 1
 
 
-def test_confusion_inner_class_mismatch_is_fp_plus_fn() -> None:
+def test_confusion_class_mismatch_is_fp_plus_fn() -> None:
     """Same-IoU but different class: prediction is FP, GT is FN."""
-    inner = DetectionConfusionMatrixNative(iou_threshold=0.5, score_threshold=0.0)
+    cm = DetectionConfusionMatrix(iou_threshold=0.5, score_threshold=0.0)
     preds = [_pred([[0.0, 0.0, 10.0, 10.0]], [0.9], [2])]
     targets = [_gt([[0.0, 0.0, 10.0, 10.0]], [1])]
-    inner.update(preds, targets)
-    out = inner.compute()
+    cm.update(preds, targets)
+    out = cm.compute()
     assert int(out["tp"]) == 0 and int(out["fp"]) == 1 and int(out["fn"]) == 1
 
 
-def test_confusion_inner_score_below_threshold_drops_pred() -> None:
+def test_confusion_score_below_threshold_drops_pred() -> None:
     """Predictions filtered by score: the GT becomes an FN with no FP."""
-    inner = DetectionConfusionMatrixNative(iou_threshold=0.5, score_threshold=0.5)
+    cm = DetectionConfusionMatrix(iou_threshold=0.5, score_threshold=0.5)
     preds = [_pred([[0.0, 0.0, 10.0, 10.0]], [0.2], [1])]
     targets = [_gt([[0.0, 0.0, 10.0, 10.0]], [1])]
-    inner.update(preds, targets)
-    out = inner.compute()
+    cm.update(preds, targets)
+    out = cm.compute()
     assert int(out["tp"]) == 0 and int(out["fp"]) == 0 and int(out["fn"]) == 1
 
 
-def test_confusion_inner_no_predictions_all_fn() -> None:
-    inner = DetectionConfusionMatrixNative()
+def test_confusion_no_predictions_all_fn() -> None:
+    cm = DetectionConfusionMatrix()
     preds = [_pred([], [], [])]
     targets = [_gt([[0.0, 0.0, 10.0, 10.0], [20.0, 20.0, 30.0, 30.0]], [1, 1])]
-    inner.update(preds, targets)
-    out = inner.compute()
+    cm.update(preds, targets)
+    out = cm.compute()
     assert int(out["tp"]) == 0 and int(out["fp"]) == 0 and int(out["fn"]) == 2
     assert float(out["precision"]) == 0.0
     assert float(out["recall"]) == 0.0
     assert float(out["f1"]) == 0.0
 
 
-def test_confusion_inner_no_ground_truth_all_fp() -> None:
-    inner = DetectionConfusionMatrixNative(iou_threshold=0.5, score_threshold=0.0)
+def test_confusion_no_ground_truth_all_fp() -> None:
+    cm = DetectionConfusionMatrix(iou_threshold=0.5, score_threshold=0.0)
     preds = [_pred([[0.0, 0.0, 10.0, 10.0], [20.0, 20.0, 30.0, 30.0]], [0.9, 0.8], [1, 1])]
     targets = [_gt([], [])]
-    inner.update(preds, targets)
-    out = inner.compute()
+    cm.update(preds, targets)
+    out = cm.compute()
     assert int(out["tp"]) == 0 and int(out["fp"]) == 2 and int(out["fn"]) == 0
 
 
-def test_confusion_inner_greedy_consumes_high_score_first() -> None:
+def test_confusion_greedy_consumes_high_score_first() -> None:
     """Two predictions overlap one GT: only the highest-score wins TP, the other becomes FP."""
-    inner = DetectionConfusionMatrixNative(iou_threshold=0.5, score_threshold=0.0)
+    cm = DetectionConfusionMatrix(iou_threshold=0.5, score_threshold=0.0)
     preds = [
         _pred(
             [[0.0, 0.0, 10.0, 10.0], [0.0, 0.0, 9.0, 9.0]],
@@ -116,14 +108,14 @@ def test_confusion_inner_greedy_consumes_high_score_first() -> None:
         )
     ]
     targets = [_gt([[0.0, 0.0, 10.0, 10.0]], [1])]
-    inner.update(preds, targets)
-    out = inner.compute()
+    cm.update(preds, targets)
+    out = cm.compute()
     assert int(out["tp"]) == 1 and int(out["fp"]) == 1 and int(out["fn"]) == 0
 
 
-def test_confusion_inner_class_aware_matching_with_two_gts() -> None:
+def test_confusion_class_aware_matching_with_two_gts() -> None:
     """Predictions can only match same-class GTs, even when IoU favors a wrong-class one."""
-    inner = DetectionConfusionMatrixNative(iou_threshold=0.5, score_threshold=0.0)
+    cm = DetectionConfusionMatrix(iou_threshold=0.5, score_threshold=0.0)
     # Two GTs at the same location but different classes; pred is class 2.
     preds = [_pred([[0.0, 0.0, 10.0, 10.0]], [0.9], [2])]
     targets = [
@@ -132,75 +124,70 @@ def test_confusion_inner_class_aware_matching_with_two_gts() -> None:
             [1, 2],
         )
     ]
-    inner.update(preds, targets)
-    out = inner.compute()
+    cm.update(preds, targets)
+    out = cm.compute()
     # No same-class GT overlapping → pred is FP. GT[1] (class 2 at far box) is FN.
     # GT[0] (class 1) is also FN.
     assert int(out["tp"]) == 0 and int(out["fp"]) == 1 and int(out["fn"]) == 2
 
 
-def test_confusion_inner_partial_iou_at_threshold_boundary_is_tp() -> None:
+def test_confusion_partial_iou_at_threshold_boundary_is_tp() -> None:
     """IoU == iou_threshold counts as TP (>= comparison)."""
-    inner = DetectionConfusionMatrixNative(iou_threshold=0.5, score_threshold=0.0)
-    # Two unit squares overlapping by 0.5 area → IoU = 0.5 / 1.5 = 1/3.
-    # So pick boxes that yield exactly 0.5 IoU: two unit squares with 1/3 overlap give 1/5.
-    # Use 10x10 vs 10x10 shifted by 5 in x → intersection 5x10=50, union 100+100-50=150, IoU=1/3.
-    # Construct exact 0.5 IoU: 10x10 vs 10x10 shifted by `s`; need (10-s)*10 / (200 - (10-s)*10) = 0.5
-    # → (10-s)*10 = 0.5 * (200 - (10-s)*10) → x = 0.5*(200-x), x=66.67, 10-s=6.667, s=3.333
+    cm = DetectionConfusionMatrix(iou_threshold=0.5, score_threshold=0.0)
+    # Construct exact 0.5 IoU: 10x10 vs 10x10 shifted by `s` in x;
+    # need (10-s)*10 / (200 - (10-s)*10) = 0.5 → 10-s = 6.667, s = 3.333.
     s = 3.333333333333333
-    inner.update(
+    cm.update(
         [_pred([[0.0, 0.0, 10.0, 10.0]], [0.9], [1])],
         [_gt([[s, 0.0, s + 10.0, 10.0]], [1])],
     )
-    out = inner.compute()
-    # IoU should be ~0.5; floating-point noise could push slightly under, so allow either.
-    # Test the boundary: the tolerance on >= is strict, so this is whichever the FP came out as.
+    out = cm.compute()
     assert int(out["tp"]) + int(out["fp"]) == 1
     # It should be TP at exactly-0.5 to within float precision.
     assert int(out["tp"]) == 1
 
 
-def test_confusion_inner_rejects_invalid_thresholds() -> None:
+def test_confusion_rejects_invalid_thresholds() -> None:
     with pytest.raises(ValueError, match="iou_threshold"):
-        DetectionConfusionMatrixNative(iou_threshold=0.0)
+        DetectionConfusionMatrix(iou_threshold=0.0)
     with pytest.raises(ValueError, match="iou_threshold"):
-        DetectionConfusionMatrixNative(iou_threshold=1.5)
+        DetectionConfusionMatrix(iou_threshold=1.5)
     with pytest.raises(ValueError, match="score_threshold"):
-        DetectionConfusionMatrixNative(score_threshold=-0.1)
+        DetectionConfusionMatrix(score_threshold=-0.1)
     with pytest.raises(ValueError, match="score_threshold"):
-        DetectionConfusionMatrixNative(score_threshold=1.5)
+        DetectionConfusionMatrix(score_threshold=1.5)
 
 
-def test_confusion_inner_rejects_mismatched_lengths() -> None:
-    inner = DetectionConfusionMatrixNative()
+def test_confusion_rejects_mismatched_lengths() -> None:
+    cm = DetectionConfusionMatrix()
     with pytest.raises(ValueError, match="must match per-image"):
-        inner.update(
+        cm.update(
             [_pred([[0, 0, 1, 1]], [0.9], [1])],
             [_gt([[0, 0, 1, 1]], [1]), _gt([], [])],
         )
 
 
-def test_confusion_inner_update_silent_on_none_inputs() -> None:
+def test_confusion_update_silent_on_none_inputs() -> None:
     """update(None, anything) and update(anything, None) are no-ops, not errors."""
-    inner = DetectionConfusionMatrixNative()
-    inner.update(None, None)  # type: ignore[arg-type]
-    inner.update([_pred([], [], [])], None)  # type: ignore[arg-type]
-    out = inner.compute()
+    cm = DetectionConfusionMatrix()
+    cm.update(None, None)  # type: ignore[arg-type]
+    cm.update([_pred([], [], [])], None)  # type: ignore[arg-type]
+    out = cm.compute()
     assert int(out["tp"]) == 0 and int(out["fp"]) == 0 and int(out["fn"]) == 0
 
 
-def test_confusion_inner_target_without_boxes_treated_as_empty() -> None:
+def test_confusion_target_without_boxes_treated_as_empty() -> None:
     """A target dict missing 'boxes'/'labels' should be treated as empty GT, not crash."""
-    inner = DetectionConfusionMatrixNative(iou_threshold=0.5, score_threshold=0.0)
-    inner.update(
+    cm = DetectionConfusionMatrix(iou_threshold=0.5, score_threshold=0.0)
+    cm.update(
         [_pred([[0, 0, 10, 10]], [0.9], [1])],
         [{}],  # type: ignore[list-item]
     )
-    out = inner.compute()
+    out = cm.compute()
     assert int(out["tp"]) == 0 and int(out["fp"]) == 1 and int(out["fn"]) == 0
 
 
-def test_confusion_inner_handles_inputs_on_non_cpu_device_via_implicit_move() -> None:
+def test_confusion_handles_inputs_on_non_cpu_device_via_implicit_move() -> None:
     """Inputs on a non-CPU device (MPS / CUDA) must not cause a device-mismatch
     error against locally-created tensors like ``gt_matched``.
 
@@ -210,20 +197,14 @@ def test_confusion_inner_handles_inputs_on_non_cpu_device_via_implicit_move() ->
     predictions on the trainer's accelerator (MPS / CUDA) but the metric
     state is registered on CPU via ``add_state``.
     """
-    inner = DetectionConfusionMatrixNative(iou_threshold=0.5, score_threshold=0.0)
+    cm = DetectionConfusionMatrix(iou_threshold=0.5, score_threshold=0.0)
 
-    # Construct a "fake non-CPU" scenario by using a synthetic device tag.
-    # We can't always assume MPS is present in CI, so use ``meta`` as a stand-
-    # in: any non-CPU device exercises the same code path. (In practice
-    # this case fails with: "Expected all tensors to be on the same device,
-    # but found at least two devices, mps:0 and cpu!")
     if torch.backends.mps.is_available():
         device = torch.device("mps")
     elif torch.cuda.is_available():
         device = torch.device("cuda")
     else:
-        # No accelerator available; skip silently — the CPU-on-CPU path is
-        # already covered by the other tests in this file.
+        # No accelerator available; skip silently — the CPU path is covered above.
         return
 
     pred = DetectionOutput(
@@ -235,77 +216,18 @@ def test_confusion_inner_handles_inputs_on_non_cpu_device_via_implicit_move() ->
         "boxes": torch.tensor([[0.0, 0.0, 10.0, 10.0]], device=device),
         "labels": torch.tensor([1], dtype=torch.int64, device=device),
     }
-    inner.update([pred], [target])  # must not raise
-    out = inner.compute()
+    cm.update([pred], [target])  # must not raise
+    out = cm.compute()
     assert int(out["tp"]) == 1 and int(out["fp"]) == 0 and int(out["fn"]) == 0
 
 
-def test_confusion_inner_reset_clears_state() -> None:
-    inner = DetectionConfusionMatrixNative(iou_threshold=0.5, score_threshold=0.0)
-    inner.update(
+def test_confusion_reset_clears_state() -> None:
+    cm = DetectionConfusionMatrix(iou_threshold=0.5, score_threshold=0.0)
+    cm.update(
         [_pred([[0, 0, 10, 10]], [0.9], [1])],
         [_gt([[0, 0, 10, 10]], [1])],
     )
-    assert int(inner.compute()["tp"]) == 1
-    inner.reset()
-    out = inner.compute()
-    assert int(out["tp"]) == 0 and int(out["fp"]) == 0 and int(out["fn"]) == 0
-
-
-# --- DetectionConfusionMatrix wrapper --------------------------------------
-
-
-def test_confusion_matrix_surfaces_all_default_keys() -> None:
-    cm = DetectionConfusionMatrix()
-    keys = list(cm.keys())
-    for expected in DEFAULT_CONFUSION_SCALAR_KEYS:
-        assert expected in keys, f"missing surfaced key {expected!r}; got {keys!r}"
-
-
-def test_confusion_matrix_consumes_step_output_and_skips_when_predictions_none() -> None:
-    cm = DetectionConfusionMatrix(iou_threshold=0.5, score_threshold=0.0)
-    # No predictions present (training step path) — must no-op silently.
-    cm.update(_step(None), target=None)  # type: ignore[arg-type]
-    # Now feed a real step output.
-    preds = [_pred([[0, 0, 10, 10]], [0.9], [1])]
-    targets = [_gt([[0, 0, 10, 10]], [1])]
-    cm.update(_step(preds), targets)
-    computed = cm.compute()
-    assert int(computed["tp"]) == 1 and int(computed["fp"]) == 0 and int(computed["fn"]) == 0
-
-
-def test_confusion_matrix_forward_returns_dict() -> None:
-    cm = DetectionConfusionMatrix(iou_threshold=0.5, score_threshold=0.0)
-    # forward path with predictions present should populate the dict.
-    preds = [_pred([[0, 0, 10, 10]], [0.9], [1])]
-    targets = [_gt([[0, 0, 10, 10]], [1])]
-    out = cm(_step(preds), targets)
-    assert int(out["tp"]) == 1
-    # forward path with predictions=None returns empty dict (no log noise).
-    out_empty = cm(_step(None), target=None)  # type: ignore[arg-type]
-    assert out_empty == {}
-
-
-def test_confusion_matrix_prefix_propagates_to_keys() -> None:
-    cm = DetectionConfusionMatrix(prefix="det/")
-    # torchmetrics' MetricCollection prepends the prefix when iterating
-    # items() / keys() / compute() — so the surfaced names should all start
-    # with "det/" and end with one of the canonical suffixes.
-    surfaced = [str(k) for k in cm.keys()]
-    assert all(k.startswith("det/") for k in surfaced), surfaced
-    suffixes = [k[len("det/") :] for k in surfaced]
-    for expected in DEFAULT_CONFUSION_SCALAR_KEYS:
-        assert expected in suffixes, f"missing suffix {expected!r}; got {surfaced!r}"
-    # And the public prefix attribute is set so torchmetrics wires it on logging.
-    assert cm.prefix == "det/"
-
-
-def test_confusion_matrix_reset_clears_inner_state() -> None:
-    cm = DetectionConfusionMatrix(iou_threshold=0.5, score_threshold=0.0)
-    preds = [_pred([[0, 0, 10, 10]], [0.9], [1])]
-    targets = [_gt([[0, 0, 10, 10]], [1])]
-    cm.update(_step(preds), targets)
     assert int(cm.compute()["tp"]) == 1
     cm.reset()
     out = cm.compute()
-    assert int(out["tp"]) == 0
+    assert int(out["tp"]) == 0 and int(out["fp"]) == 0 and int(out["fn"]) == 0

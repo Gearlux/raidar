@@ -1,8 +1,8 @@
-"""UltralyticsSink — write a detection Flux to a native Ultralytics dataset dir.
+"""YoloSink — write a detection Flux to a native Ultralytics dataset dir.
 
 A DataFlux ``DataSink`` (``open`` / ``write(sample)`` / ``flush`` / ``close``):
 ``marainer convert`` streams a detection Flux into it via
-``DatasetProcessor(flux=…, sink=UltralyticsSink(…))``, exactly like any other
+``DatasetProcessor(flux=…, sink=YoloSink(…))``, exactly like any other
 source → ops → sink pipeline — there is no bespoke processor. Each
 :class:`dataflux.sample.Sample` is materialised to the layout
 ``YOLO.train(data=<output_dir>/data.yaml)`` natively consumes:
@@ -175,7 +175,7 @@ def _jsonable_metadata(metadata: Any) -> Any:
 
 
 @configurable
-class UltralyticsSink(Storage):
+class YoloSink(Storage):
     """DataSink that materialises one split of a detection Flux to a YOLO dataset dir.
 
     Wired as the ``sink:`` of a ``marainer.processing.DatasetProcessor`` and run
@@ -224,13 +224,13 @@ class UltralyticsSink(Storage):
         self._kept_meta: List[str] = []
         self._meta_lines: List[str] = []
 
-    def open(self) -> "UltralyticsSink":
+    def open(self) -> "YoloSink":
         if not self.class_names:
-            raise ValueError("UltralyticsSink: class_names must be a non-empty Dict[int, str].")
+            raise ValueError("YoloSink: class_names must be a non-empty Dict[int, str].")
         if not 1 <= self.jpeg_quality <= 95:
-            raise ValueError(f"UltralyticsSink: jpeg_quality must be in [1, 95]; got {self.jpeg_quality}.")
+            raise ValueError(f"YoloSink: jpeg_quality must be in [1, 95]; got {self.jpeg_quality}.")
         if self.index_padding < 1:
-            raise ValueError(f"UltralyticsSink: index_padding must be >= 1; got {self.index_padding}.")
+            raise ValueError(f"YoloSink: index_padding must be >= 1; got {self.index_padding}.")
 
         self._root = Path(self.output_dir).expanduser()
         self._images_dir = self._root / "images" / self.split
@@ -264,7 +264,7 @@ class UltralyticsSink(Storage):
         return self
 
     def write(self, sample: Sample) -> None:
-        assert self._images_dir is not None and self._labels_dir is not None, "UltralyticsSink.write before open()"
+        assert self._images_dir is not None and self._labels_dir is not None, "YoloSink.write before open()"
         idx = self._counter
         image = _to_uint8_hwc(sample.input)
         h, w = int(image.shape[0]), int(image.shape[1])
@@ -296,12 +296,12 @@ class UltralyticsSink(Storage):
         self._counter += 1
 
     def flush(self) -> None:
-        assert self._root is not None, "UltralyticsSink.flush before open()"
+        assert self._root is not None, "YoloSink.flush before open()"
         if self.write_coco:
             ann_dir = self._root / "annotations"
             ann_dir.mkdir(parents=True, exist_ok=True)
             payload = {
-                "info": {"description": "UltralyticsSink COCO sidecar", "split": self.split},
+                "info": {"description": "YoloSink COCO sidecar", "split": self.split},
                 "images": self._coco_images,
                 "annotations": self._coco_anns,
                 "categories": [{"id": cid, "name": name} for cid, name in sorted(self._class_names_int().items())],
@@ -343,4 +343,4 @@ class UltralyticsSink(Storage):
             yaml.safe_dump(payload, fp, sort_keys=False)
 
 
-__all__ = ["UltralyticsSink"]
+__all__ = ["YoloSink"]

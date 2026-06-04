@@ -1,4 +1,4 @@
-"""Tests for :class:`raidar.ultralytics_sink.UltralyticsSink`.
+"""Tests for :class:`raidar.yolo_sink.YoloSink`.
 
 The sink is a DataFlux DataSink (open/write/flush/close) written one split at a
 time; repeated runs into the same output_dir merge data.yaml + metadata.jsonl.
@@ -17,7 +17,7 @@ from dataflux.core import Flux
 from dataflux.sample import Sample
 from PIL import Image
 
-from raidar.ultralytics_sink import UltralyticsSink, _to_uint8_hwc, _yolo_lines
+from raidar.yolo_sink import YoloSink, _to_uint8_hwc, _yolo_lines
 
 
 def _make_sample(
@@ -37,8 +37,8 @@ def _make_sample(
 def _convert(
     flux: Any, out: Path, *, split: Literal["train", "val", "test"] = "train", class_names: Any = None, **kwargs: Any
 ) -> None:
-    """Stream a flux into an UltralyticsSink exactly as DatasetProcessor would."""
-    sink = UltralyticsSink(
+    """Stream a flux into a YoloSink exactly as DatasetProcessor would."""
+    sink = YoloSink(
         output_dir=str(out),
         class_names=class_names or {0: "background", 1: "drone-signal"},
         split=split,
@@ -185,12 +185,12 @@ def test_three_splits_accumulate(tmp_path: Path) -> None:
 
 
 def test_zero_arg_construction_then_requires_class_names() -> None:
-    sink = UltralyticsSink()  # zero-arg construction must work (lazy convention)
+    sink = YoloSink()  # zero-arg construction must work (lazy convention)
     with pytest.raises(ValueError, match="class_names"):
         sink.open()
 
 
 def test_rejects_invalid_jpeg_quality_on_open(tmp_path: Path) -> None:
-    sink = UltralyticsSink(output_dir=str(tmp_path), class_names={1: "x"}, jpeg_quality=120)
+    sink = YoloSink(output_dir=str(tmp_path), class_names={1: "x"}, jpeg_quality=120)
     with pytest.raises(ValueError, match="jpeg_quality"):
         sink.open()
