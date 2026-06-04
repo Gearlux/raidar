@@ -6,12 +6,13 @@
 # and a raw `torchmetrics.detection.MeanAveragePrecision` directly. No raidar
 # adapter layer between trainer and loss/metric.
 #
+# This is the ONLY detection path — the marainer-generic adapter layer
+# (DetectionStepOutput / TorchvisionDetectionLoss / DetectionMetricAdapter) was
+# removed; every detector runs through LightningDetectionTrainer.
+#
 # Run:
 #   marainer detection train examples/lightning_train_native.yaml
 #   raidar train             examples/lightning_train_native.yaml
-#
-# For the marainer-generic path (DetectionStepOutput + TorchvisionDetectionLoss
-# + DetectionMetricAdapter), see `lightning_train_disk.yaml`.
 
 num_classes: 2
 
@@ -66,5 +67,5 @@ trainer: !class:raidar.lightning_trainer.LightningDetectionTrainer
   #     metrics:
   #       - !class:torchmetrics.detection.MeanAveragePrecision
   #         iou_type: bbox
-  #       - !class:raidar.detection.DetectionConfusionMatrixNative
+  #       - !class:raidar.detection.DetectionConfusionMatrix
   #         iou_threshold: 0.5

@@ -23,6 +23,8 @@ raidar = "raidar.plugin:register"
 
 [project.entry-points."confluid.configurables"]
 raidar = "raidar"
+# torchvision detection builder FUNCTIONS (lazy, role-less) — see raidar/configurables.py.
+raidar-configurables = "raidar.configurables"
 
 [project.scripts]
 raidar = "raidar.cli:main"

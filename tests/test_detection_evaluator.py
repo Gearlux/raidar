@@ -1,4 +1,9 @@
-"""Tests for LightningDetectionEvaluator."""
+"""Tests for the native :class:`raidar.evaluator.LightningDetectionEvaluator`.
+
+The evaluator overrides ``test_step`` to drive a torchvision-native detector
+(``model(images) → List[Dict]``) and a raw ``MeanAveragePrecision`` directly —
+no ``DetectionStepOutput`` / ``DetectionMetricAdapter`` layer.
+"""
 
 import json
 from typing import Any, Dict, List
@@ -7,35 +12,26 @@ import pytorch_lightning as L
 import torch
 import torch.nn as nn
 from confluid import Class
+from confluid.fluid import Class as ConfluidClass
 from dataflux.core import Flux
 from dataflux.sample import Sample
+from torch import Tensor
 from torch.utils.data import DataLoader
+from torchmetrics.detection import MeanAveragePrecision
 
-from raidar.detection import (
-    DetectionBatchInput,
-    DetectionMetricAdapter,
-    DetectionOutput,
-    DetectionStepOutput,
-    detection_collate_fn,
-)
+from raidar.detection import DetectionOutput, detection_collate_fn
 from raidar.evaluator import LightningDetectionEvaluator
 
 
 def _make_evaluator(**overrides: Any) -> LightningDetectionEvaluator:
     """Build a LightningDetectionEvaluator, applying overrides as post-construction attributes.
 
-    Mirrors the minimal-ctor pattern: only 'model', 'dataset', 'num_classes', 'experiment_name', 'run_name' are
-    constructor params; deferred slots (``loader`` / ``lightning`` / ``metrics`` /
-    ``predictions_sink`` / ``metrics_sidecar_path`` / ``class_names``) are set on
-    the instance after construction.
+    Mirrors the minimal-ctor pattern: only 'model', 'dataset', 'num_classes',
+    'experiment_name', 'run_name' are constructor params; deferred slots
+    (``loader`` / ``lightning`` / ``metrics`` / ``predictions_sink`` /
+    ``metrics_sidecar_path`` / ``class_names``) are set after construction.
     """
-    _ctor_keys = (
-        "model",
-        "dataset",
-        "num_classes",
-        "experiment_name",
-        "run_name",
-    )
+    _ctor_keys = ("model", "dataset", "num_classes", "experiment_name", "run_name")
     ctor = {k: overrides.pop(k) for k in _ctor_keys if k in overrides}
     ev = LightningDetectionEvaluator(**ctor)
     for _k, _v in overrides.items():
@@ -44,20 +40,18 @@ def _make_evaluator(**overrides: Any) -> LightningDetectionEvaluator:
 
 
 # ---------------------------------------------------------------------------
-# Helpers (mirror test_detection_trainer.py for consistency)
+# Helpers (native detector: model(images) → List[DetectionOutput])
 # ---------------------------------------------------------------------------
 
 
-class _TinyDetector(nn.Module):
+class _NativeDetector(nn.Module):
     def __init__(self) -> None:
         super().__init__()
         self.alpha = nn.Parameter(torch.tensor(1.0))
 
-    def forward(self, x: DetectionBatchInput) -> DetectionStepOutput:
-        n = len(x.images)
-        # Evaluator path always wants per-image predictions.
+    def forward(self, images: List[Tensor]) -> List[DetectionOutput]:
         preds: List[DetectionOutput] = []
-        for _ in range(n):
+        for _ in images:
             preds.append(
                 DetectionOutput(
                     boxes=torch.zeros((0, 4), dtype=torch.float32),
@@ -65,7 +59,7 @@ class _TinyDetector(nn.Module):
                     labels=torch.zeros((0,), dtype=torch.int64),
                 )
             )
-        return {"losses": None, "predictions": preds}
+        return preds
 
 
 def _make_flux(n: int = 4, size: int = 32) -> Flux:
@@ -100,34 +94,15 @@ class _RecordingSink:
 # ---------------------------------------------------------------------------
 
 
-def test_metrics_are_wired_on_construction() -> None:
-    ev = _make_evaluator(
-        model=_TinyDetector(),
-        dataset=_make_flux(4),
-        num_classes=2,
-    )
-    assert ev.metrics is not None
-    assert isinstance(ev.metrics, DetectionMetricAdapter)
-
-
-def test_metrics_have_test_prefix() -> None:
-    ev = _make_evaluator(
-        model=_TinyDetector(),
-        dataset=_make_flux(4),
-        num_classes=2,
-    )
-    keys = list(ev.metrics.keys())  # type: ignore[union-attr]
-    assert all(k.startswith("test/") for k in keys), f"Expected test/ prefix, got: {keys}"
+def test_metrics_default_to_lazy_map() -> None:
+    ev = _make_evaluator(model=_NativeDetector(), dataset=_make_flux(4), num_classes=2)
+    assert isinstance(ev.metrics, ConfluidClass)
+    assert ev.metrics.target is MeanAveragePrecision
+    assert ev.metrics.kwargs.get("iou_type") == "bbox"
 
 
 def test_default_loader_uses_detection_collate_fn() -> None:
-    from confluid.fluid import Class as ConfluidClass
-
-    ev = _make_evaluator(
-        model=_TinyDetector(),
-        dataset=_make_flux(4),
-        num_classes=2,
-    )
+    ev = _make_evaluator(model=_NativeDetector(), dataset=_make_flux(4), num_classes=2)
     assert isinstance(ev.loader, ConfluidClass)
     assert ev.loader.kwargs.get("collate_fn") is detection_collate_fn
 
@@ -140,14 +115,10 @@ def test_default_loader_uses_detection_collate_fn() -> None:
 def test_evaluator_run_writes_metrics_sidecar(tmp_path: Any) -> None:
     sidecar = tmp_path / "eval_metrics.json"
     ev = _make_evaluator(
-        model=_TinyDetector(),
+        model=_NativeDetector(),
         dataset=_make_flux(4),
         num_classes=2,
-        loader=Class(
-            DataLoader,
-            batch_size=2,
-            collate_fn=detection_collate_fn,
-        ),
+        loader=Class(DataLoader, batch_size=2, collate_fn=detection_collate_fn),
         lightning=Class(
             L.Trainer,
             accelerator="cpu",
@@ -166,10 +137,9 @@ def test_evaluator_run_writes_metrics_sidecar(tmp_path: Any) -> None:
     assert payload["experiment_name"] == "det_test_exp"
     assert "metrics" in payload
     metric_values = payload["metrics"]
-    # MAP keys map / map_50 / mar_* should all be in the sidecar.
-    assert any(k.endswith("map") for k in metric_values)
-    for v in metric_values.values():
-        assert isinstance(v, (int, float))
+    # Raw MeanAveragePrecision surfaces the `map` scalar (among map_50 / mar_* etc.).
+    assert any(str(k).endswith("map") for k in metric_values)
+    assert isinstance(metric_values["map"], (int, float))
 
 
 # ---------------------------------------------------------------------------
@@ -180,14 +150,10 @@ def test_evaluator_run_writes_metrics_sidecar(tmp_path: Any) -> None:
 def test_evaluator_writes_to_predictions_sink(tmp_path: Any) -> None:
     sink = _RecordingSink()
     ev = _make_evaluator(
-        model=_TinyDetector(),
+        model=_NativeDetector(),
         dataset=_make_flux(4),
         num_classes=2,
-        loader=Class(
-            DataLoader,
-            batch_size=2,
-            collate_fn=detection_collate_fn,
-        ),
+        loader=Class(DataLoader, batch_size=2, collate_fn=detection_collate_fn),
         predictions_sink=sink,
         lightning=Class(
             L.Trainer,
@@ -200,4 +166,7 @@ def test_evaluator_writes_to_predictions_sink(tmp_path: Any) -> None:
     )
     ev.run()
     assert sink.closed, ".close() must be invoked at end of run."
-    assert len(sink.writes) >= 1
+    assert len(sink.writes) == 4
+    for pred, meta in sink.writes:
+        assert set(pred.keys()) == {"boxes", "scores", "labels"}
+        assert isinstance(meta, dict)

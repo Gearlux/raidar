@@ -1,0 +1,62 @@
+# Train a torchvision Faster R-CNN on the **Penn-Fudan Pedestrian** database
+# (HuggingFace mirror) via `marainer train`. Penn-Fudan is the dataset from the
+# official torchvision object-detection finetuning tutorial — tiny (160 train /
+# 10 test images), ONE foreground class (pedestrian), so it trains fast and is a
+# great quick-iteration detection example.
+#
+# Penn-Fudan ships SEGMENTATION MASKS, not boxes — the torchvision tutorial derives
+# per-object boxes from the per-instance mask. `MasksToDetectionBoxesOp` does exactly
+# that: each distinct non-zero pixel value in the `instance_id` mask is one object,
+# and its tight extent becomes a box (class 1 = pedestrian, class 0 = background →
+# num_classes = 2). Mirrors sonair's flat HF config — top-level keys broadcast into
+# the trainer, the !lazy: model gets num_classes injected.
+#
+# Run:
+#   marainer train examples/train_pennfudan_hf.yaml
+#
+# Fast by default: MobileNetV3-320 Faster R-CNN (320 px). For higher accuracy swap to
+# the heavier ResNet50-FPN (800 px, slower):
+#   model: !lazy:torchvision.models.detection.fasterrcnn_resnet50_fpn
+
+trainer: !class:raidar.lightning_trainer.LightningDetectionTrainer
+  experiment_name: pennfudan_detection
+  run_name: fasterrcnn_pennfudan
+  num_classes: 2            # background + pedestrian (pinned; skips the startup derivation walk)
+
+model: !lazy:torchvision.models.detection.fasterrcnn_mobilenet_v3_large_320_fpn
+  weights_backbone: DEFAULT
+
+# -- Op chain: instance mask → detection target; PIL image → 3-channel tensor.
+detection_ops:
+  - !class:dataflux.ops.target.MasksToDetectionBoxesOp
+    label: 1                # all objects are pedestrians (class 1; 0 = background)
+    # connected: false      # default — instance_id is already a per-instance mask
+  - !class:dataflux.ops.torch.ToTensorOp
+    mode: RGB               # force 3-channel for Faster R-CNN
+    normalize: true
+
+train_set: !class:dataflux.core.Flux
+  source: !class:dataflux.sources.HuggingFaceSource
+    path: arakesh/PennFudanPedestrian-1024x512
+    split: train            # 160 images
+    input_feature: image
+    target_feature: instance_id   # the per-instance mask (pixels 1..N per pedestrian)
+  ops: !ref:detection_ops
+
+val_set: !class:dataflux.core.Flux
+  source: !class:dataflux.sources.HuggingFaceSource
+    path: arakesh/PennFudanPedestrian-1024x512
+    split: test             # 10 images (Penn-Fudan ships train / test)
+    input_feature: image
+    target_feature: instance_id
+  ops: !ref:detection_ops
+
+# -- Ergonomic flat knobs (broadcast into the trainer ctor) ----------------
+# SPEED: the per-step cost is the detector heads/backbone, NOT the image size —
+# torchvision re-resizes every image to the model's fixed 320 px, so shrinking the
+# dataset doesn't help (and the MobileNet-320 preset is already the fast one). The
+# real lever is doing fewer steps: lower max_epochs for a quick look (a tiny dataset
+# demos in 1-2 epochs), and run on MPS/GPU (accelerator defaults to auto).
+batch_size: 2
+num_workers: 4
+max_epochs: 3

@@ -18,9 +18,6 @@ flow through naturally.
 Image preprocessing: assumes all images are already
 ``[3, resolution, resolution]`` in ``[0, 1]`` float range. ImageNet
 normalisation is applied internally.
-
-Marainer-generic flow (``DetectionStepOutput`` + ``compute_val_loss``) lives
-in :mod:`raidar.rfdetr_marainer`.
 """
 
 from types import SimpleNamespace
@@ -30,10 +27,9 @@ import torch
 import torch.nn as nn
 from confluid import configurable
 from logflow import get_logger
+from marainer.checkpoint import load_lightning_checkpoint
 from marainer.outputs import DetectionOutput
 from torch import Tensor
-
-from raidar.checkpoint import load_lightning_checkpoint
 
 logger = get_logger(__name__)
 

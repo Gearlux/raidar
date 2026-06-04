@@ -1,8 +1,8 @@
 """Tests for :class:`raidar.rfdetr.RFDETRModel` (torchvision-native).
 
 The native model returns a loss dict in train mode and a per-image
-predictions list in eval mode. The marainer-generic wrapper is exercised in
-:mod:`tests.test_rfdetr_marainer`.
+predictions list in eval mode — the only detection path (the marainer-generic
+adapter wrappers were removed).
 """
 
 from typing import Dict, List
