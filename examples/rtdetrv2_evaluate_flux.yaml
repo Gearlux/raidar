@@ -1,0 +1,35 @@
+# Evaluate a trained RT-DETRv2 checkpoint over a DataFlux pipeline (IN-MEMORY) via
+# raidar's generic Lightning detection evaluator (mAP through torchmetrics).
+#
+# Run:
+#   raidar evaluate examples/rtdetrv2_evaluate_flux.yaml
+#   marainer evaluate examples/rtdetrv2_evaluate_flux.yaml
+#
+# num_classes is MODEL-DRIVEN: the evaluator reads it off the live model's head
+# (no evaluator num_classes knob). The model loads its OWN checkpoint via
+# `checkpoint_path` — set it to the .ckpt your training run wrote. `variant` /
+# `num_classes` MUST match the trained run. Labels are 0-indexed — `label_offset: 0`.
+
+evaluator: !class:raidar.evaluator.LightningDetectionEvaluator
+  experiment_name: cppe5_rtdetrv2_eval
+  model: !class:raidar.hf_detection.RTDETRv2Model
+    variant: r50vd
+    num_classes: 5                                  # must match the trained run
+    image_size: 640
+    checkpoint_path: ./lightning_logs/version_0/checkpoints/last.ckpt   # set me
+  dataset: !ref:val_set
+  metrics_sidecar_path: ./runs/rtdetrv2_cppe5/eval_metrics.json
+
+val_set: !class:dataflux.core.Flux
+  source: !class:dataflux.sources.HuggingFaceSource
+    path: cppe-5
+    split: test
+    input_feature: image
+    target_feature: objects
+  ops:
+    - !class:dataflux.ops.target.CocoToTorchVisionDetectionOp
+      bbox_format: xywh
+      label_offset: 0      # HF detectors are 0-indexed (no background)
+    - !class:dataflux.ops.torch.ToTensorOp
+      mode: RGB
+      normalize: true

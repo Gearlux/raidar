@@ -1,0 +1,52 @@
+# Train RF-DETR on the HuggingFace **cppe-5** detection dataset via its OWN native
+# PyTorch-Lightning loop — fed IN-MEMORY from a DataFlux pipeline (NO disk
+# materialization). cppe-5 = 1000 medical-PPE images, 5 classes, COCO-format boxes.
+#
+# Run:
+#   raidar-rfdetr train examples/rfdetr_train_flux.yaml
+#   marainer rfdetr-train examples/rfdetr_train_flux.yaml
+#
+# This is the RF-DETR analogue of train_fasterrcnn_cppe5_hf.yaml, but it drives
+# RF-DETR's NATIVE trainer (RFDETRModelModule / RFDETRDataModule / build_trainer —
+# COCO-mAP eval, EMA, best-checkpoint saving) instead of marainer's generic loop.
+# Hard deps: `pip install 'rfdetr[train,loggers]' faster-coco-eval`.
+#
+# ⚠️ 0-INDEXED LABELS. RF-DETR reserves the background class at index K (= num_classes),
+# the OPPOSITE of torchvision's background-at-0. So `label_offset: 0` (NOT 1) and
+# `num_classes: 5` (the 5 foreground classes — RF-DETR adds the +1 background slot
+# internally). class_names is the 0-indexed id → name map.
+#
+# RF-DETR's in-memory dataset takes the PIL image straight from the HF source (it
+# applies its own resize + ImageNet-normalize), so the op chain only shapes the
+# TARGET — no ToTensorOp needed.
+
+trainer: !class:raidar.rfdetr_trainer.RFDETRTrainer
+  experiment_name: cppe5_rfdetr
+  variant: small             # nano | small | medium | large (Apache-2.0 core)
+  num_classes: 5             # 5 FOREGROUND classes (RF-DETR adds background at index 5)
+  class_names: { 0: Coverall, 1: Face_Shield, 2: Gloves, 3: Goggles, 4: Mask }
+  epochs: 20
+  batch_size: 4
+  output_dir: ./runs/rfdetr_cppe5
+  metrics_output_path: ./runs/rfdetr_cppe5/metrics.json
+  train_set: !class:dataflux.core.Flux
+    source: !class:dataflux.sources.HuggingFaceSource
+      path: cppe-5
+      split: train
+      input_feature: image
+      target_feature: objects
+      # count: 100           # uncomment to cap samples for a quick smoke run
+    ops:
+      - !class:dataflux.ops.target.CocoToTorchVisionDetectionOp
+        bbox_format: xywh    # cppe-5 boxes are COCO [x, y, w, h]
+        label_offset: 0      # RF-DETR is 0-indexed (background at K) — do NOT +1
+  val_set: !class:dataflux.core.Flux
+    source: !class:dataflux.sources.HuggingFaceSource
+      path: cppe-5
+      split: test            # cppe-5 ships train / test (no validation split)
+      input_feature: image
+      target_feature: objects
+    ops:
+      - !class:dataflux.ops.target.CocoToTorchVisionDetectionOp
+        bbox_format: xywh
+        label_offset: 0

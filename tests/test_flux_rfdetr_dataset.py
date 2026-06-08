@@ -1,0 +1,194 @@
+"""Tests for the in-memory RF-DETR dataset bridge (``raidar.flux_rfdetr_dataset``).
+
+The Flux dataset feeds RF-DETR's native PTL stack with NO disk materialization,
+mirroring the per-item contract the disk ``CocoDetection`` produces: a
+``([C,H,W] float32 ImageNet-normalized, target)`` pair with cxcywh-normalized,
+0-indexed-label targets. ``rfdetr[train]`` extras are required, so the whole
+module skips when they're absent.
+"""
+
+from typing import Any
+
+import pytest
+
+pytest.importorskip("rfdetr.training")  # the [train,loggers] extras
+
+import torch  # noqa: E402
+from dataflux.core import Flux  # noqa: E402
+from dataflux.sample import Sample  # noqa: E402
+from rfdetr.config import RFDETRNanoConfig, TrainConfig  # noqa: E402
+
+import raidar.flux_rfdetr_dataset as frd  # noqa: E402
+from raidar.flux_rfdetr_dataset import FluxRFDETRDataModule, FluxRFDETRDataset  # noqa: E402
+
+
+def _flux(n: int = 4, *, h: int = 40, w: int = 60, empty: bool = False) -> Flux:
+    samples = []
+    for i in range(n):
+        if empty:
+            target = {"boxes": torch.zeros((0, 4), dtype=torch.float32), "labels": torch.zeros((0,), dtype=torch.int64)}
+        else:
+            target = {"boxes": torch.tensor([[4.0, 4.0, 20.0, 24.0]]), "labels": torch.tensor([1])}
+        samples.append(Sample(input=torch.rand(3, h, w), target=target, metadata={"idx": i}))
+    return Flux(source=samples)
+
+
+def _val_dataset(flux: Flux, resolution: int = 256) -> FluxRFDETRDataset:
+    # square_resize_div_64 path (RF-DETR's default); a plain namespace stands in for build_namespace.
+    from types import SimpleNamespace
+
+    ns = SimpleNamespace(
+        square_resize_div_64=True,
+        multi_scale=False,
+        expanded_scales=False,
+        do_random_resize_via_padding=False,
+        patch_size=16,
+        num_windows=4,
+        aug_config=None,
+    )
+    return FluxRFDETRDataset(flux, "val", resolution, ns)
+
+
+# ---------------------------------------------------------------------------
+# Per-item contract
+# ---------------------------------------------------------------------------
+
+
+def test_item_contract() -> None:
+    ds = _val_dataset(_flux(2, h=40, w=60), resolution=256)
+    img, target = ds[0]
+    assert isinstance(img, torch.Tensor) and img.dtype == torch.float32 and img.shape[0] == 3
+    # ImageNet-normalize ran → values escape [0,1].
+    assert float(img.min()) < 0.0 < 1.0 < float(img.max())
+    assert set(target) == {"boxes", "labels", "image_id", "area", "iscrowd", "orig_size", "size"}
+    boxes = target["boxes"]
+    assert boxes.shape == (1, 4) and boxes.dtype == torch.float32
+    # cxcywh normalized to [0, 1].
+    assert float(boxes.min()) >= 0.0 and float(boxes.max()) <= 1.0
+    assert target["labels"].dtype == torch.int64 and target["labels"].tolist() == [1]
+    assert target["orig_size"].tolist() == [40, 60]  # [H, W]
+
+
+def test_labels_stay_zero_indexed_below_num_classes() -> None:
+    # RF-DETR labels are 0-indexed 0..K-1 (background at K); the dataset must not shift them.
+    ds = _val_dataset(_flux(1), resolution=256)
+    _, target = ds[0]
+    assert int(target["labels"].max()) < 2  # num_classes=2 → labels in {0, 1}
+
+
+def test_empty_target_sample() -> None:
+    ds = _val_dataset(_flux(1, empty=True), resolution=256)
+    img, target = ds[0]
+    assert img.shape[0] == 3
+    assert target["boxes"].shape == (0, 4)
+    assert target["labels"].tolist() == []
+
+
+def test_len_matches_flux() -> None:
+    ds = _val_dataset(_flux(5), resolution=256)
+    assert len(ds) == 5
+
+
+# ---------------------------------------------------------------------------
+# Projection-optimized label cache (no image decode at construction)
+# ---------------------------------------------------------------------------
+
+
+def test_labels_cached_via_projection_without_image_decode(monkeypatch: Any) -> None:
+    flux = _flux(4)
+
+    # Spy: image decode must NOT fire while caching labels (only per __getitem__).
+    decode_calls = {"n": 0}
+    real_decode = frd._sample_input_to_rgb_pil
+
+    def _counting_decode(arr: Any) -> Any:
+        decode_calls["n"] += 1
+        return real_decode(arr)
+
+    monkeypatch.setattr(frd, "_sample_input_to_rgb_pil", _counting_decode)
+
+    # Spy: labels are cached via the target-only projection helper.
+    projection_calls = {"n": 0}
+    real_iter_targets = frd.iter_targets
+
+    def _counting_iter_targets(src: Any) -> Any:
+        projection_calls["n"] += 1
+        return real_iter_targets(src)
+
+    monkeypatch.setattr(frd, "iter_targets", _counting_iter_targets)
+
+    ds = _val_dataset(flux, resolution=256)
+    assert projection_calls["n"] == 1, "labels must be cached via iter_targets (target-only projection)"
+    assert decode_calls["n"] == 0, "no image should be decoded while caching labels"
+    assert len(ds._labels) == 4
+
+    _ = ds[0]  # now an image IS decoded
+    assert decode_calls["n"] == 1
+
+
+# ---------------------------------------------------------------------------
+# DataModule injection (no disk build_dataset)
+# ---------------------------------------------------------------------------
+
+
+def _configs(num_classes: int = 2) -> Any:
+    return RFDETRNanoConfig(num_classes=num_classes), TrainConfig(dataset_dir=".", batch_size=2, num_workers=0)
+
+
+def test_datamodule_injects_flux_dataset_and_never_builds_from_disk(monkeypatch: Any) -> None:
+    import rfdetr.training.module_data as md
+
+    def _boom(*_a: Any, **_k: Any) -> Any:
+        raise AssertionError("build_dataset must NOT be called in flux mode")
+
+    monkeypatch.setattr(md, "build_dataset", _boom)
+
+    mc, tc = _configs()
+    dm = FluxRFDETRDataModule(mc, tc, train_flux=_flux(4), val_flux=_flux(2), class_names=["cat", "dog"])
+    dm.setup("fit")
+    assert isinstance(dm._dataset_train, FluxRFDETRDataset) and len(dm._dataset_train) == 4
+    assert isinstance(dm._dataset_val, FluxRFDETRDataset)
+
+
+def test_datamodule_class_names_override_without_coco() -> None:
+    mc, tc = _configs()
+    dm = FluxRFDETRDataModule(mc, tc, train_flux=_flux(4), val_flux=_flux(2), class_names=["cat", "dog"])
+    dm.setup("fit")
+    # No `.coco` attribute on the in-memory dataset; class_names comes from the knob.
+    assert getattr(dm._dataset_train, "coco", None) is None
+    assert dm.class_names == ["cat", "dog"]
+
+
+def test_datamodule_dataloader_yields_nested_tensor_batch() -> None:
+    mc, tc = _configs()
+    dm = FluxRFDETRDataModule(mc, tc, train_flux=_flux(4), val_flux=_flux(2), class_names=["cat", "dog"])
+    dm.setup("fit")
+    samples, targets = next(iter(dm.train_dataloader()))
+    # RF-DETR's collate builds a NestedTensor (.tensors [B,C,H,W], .mask) + a list of targets.
+    assert hasattr(samples, "tensors") and samples.tensors.ndim == 4
+    assert isinstance(targets, (list, tuple)) and len(targets) == 2
+    assert set(targets[0]) >= {"boxes", "labels", "orig_size"}
+
+
+def test_datamodule_test_falls_back_to_val() -> None:
+    mc, tc = _configs()
+    dm = FluxRFDETRDataModule(mc, tc, train_flux=_flux(4), val_flux=_flux(2), class_names=["cat", "dog"])
+    dm.setup("test")
+    assert isinstance(dm._dataset_test, FluxRFDETRDataset)
+
+
+# ---------------------------------------------------------------------------
+# Image normalization helper
+# ---------------------------------------------------------------------------
+
+
+def test_sample_input_variants_to_rgb_pil() -> None:
+    import numpy as np
+    from PIL import Image
+
+    chw = frd._sample_input_to_rgb_pil(torch.rand(3, 8, 10))
+    assert isinstance(chw, Image.Image) and chw.mode == "RGB" and chw.size == (10, 8)  # (W, H)
+    hw_gray = frd._sample_input_to_rgb_pil(np.zeros((8, 10), dtype=np.uint8))
+    assert hw_gray.mode == "RGB" and hw_gray.size == (10, 8)
+    pil_in = frd._sample_input_to_rgb_pil(Image.new("L", (10, 8)))
+    assert pil_in.mode == "RGB"

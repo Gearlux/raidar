@@ -13,12 +13,35 @@ from raidar.rfdetr import RFDETRModel
 
 
 def test_detection_models_tagged() -> None:
+    from raidar.hf_detection import DFINEModel, HFDetectionModel, RTDETRv2Model
+
     assert RFDETRModel.__confluid_category__ == "detection_model"
+    # The Hugging Face transformers wrappers (D-FINE / RT-DETRv2 — Apache-2.0, core)
+    # share the same detection_model tag so navigaitor's picker offers them.
+    assert HFDetectionModel.__confluid_category__ == "detection_model"
+    assert DFINEModel.__confluid_category__ == "detection_model"
+    assert RTDETRv2Model.__confluid_category__ == "detection_model"
 
 
 def test_categories_enumerable_via_registry() -> None:
     registry = get_registry()
-    assert "RFDETRModel" in registry.list_classes(category="detection_model")
+    listed = registry.list_classes(category="detection_model")
+    assert "RFDETRModel" in listed
+    assert {"HFDetectionModel", "DFINEModel", "RTDETRv2Model"} <= set(listed)
+
+
+def test_hf_detection_models_task_role_tagged() -> None:
+    """D-FINE / RT-DETRv2 are task='detection', role='model' so they appear in
+    navigaitor's model picker beside RFDETRModel and the torchvision builders."""
+    from raidar.hf_detection import DFINEModel, HFDetectionModel, RTDETRv2Model
+
+    assert HFDetectionModel.__confluid_task__ == "detection"
+    assert HFDetectionModel.__confluid_role__ == "model"
+    assert DFINEModel.__confluid_task__ == "detection" and DFINEModel.__confluid_role__ == "model"
+    assert RTDETRv2Model.__confluid_task__ == "detection" and RTDETRv2Model.__confluid_role__ == "model"
+    registry = get_registry()
+    models = registry.list_classes(task="detection", role="model")
+    assert {"DFINEModel", "RTDETRv2Model"} <= set(models)
 
 
 def test_task_role_tags() -> None:
@@ -34,6 +57,22 @@ def test_task_role_tags() -> None:
     registry = get_registry()
     assert "RFDETRModel" in registry.list_classes(task="detection", role="model")
     assert "LightningDetectionTrainer" in registry.list_classes(task="detection", role="trainer")
+
+
+def test_detection_is_a_multi_trainer_task() -> None:
+    """The native RF-DETR trainer/evaluator are tagged for detection ALONGSIDE the
+    Lightning pair, so navigaitor can navigate multiple trainers per task."""
+    from raidar.rfdetr_trainer import RFDETREvaluator, RFDETRTrainer
+
+    assert RFDETRTrainer.__confluid_task__ == "detection" and RFDETRTrainer.__confluid_role__ == "trainer"
+    assert RFDETREvaluator.__confluid_task__ == "detection" and RFDETREvaluator.__confluid_role__ == "evaluator"
+
+    registry = get_registry()
+    trainers = registry.list_classes(task="detection", role="trainer")
+    evaluators = registry.list_classes(task="detection", role="evaluator")
+    # BOTH detection trainers/evaluators are discoverable (was a single-trainer assumption).
+    assert {"LightningDetectionTrainer", "RFDETRTrainer"} <= set(trainers)
+    assert {"LightningDetectionEvaluator", "RFDETREvaluator"} <= set(evaluators)
 
 
 # torchvision detection BUILDER FUNCTIONS registered by raidar.configurables.
