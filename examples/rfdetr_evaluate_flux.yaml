@@ -1,0 +1,29 @@
+# Evaluate a trained RF-DETR checkpoint over a DataFlux pipeline (IN-MEMORY, no disk)
+# via RF-DETR's native validation loop (COCO-mAP through its COCOEvalCallback).
+#
+# Run:
+#   raidar-rfdetr evaluate examples/rfdetr_evaluate_flux.yaml
+#   marainer rfdetr-evaluate examples/rfdetr_evaluate_flux.yaml
+#
+# The evaluator loads the checkpoint via RF-DETR's own weight loader, so `variant`
+# and `num_classes` MUST match the trained run. Labels are 0-indexed (see the train
+# example) — `label_offset: 0`.
+
+evaluator: !class:raidar.rfdetr_trainer.RFDETREvaluator
+  experiment_name: cppe5_rfdetr_eval
+  weights: ./runs/rfdetr_cppe5/checkpoint_best_total.pth   # the trained checkpoint
+  variant: small
+  num_classes: 5
+  class_names: { 0: Coverall, 1: Face_Shield, 2: Gloves, 3: Goggles, 4: Mask }
+  batch_size: 4
+  metrics_output_path: ./runs/rfdetr_cppe5/eval_metrics.json
+  val_set: !class:dataflux.core.Flux
+    source: !class:dataflux.sources.HuggingFaceSource
+      path: cppe-5
+      split: test
+      input_feature: image
+      target_feature: objects
+    ops:
+      - !class:dataflux.ops.target.CocoToTorchVisionDetectionOp
+        bbox_format: xywh
+        label_offset: 0      # RF-DETR is 0-indexed (background at K)

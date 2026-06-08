@@ -1,0 +1,71 @@
+# Train D-FINE (Hugging Face transformers, Apache-2.0) on the HuggingFace **cppe-5**
+# detection dataset, fed IN-MEMORY from a DataFlux pipeline, via raidar's generic
+# Lightning detection loop. cppe-5 = 1000 medical-PPE images, 5 classes, COCO boxes.
+#
+# D-FINE is a permissively-licensed, well-maintained real-time DETR — a drop-in
+# alternative to the AGPL ultralytics YOLO family. It ships straight from the
+# installed `transformers`, so no extra/unmaintained dependency is needed (unlike
+# Megvii YOLOX, whose upstream is frozen at py<=3.11 / torch 1.x).
+#
+# Run:
+#   raidar train examples/dfine_train_flux.yaml
+#   marainer train examples/dfine_train_flux.yaml
+#
+# ⚠️ 0-INDEXED LABELS. HF detectors (like RF-DETR) use class ids 0..K-1 with NO
+# background class — the OPPOSITE of torchvision's background-at-0. So
+# `label_offset: 0` (NOT 1) and `num_classes: 5` (the 5 foreground classes).
+#
+# The DFINEModel wrapper resizes images to a square `image_size` internally and
+# expects [0,1] pixels (the HF processor uses do_normalize=False), so the op chain
+# is just CocoToTorchVisionDetectionOp + ToTensorOp(normalize=true) — same as the
+# torchvision Faster R-CNN example, only `label_offset` differs.
+
+trainer: !class:raidar.lightning_trainer.LightningDetectionTrainer
+  experiment_name: cppe5_dfine
+  run_name: dfine_small_cppe5
+  # 5 FOREGROUND classes (0..4). Pinned so initialize() skips the startup walk and
+  # injects it into the !lazy: model below (HuggingFaceSource has no target-only
+  # projection, so deriving max(label)+1 would decode every train image).
+  num_classes: 5
+
+# -- Model: D-FINE wired !lazy: so initialize() injects num_classes at run time.
+# variant: nano | small | medium | large | xlarge. Use `variant: nano` for a faster
+# smoke run.
+model: !lazy:raidar.hf_detection.DFINEModel
+  variant: small
+  image_size: 640          # square side (multiple of 32); D-FINE trains at 640
+
+# -- Shared op chain: HF `objects` annotation → detection target; PIL image → [0,1] tensor.
+detection_ops:
+  - !class:dataflux.ops.target.CocoToTorchVisionDetectionOp
+    bbox_format: xywh        # cppe-5 boxes are COCO [x, y, w, h]
+    label_offset: 0          # HF detectors are 0-indexed (no background) — do NOT +1
+  - !class:dataflux.ops.torch.ToTensorOp
+    mode: RGB                # cppe-5 mixes RGB/RGBA/grayscale — force 3-channel
+    normalize: true          # [0,255] → [0,1] (HF processor is do_normalize=False)
+
+train_set: !class:dataflux.core.Flux
+  source: !class:dataflux.sources.HuggingFaceSource
+    path: cppe-5
+    split: train
+    input_feature: image
+    target_feature: objects
+    # count: 100             # uncomment to cap samples for a quick smoke run
+  ops: !ref:detection_ops
+
+val_set: !class:dataflux.core.Flux
+  source: !class:dataflux.sources.HuggingFaceSource
+    path: cppe-5
+    split: test               # cppe-5 ships train / test (no validation split)
+    input_feature: image
+    target_feature: objects
+  ops: !ref:detection_ops
+
+# -- Ergonomic flat knobs (broadcast into the trainer ctor) ----------------
+batch_size: 2
+num_workers: 4
+max_epochs: 10
+# val_metrics defaults to MeanAveragePrecision(iou_type="bbox"); checkpoints land
+# under Lightning's default logs dir. To also track TP/FP/FN, set val_metrics to a
+# torchmetrics.MetricCollection of MeanAveragePrecision +
+# raidar.detection.DetectionConfusionMatrix (see lightning_train_native.yaml).

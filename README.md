@@ -2,8 +2,9 @@
 
 Object-detection models and trainers for the [Marainer](https://github.com/Gearlux/marainer) training framework.
 
-Raidar drives torchvision-native detectors — torchvision (Faster R-CNN) and
-Roboflow's RF-DETR — through a **single specialised path**: the
+Raidar drives torchvision-native detectors — torchvision (Faster R-CNN),
+Roboflow's RF-DETR, and the Hugging Face transformers real-time detectors
+(D-FINE, RT-DETRv2) — through a **single specialised path**: the
 `LightningDetectionTrainer` / `LightningDetectionEvaluator` (subclasses of
 marainer's base) **override** the step functions and talk to native detection
 models and raw `torchmetrics` metrics directly. There is **no** adapter layer
@@ -115,12 +116,37 @@ A full flat HuggingFace example is
 [`examples/train_fasterrcnn_cppe5_hf.yaml`](examples/train_fasterrcnn_cppe5_hf.yaml)
 (cppe-5 — the "MNIST of object detection").
 
+### Evaluation — model-driven `num_classes` (no evaluator knob)
+
+`LightningDetectionEvaluator` mirrors `sonair.LightningClassificationEvaluator`:
+it has **no** `num_classes` constructor argument. Its `initialize()` hook (run at
+the top of `run()`, before the base eval loop) **flows the model first** and reads
+`num_classes` straight off the live trained model — the model loaded its own
+checkpoint, so its head is the single source of truth (not the eval dataset, which
+may be a subset). The read is *best-effort*: the default `MeanAveragePrecision` is
+class-count-agnostic, so a detector that doesn't expose its count just leaves
+`num_classes` unset without erroring. `initialize()` also normalizes the wired
+dataset to a `Dataset[Sample]` via marainer's `ensure_sample_dataset`.
+
+```yaml
+# No num_classes on the evaluator — read off the trained model (which carries it).
+evaluator: !class:raidar.evaluator.LightningDetectionEvaluator
+  model: !class:raidar.rfdetr.RFDETRModel
+    num_classes: 2                             # the model carries the count
+    checkpoint_path: ./checkpoints/last.ckpt   # the model loads itself
+  dataset: !ref:eval_set
+  metrics_sidecar_path: ./eval_metrics.json    # optional logger-agnostic dump
+```
+
 ### Detector catalogue
 
 | Model | Notes |
 |---|---|
 | `torchvision.models.detection.fasterrcnn_*` / `retinanet_*` / `fcos_*` / `ssd*` | Used **raw** — conform to the native forward contract directly, no raidar wrapper. **Registered** as `detection_model` (see *Registered builders* below). |
 | `raidar.rfdetr.RFDETRModel` | Roboflow's RF-DETR family (native torchvision-style forward). |
+| `raidar.hf_detection.DFINEModel` | D-FINE (Apache-2.0) via Hugging Face `transformers` — real-time DETR, `variant` ∈ nano/small/medium/large/xlarge. |
+| `raidar.hf_detection.RTDETRv2Model` | RT-DETRv2 (Apache-2.0) via `transformers` — NMS-free real-time DETR, `variant` ∈ r18vd/r34vd/r50vd/r101vd. |
+| `raidar.hf_detection.HFDetectionModel` | Generic wrapper around **any** `transformers` object-detection checkpoint by `model_id` (DETR, Deformable-DETR, YOLOS, …). |
 
 The Ultralytics-backed YOLO26 + RT-DETR native models — plus the native
 ultralytics trainer/evaluator (mosaic + albumentations + Ultralytics
@@ -167,14 +193,119 @@ Mask R-CNN / Keypoint R-CNN are intentionally **not** registered — they need
 instance-mask / keypoint targets, not the `{boxes, labels}` shape
 `detection_collate_fn` produces.
 
+## Native RF-DETR (Apache-2.0)
+
+Two detection training paths ship in core raidar:
+
+- the **generic Lightning path** above (`raidar train`, `LightningDetectionTrainer`),
+  which drives bare torchvision-native models through marainer's loop; and
+- the **native RF-DETR path** (`raidar-rfdetr train`, `RFDETRTrainer`), which hands
+  off to RF-DETR's **own** PyTorch-Lightning recipe — COCO-mAP eval, EMA,
+  best-checkpoint saving, LR schedule. It's the in-core analogue of
+  `raidar-ultralytics`'s `UltralyticsTrainer`; RF-DETR is Apache-2.0 so (unlike
+  AGPL ultralytics) it needs no sibling package.
+
+`RFDETRTrainer` / `RFDETREvaluator` are tagged `@configurable(task="detection",
+role=…)`, so navigaitor lists them **alongside** the Lightning pair (detection is a
+multi-trainer task — pick either). Hard deps: `pip install 'rfdetr[train,loggers]'`
++ `faster-coco-eval` (RF-DETR's mAP backend).
+
+Two input modes (mutually exclusive), mirroring `UltralyticsTrainer`:
+
+```yaml
+# Disk mode — a COCO/YOLO/Roboflow dataset directory → RF-DETR's native .train()
+trainer: !class:raidar.rfdetr_trainer.RFDETRTrainer
+  data: /data/my_coco_dataset      # dir with train/ valid/ + _annotations.coco.json
+  dataset_file: roboflow
+  variant: small                   # nano | small | medium | large
+  epochs: 50
+  batch_size: 4
+  output_dir: ./runs/rfdetr_small
+```
+
+```yaml
+# Flux mode — a DataFlux pipeline, fed IN-MEMORY (no disk materialization)
+num_classes: 6                     # K foreground classes; labels are 0-indexed 0..K-1
+trainer: !class:raidar.rfdetr_trainer.RFDETRTrainer
+  variant: small
+  num_classes: !ref:num_classes
+  class_names: {0: coverall, 1: face_shield, 2: gloves, 3: goggles, 4: mask, 5: apron}
+  train_set: !ref:train_set        # any dataflux Flux yielding {boxes xyxy-px, labels}
+  val_set: !ref:val_set
+  epochs: 50
+  batch_size: 4
+```
+
+> ⚠️ **0-indexed labels.** RF-DETR reserves the background class at index `K`, the
+> **opposite** of torchvision's background-at-0. Wire a 0-indexed target op
+> (`CocoToTorchVisionDetectionOp(label_offset=0)`), **not** the `+1` shift the
+> Faster R-CNN example uses.
+
+`raidar-rfdetr evaluate` (or `marainer rfdetr-evaluate`) runs RF-DETR's native
+validation/test loop over a trained checkpoint (`weights:`). See
+`examples/rfdetr_train_disk.yaml`, `examples/rfdetr_train_flux.yaml`,
+`examples/rfdetr_evaluate_flux.yaml`.
+
+## Hugging Face detectors — D-FINE / RT-DETRv2 (Apache-2.0)
+
+`raidar.hf_detection` wraps Hugging Face `transformers` object detectors into the
+native forward contract, so they run through the **generic Lightning path** above
+(`raidar train` / `raidar evaluate`) with no bespoke trainer — exactly like a
+torchvision builder or `YOLO26Model`. Both shipped presets are **Apache-2.0** (so
+they live in raidar *core*, unlike the AGPL ultralytics family) and come straight
+from the installed `transformers` — no extra/unmaintained dependency:
+
+- **`DFINEModel`** — D-FINE (2024), `variant` ∈ `nano`/`small`/`medium`/`large`/`xlarge`.
+- **`RTDETRv2Model`** — RT-DETRv2 ("DETRs Beat YOLOs"), `variant` ∈ `r18vd`/`r34vd`/`r50vd`/`r101vd`.
+- **`HFDetectionModel`** — the generic base; point `model_id` at any HF object-detection checkpoint.
+
+```yaml
+trainer: !class:raidar.lightning_trainer.LightningDetectionTrainer
+  num_classes: 5                         # K foreground classes; injected into the !lazy: model
+model: !lazy:raidar.hf_detection.DFINEModel
+  variant: small
+  image_size: 640                        # square side, multiple of 32 (these models train at 640)
+detection_ops:
+  - !class:dataflux.ops.target.CocoToTorchVisionDetectionOp
+    bbox_format: xywh
+    label_offset: 0                      # ⚠️ HF detectors are 0-indexed — do NOT +1
+  - !class:dataflux.ops.torch.ToTensorOp
+    mode: RGB
+    normalize: true                      # [0,255] → [0,1]; HF processor is do_normalize=False
+train_set: { ... }                       # any dataflux Flux yielding {boxes xyxy-px, labels}
+val_set:   { ... }
+```
+
+> ⚠️ **0-indexed labels** (like RF-DETR, the **opposite** of torchvision's
+> background-at-0): `label_offset: 0`, `num_classes = K` foreground classes.
+
+Two convenience behaviours of the wrapper, grounded in the models' processors:
+
+* **Images are resized internally** to the square `image_size` (default 640), and
+  predictions are decoded back into each image's **original** pixel space — so the
+  same op chain as the Faster R-CNN example drops in (no detection-aware resize op).
+* **Input must be `[0, 1]`, NOT ImageNet-normalised** — the RT-DETR/D-FINE
+  processors run with `do_normalize=False`. `ToTensorOp(normalize=True)` produces
+  exactly that; do not add a `StandardizeOp`.
+
+When `num_classes != 80`, the COCO-pretrained class head is re-initialised
+(`ignore_mismatched_sizes=True`) while the backbone / encoder / decoder stay
+pretrained. Evaluate with `LightningDetectionEvaluator` (model-driven
+`num_classes`; pass the trained `.ckpt` via the model's `checkpoint_path`). See
+`examples/dfine_train_flux.yaml`, `examples/dfine_evaluate_flux.yaml`,
+`examples/rtdetrv2_train_flux.yaml`, `examples/rtdetrv2_evaluate_flux.yaml`.
+
 ## Discovery
 
 Detection `@configurable` classes carry `task`/`role` tags — `RFDETRModel`
-(`detection_model`), `LightningDetectionTrainer` (`role="trainer"`),
-`LightningDetectionEvaluator` (`role="evaluator"`) — so navigaitor's
-`list_configurable_classes(category=...)` / `list_classes(task=…, role=…)` and
-the visual-editor form-spec enumerate them by kind. The native trainer computes
-loss inside the model's `forward`, so there is no detection-loss config.
+(`detection_model`), `LightningDetectionTrainer` **and** `RFDETRTrainer`
+(`role="trainer"`), `LightningDetectionEvaluator` **and** `RFDETREvaluator`
+(`role="evaluator"`) — so navigaitor's `list_configurable_classes(category=...)` /
+`list_classes(task=…, role=…)` and the visual-editor form-spec enumerate them by
+kind. Detection is a **multi-trainer task**: `(detection, trainer)` resolves to both
+trainers, and navigaitor's `train_detection` config is a `Union` over them (pick
+either). The Lightning trainer computes loss inside the model's `forward`, so there
+is no detection-loss config.
 Discovery is automatic from the `@configurable` registry; there are no
 hand-written manifest files.
 
@@ -203,6 +334,10 @@ End-to-end YAML in `examples/`:
   Penn-Fudan ships masks not boxes, so it uses
   `dataflux.ops.target.MasksToDetectionBoxesOp` (per-instance bbox from the
   `instance_id` mask) → `ToTensorOp(mode="RGB")` → MobileNet-320 Faster R-CNN.
+- `dfine_train_flux.yaml` / `dfine_evaluate_flux.yaml` — D-FINE on cppe-5 through
+  the generic Lightning path (HF transformers, `label_offset: 0`).
+- `rtdetrv2_train_flux.yaml` / `rtdetrv2_evaluate_flux.yaml` — RT-DETRv2 on cppe-5,
+  same wiring.
 
 ## License
 

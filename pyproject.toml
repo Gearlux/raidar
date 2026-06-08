@@ -14,12 +14,27 @@ dependencies = [
     "torchmetrics[detection]",
     "pycocotools",
     "pytorch-lightning",
-    "rfdetr>=1.6.0",
+    # rfdetr[train,loggers]: the [train] extra pulls PTL + RF-DETR's native training
+    # stack (RFDETRModelModule / RFDETRDataModule / build_trainer) the native
+    # RFDETRTrainer drives; [loggers] pulls its TensorBoard/MLflow integrations.
+    "rfdetr[train,loggers]>=1.6.0",
+    # RF-DETR's COCOEvalCallback computes mAP via torchmetrics' faster_coco_eval
+    # backend; it is NOT pulled by rfdetr[train], so eval needs it explicitly.
+    "faster-coco-eval",
+    # Hugging Face transformers detectors (D-FINE / RT-DETRv2 — raidar.hf_detection),
+    # both Apache-2.0. transformers>=4.49 has DFineForObjectDetection (v4.48) +
+    # RTDetrV2ForObjectDetection (v4.49); timm backs the detection backbones; scipy
+    # provides the Hungarian matcher used in the DETR-family training loss.
+    "transformers>=4.49",
+    "timm",
+    "scipy",
 ]
 requires-python = ">=3.12"
 
 [project.entry-points."marainer.commands"]
 raidar = "raidar.plugin:register"
+# Native RF-DETR verbs (marainer rfdetr-train / rfdetr-evaluate) — see raidar/rfdetr_plugin.py.
+raidar-rfdetr = "raidar.rfdetr_plugin:register"
 
 [project.entry-points."confluid.configurables"]
 raidar = "raidar"
@@ -28,6 +43,7 @@ raidar-configurables = "raidar.configurables"
 
 [project.scripts]
 raidar = "raidar.cli:main"
+raidar-rfdetr = "raidar.rfdetr_cli:main"
 
 [project.optional-dependencies]
 dev = [
@@ -48,6 +64,9 @@ raidar = ["py.typed"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = [
+    "slow: heavy end-to-end tests (e.g. a real RF-DETR train epoch); deselect with -m 'not slow'.",
+]
 
 [tool.coverage.run]
 source = ["raidar"]

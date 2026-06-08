@@ -1,0 +1,30 @@
+# Train RF-DETR on an ON-DISK dataset directory via RF-DETR's native .train().
+# Disk mode is the simplest path — RF-DETR reads a COCO/YOLO/Roboflow-format
+# directory directly (and auto-detects num_classes from the annotations).
+#
+# Run:
+#   raidar-rfdetr train examples/rfdetr_train_disk.yaml
+#   marainer rfdetr-train examples/rfdetr_train_disk.yaml
+#
+# Hard deps: `pip install 'rfdetr[train,loggers]' faster-coco-eval`.
+#
+# Expected directory layout (`dataset_file: roboflow`, the default):
+#   <dataset_dir>/
+#     train/  _annotations.coco.json + images
+#     valid/  _annotations.coco.json + images
+#     test/   _annotations.coco.json + images   (optional)
+# Use `dataset_file: coco` for the COCO2017 layout, or `yolo` for a YOLO data.yaml tree.
+
+trainer: !class:raidar.rfdetr_trainer.RFDETRTrainer
+  experiment_name: rfdetr_disk
+  data: /data/my_roboflow_dataset    # <-- point at your dataset directory
+  dataset_file: roboflow
+  variant: small                     # nano | small | medium | large
+  pretrained: true                   # start from RF-DETR's COCO-pretrained weights
+  epochs: 50
+  batch_size: 4
+  output_dir: ./runs/rfdetr_disk
+  metrics_output_path: ./runs/rfdetr_disk/metrics.json
+  # mlflow: true                     # enable RF-DETR's native MLflow logger
+  # tensorboard: true
+  # early_stopping: true
