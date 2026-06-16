@@ -30,6 +30,16 @@ def test_categories_enumerable_via_registry() -> None:
     assert {"HFDetectionModel", "DFINEModel", "RTDETRv2Model"} <= set(listed)
 
 
+def test_yolo_sink_tagged() -> None:
+    """``YoloSink`` carries ``category="sink"`` so FluxStudio surfaces it as a ``DatasetProcessor``
+    sink node (``DATAFLUX_OBJECT:sink``) — ``marainer convert`` streams a detection Flux into it on a
+    canvas just as the YAML config does."""
+    from raidar.yolo_sink import YoloSink
+
+    assert YoloSink.__confluid_category__ == "sink"
+    assert "YoloSink" in get_registry().list_classes(category="sink")
+
+
 def test_hf_detection_models_task_role_tagged() -> None:
     """D-FINE / RT-DETRv2 are task='detection', role='model' so they appear in
     navigaitor's model picker beside RFDETRModel and the torchvision builders."""

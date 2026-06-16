@@ -174,7 +174,8 @@ def _jsonable_metadata(metadata: Any) -> Any:
     return str(metadata)
 
 
-@configurable
+# category="sink": surfaced as a FluxStudio sink node (DATAFLUX_OBJECT:sink → DatasetProcessor.sink).
+@configurable(category="sink")
 class YoloSink(Storage):
     """DataSink that materialises one split of a detection Flux to a YOLO dataset dir.
 
