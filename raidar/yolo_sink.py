@@ -151,24 +151,52 @@ def _coco_annotation_records(
     return out, next_ann_id + boxes.shape[0]
 
 
-def _jsonable_metadata(metadata: Any) -> Any:
-    """Best-effort JSON-friendly conversion of a Sample.metadata payload."""
-    if metadata is None:
-        return None
-    if isinstance(metadata, (str, int, float, bool)):
+_MAX_META_ARRAY_ELEMS = 256
+
+
+def _jsonable_metadata(metadata: Any, *, max_array_elems: int = _MAX_META_ARRAY_ELEMS) -> Any:
+    """Best-effort JSON-friendly conversion of a ``Sample.metadata`` payload — NEVER raises.
+
+    Source metadata can carry values ``json.dumps`` cannot encode: NumPy/torch arrays, **complex**
+    IQ samples, and FluxStudio's internal ``__taidal_stash_*`` snapshots (a stashed complex signal
+    from a DAG→sequential fan-out). So this:
+      * converts a ``complex`` scalar to a string (JSON has no complex type);
+      * summarises a LARGE array (> ``max_array_elems``) as ``<array shape=… dtype=…>`` — a 1.2M-element
+        complex IQ stash must not be dumped verbatim into every per-image label JSON (bloat AND the
+        un-encodable complex values that crashed the sink);
+      * lists a SMALL array element-wise and RECURSES, so nested complex / NumPy scalars from
+        ``.tolist()`` are sanitised too (the bug: the old code returned ``.tolist()`` un-recursed, so
+        a complex array became a list of Python ``complex`` that ``json.dumps`` still rejected).
+    """
+    if metadata is None or isinstance(metadata, (str, int, float, bool)):
         return metadata
+    if isinstance(metadata, complex):
+        return str(metadata)
     if isinstance(metadata, dict):
-        return {str(k): _jsonable_metadata(v) for k, v in metadata.items()}
+        return {str(k): _jsonable_metadata(v, max_array_elems=max_array_elems) for k, v in metadata.items()}
     if isinstance(metadata, (list, tuple)):
-        return [_jsonable_metadata(v) for v in metadata]
+        return [_jsonable_metadata(v, max_array_elems=max_array_elems) for v in metadata]
+    # NumPy/torch 0-d scalar → its Python value (recurse to sanitise a complex scalar).
     if hasattr(metadata, "item") and getattr(metadata, "shape", None) == ():
         try:
-            return metadata.item()
+            return _jsonable_metadata(metadata.item(), max_array_elems=max_array_elems)
+        except Exception:
+            return str(metadata)
+    shape = getattr(metadata, "shape", None)
+    if shape is not None and hasattr(metadata, "tolist"):
+        try:
+            n = int(np.prod(shape)) if len(shape) else 1
+        except Exception:
+            n = max_array_elems + 1  # unknown size → treat as large
+        if n > max_array_elems:
+            return f"<array shape={tuple(shape)} dtype={getattr(metadata, 'dtype', '?')}>"
+        try:
+            return _jsonable_metadata(metadata.tolist(), max_array_elems=max_array_elems)
         except Exception:
             return str(metadata)
     if hasattr(metadata, "tolist"):
         try:
-            return metadata.tolist()
+            return _jsonable_metadata(metadata.tolist(), max_array_elems=max_array_elems)
         except Exception:
             return str(metadata)
     return str(metadata)
