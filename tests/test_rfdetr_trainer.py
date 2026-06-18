@@ -4,7 +4,8 @@
 Unit-level: metrics-sidecar helpers, the disk/Flux XOR validation, ``run()``
 dispatch, and the evaluator's checkpoint-loading path (all mocked — no model
 build). A heavy end-to-end Flux smoke test is gated behind ``@pytest.mark.slow``
-+ ``importorskip``.
++ ``importorskip`` and trains on the best available accelerator
+(``cuda``/``mps``/``cpu``) so it is not CPU-bound on dev machines and GPU CI.
 """
 
 import json
@@ -175,6 +176,21 @@ def test_evaluator_loads_checkpoint_via_pretrain_weights_and_validates(monkeypat
 # ---------------------------------------------------------------------------
 
 
+def _best_available_device() -> str:
+    """Pick the fastest training device available on this host.
+
+    The smoke test runs a real RF-DETR epoch: ~8 min on CPU but ~45 s on an
+    Apple-Silicon ``mps`` or CUDA ``gpu`` backend. Preferring the accelerator
+    when present keeps local runs (and GPU CI) from being dominated by this one
+    test, while CPU-only runners still exercise the same code path.
+    """
+    if torch.cuda.is_available():
+        return "cuda"
+    if torch.backends.mps.is_available():
+        return "mps"
+    return "cpu"
+
+
 @pytest.mark.slow
 def test_flux_train_smoke(tmp_path: Any) -> None:
     pytest.importorskip("rfdetr.training")
@@ -204,7 +220,7 @@ def test_flux_train_smoke(tmp_path: Any) -> None:
         resolution=256,
         epochs=1,
         batch_size=2,
-        device="cpu",
+        device=_best_available_device(),
         num_workers=0,
         output_dir=str(tmp_path / "out"),
         metrics_output_path=str(sidecar),
