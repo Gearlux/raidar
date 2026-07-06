@@ -37,7 +37,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Literal, Mapping, Optional
 
 from confluid import configurable
-from logflow import get_logger
+from loggair import get_logger
 
 logger = get_logger(__name__)
 

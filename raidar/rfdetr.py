@@ -26,7 +26,7 @@ from typing import Any, Dict, List, Literal, Optional, Union, cast
 import torch
 import torch.nn as nn
 from confluid import configurable
-from logflow import get_logger
+from loggair import get_logger
 from marainer.checkpoint import load_lightning_checkpoint
 from marainer.outputs import DetectionOutput
 from torch import Tensor

@@ -45,7 +45,7 @@ from typing import Any, Dict, List, Optional, cast
 
 import torch.nn as nn
 from confluid import LazyClass, configurable, flow
-from logflow import get_logger
+from loggair import get_logger
 from marainer.evaluator import LightningEvaluator
 from marainer.trainer import ensure_sample_dataset
 from torch import Tensor
