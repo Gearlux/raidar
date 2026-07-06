@@ -53,7 +53,7 @@ import pytorch_lightning as L
 import torch
 import torch.nn as nn
 from confluid import Fluid, LazyClass, Mandatory, configurable, flow, output
-from logflow import get_logger
+from loggair import get_logger
 from marainer.trainer import LightningTrainer, ensure_sample_dataset
 from pytorch_lightning.loggers import Logger
 from torch import Tensor
