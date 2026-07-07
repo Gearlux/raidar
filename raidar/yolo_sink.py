@@ -47,7 +47,7 @@ import yaml
 from confluid import configurable
 from dataflux.sample import Sample
 from dataflux.storage.base import Storage
-from logflow import get_logger
+from loggair import get_logger
 from PIL import Image
 
 logger = get_logger(__name__)

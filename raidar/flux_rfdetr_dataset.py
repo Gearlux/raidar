@@ -39,7 +39,7 @@ from typing import Any, Dict, List, Optional
 import numpy as np
 import torch
 from dataflux import Flux, iter_targets
-from logflow import get_logger
+from loggair import get_logger
 from PIL import Image
 from rfdetr._namespace import build_namespace
 from rfdetr.datasets.coco import ConvertCoco, make_coco_transforms, make_coco_transforms_square_div_64
