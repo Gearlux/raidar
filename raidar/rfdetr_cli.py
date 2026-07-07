@@ -7,7 +7,7 @@ detection path). The same verbs mount under ``marainer rfdetr-train`` /
 """
 
 from liquifai import LiquifyApp
-from logflow import get_logger
+from loggair import get_logger
 
 from raidar.rfdetr_trainer import RFDETREvaluator, RFDETRTrainer
 

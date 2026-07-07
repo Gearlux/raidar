@@ -47,7 +47,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from confluid import configurable
-from logflow import get_logger
+from loggair import get_logger
 from marainer.checkpoint import load_lightning_checkpoint
 from marainer.outputs import DetectionOutput
 from torch import Tensor

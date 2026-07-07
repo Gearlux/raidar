@@ -8,7 +8,7 @@ package as ``raidar-ultralytics train`` / ``raidar-ultralytics evaluate``
 """
 
 from liquifai import LiquifyApp
-from logflow import get_logger
+from loggair import get_logger
 
 from raidar.evaluator import LightningDetectionEvaluator
 from raidar.lightning_trainer import LightningDetectionTrainer
