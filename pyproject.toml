@@ -45,6 +45,14 @@ raidar-configurables = "raidar.configurables"
 raidar = "raidar.cli:main"
 raidar-rfdetr = "raidar.rfdetr_cli:main"
 
+# Liquifai app registration: lets `liquifai-install-completions` discover this
+# CLI via an instant entry-point metadata read instead of executing the binary
+# (subprocess probe, 15 s timeout each). Name = the app/binary name; value =
+# the LiquifyApp instance. Entry-point changes need an editable reinstall.
+[project.entry-points."liquifai.apps"]
+raidar = "raidar.cli:app"
+raidar-rfdetr = "raidar.rfdetr_cli:app"
+
 [project.optional-dependencies]
 dev = [
     "black>=24.0.0,<25.0.0",
