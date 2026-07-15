@@ -177,8 +177,8 @@ class LightningDetectionTrainer(LightningTrainer):
 
     def __init__(
         self,
-        model: Mandatory[Union[nn.Module, Fluid]],
-        train_set: Mandatory[Union[Dataset[Any], Fluid]],
+        model: Mandatory[nn.Module],
+        train_set: Mandatory[Dataset[Any]],
         num_classes: Optional[int] = None,
         max_epochs: int = 10,
         batch_size: int = 2,
