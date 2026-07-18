@@ -1,10 +1,10 @@
 """YoloSink — write a detection Flux to a native Ultralytics dataset dir.
 
-A DataFlux ``DataSink`` (``open`` / ``write(sample)`` / ``flush`` / ``close``):
+A SampleFlux ``DataSink`` (``open`` / ``write(sample)`` / ``flush`` / ``close``):
 ``marainer convert`` streams a detection Flux into it via
 ``DatasetProcessor(flux=…, sink=YoloSink(…))``, exactly like any other
 source → ops → sink pipeline — there is no bespoke processor. Each
-:class:`dataflux.sample.Sample` is materialised to the layout
+:class:`sampleflux.sample.Sample` is materialised to the layout
 ``YOLO.train(data=<output_dir>/data.yaml)`` natively consumes:
 
 ::
@@ -45,10 +45,10 @@ from typing import Any, Dict, List, Literal, Optional, Tuple
 import numpy as np
 import yaml
 from confluid import configurable
-from dataflux.sample import Sample
-from dataflux.storage.base import Storage
 from loggair import get_logger
 from PIL import Image
+from sampleflux.sample import Sample
+from sampleflux.storage.base import Storage
 
 logger = get_logger(__name__)
 
@@ -202,7 +202,7 @@ def _jsonable_metadata(metadata: Any, *, max_array_elems: int = _MAX_META_ARRAY_
     return str(metadata)
 
 
-# category="sink": surfaced as a FluxStudio sink node (DATAFLUX_OBJECT:sink → DatasetProcessor.sink).
+# category="sink": surfaced as a FluxStudio sink node (SAMPLEFLUX_OBJECT:sink → DatasetProcessor.sink).
 @configurable(category="sink")
 class YoloSink(Storage):
     """DataSink that materialises one split of a detection Flux to a YOLO dataset dir.

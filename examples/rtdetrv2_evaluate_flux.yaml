@@ -1,4 +1,4 @@
-# Evaluate a trained RT-DETRv2 checkpoint over a DataFlux pipeline (IN-MEMORY) via
+# Evaluate a trained RT-DETRv2 checkpoint over a SampleFlux pipeline (IN-MEMORY) via
 # raidar's generic Lightning detection evaluator (mAP through torchmetrics).
 #
 # Run:
@@ -20,16 +20,16 @@ evaluator: !class:raidar.evaluator.LightningDetectionEvaluator
   dataset: !ref:val_set
   metrics_sidecar_path: ./runs/rtdetrv2_cppe5/eval_metrics.json
 
-val_set: !class:dataflux.core.Flux
-  source: !class:dataflux.sources.HuggingFaceSource
+val_set: !class:sampleflux.core.Flux
+  source: !class:sampleflux.sources.HuggingFaceSource
     path: cppe-5
     split: test
     input_feature: image
     target_feature: objects
   ops:
-    - !class:dataflux.ops.target.CocoToTorchVisionDetectionOp
+    - !class:sampleflux.ops.target.CocoToTorchVisionDetectionOp
       bbox_format: xywh
       label_offset: 0      # HF detectors are 0-indexed (no background)
-    - !class:dataflux.ops.torch.ToTensorOp
+    - !class:sampleflux.ops.torch.ToTensorOp
       mode: RGB
       normalize: true

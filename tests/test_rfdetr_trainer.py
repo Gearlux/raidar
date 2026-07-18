@@ -194,8 +194,8 @@ def _best_available_device() -> str:
 @pytest.mark.slow
 def test_flux_train_smoke(tmp_path: Any) -> None:
     pytest.importorskip("rfdetr.training")
-    from dataflux.core import Flux
-    from dataflux.sample import Sample
+    from sampleflux.core import Flux
+    from sampleflux.sample import Sample
 
     def _flux(n: int) -> Flux:
         return Flux(

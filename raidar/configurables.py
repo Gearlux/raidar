@@ -15,7 +15,7 @@ the same bucket as ``RFDETRModel``) + ``lazy=True`` so:
   config schema with no wrapper class; and
 * FluxStudio generates an OBJECT node for it (``fluxstudio.bridge._build_object_node`` is
   callable-aware): widgets come from the builder's signature (``num_classes`` / ``weights_backbone``
-  / …) and the node's role-qualified output socket (``DATAFLUX_OBJECT:model``, carrying a
+  / …) and the node's role-qualified output socket (``SAMPLEFLUX_OBJECT:model``, carrying a
   ``LazyClass(builder, …)``) wires STRAIGHT into a detection trainer's ``model`` slot — no Retag.
 
 Registered with a presentation-only ``group="detection"`` for palette nesting (mirroring how

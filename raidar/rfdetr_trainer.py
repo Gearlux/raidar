@@ -12,7 +12,7 @@ Two input modes (XOR), mirroring ``UltralyticsTrainer``:
 
 * **Disk mode** — ``data: str | Path`` points at a COCO/YOLO/Roboflow dataset
   directory; we call RF-DETR's native ``model.train(dataset_dir=...)`` verbatim.
-* **Flux mode** — ``train_set`` / ``val_set`` are :class:`dataflux.Flux` pipelines
+* **Flux mode** — ``train_set`` / ``val_set`` are :class:`sampleflux.Flux` pipelines
   (+ ``num_classes`` + ``class_names``); we reimplement ``RFDETR.train()``'s tail
   with :class:`raidar.flux_rfdetr_dataset.FluxRFDETRDataModule`, so the Flux feeds
   RF-DETR's native loop with NO disk materialization.

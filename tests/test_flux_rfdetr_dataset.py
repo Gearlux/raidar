@@ -14,9 +14,9 @@ import pytest
 pytest.importorskip("rfdetr.training")  # the [train,loggers] extras
 
 import torch  # noqa: E402
-from dataflux.core import Flux  # noqa: E402
-from dataflux.sample import Sample  # noqa: E402
 from rfdetr.config import RFDETRNanoConfig, TrainConfig  # noqa: E402
+from sampleflux.core import Flux  # noqa: E402
+from sampleflux.sample import Sample  # noqa: E402
 
 import raidar.flux_rfdetr_dataset as frd  # noqa: E402
 from raidar.flux_rfdetr_dataset import FluxRFDETRDataModule, FluxRFDETRDataset  # noqa: E402

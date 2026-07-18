@@ -183,7 +183,7 @@ What registration buys (no behaviour change for raw dotted-path YAML — the
 * **navigaitor** lists each builder in `list_configurable_classes(category="detection_model")`
   (and the visual-editor form-spec), beside `RFDETRModel` — `num_classes` and
   the other knobs are enumerated from the builder's own signature.
-* **FluxStudio** generates a `DATAFLUX_OBJECT:model` **object node** per builder
+* **FluxStudio** generates a `SAMPLEFLUX_OBJECT:model` **object node** per builder
   (palette `Taidal/Model/Detection`), with widgets introspected from the
   function signature. Its output wires **straight into a detection trainer's
   `model` slot** — no Retag node. `lazy=True` keeps the model deferred so the
@@ -224,13 +224,13 @@ trainer: !class:raidar.rfdetr_trainer.RFDETRTrainer
 ```
 
 ```yaml
-# Flux mode — a DataFlux pipeline, fed IN-MEMORY (no disk materialization)
+# Flux mode — a SampleFlux pipeline, fed IN-MEMORY (no disk materialization)
 num_classes: 6                     # K foreground classes; labels are 0-indexed 0..K-1
 trainer: !class:raidar.rfdetr_trainer.RFDETRTrainer
   variant: small
   num_classes: !ref:num_classes
   class_names: {0: coverall, 1: face_shield, 2: gloves, 3: goggles, 4: mask, 5: apron}
-  train_set: !ref:train_set        # any dataflux Flux yielding {boxes xyxy-px, labels}
+  train_set: !ref:train_set        # any sampleflux Flux yielding {boxes xyxy-px, labels}
   val_set: !ref:val_set
   epochs: 50
   batch_size: 4
@@ -266,13 +266,13 @@ model: !lazy:raidar.hf_detection.DFINEModel
   variant: small
   image_size: 640                        # square side, multiple of 32 (these models train at 640)
 detection_ops:
-  - !class:dataflux.ops.target.CocoToTorchVisionDetectionOp
+  - !class:sampleflux.ops.target.CocoToTorchVisionDetectionOp
     bbox_format: xywh
     label_offset: 0                      # ⚠️ HF detectors are 0-indexed — do NOT +1
-  - !class:dataflux.ops.torch.ToTensorOp
+  - !class:sampleflux.ops.torch.ToTensorOp
     mode: RGB
     normalize: true                      # [0,255] → [0,1]; HF processor is do_normalize=False
-train_set: { ... }                       # any dataflux Flux yielding {boxes xyxy-px, labels}
+train_set: { ... }                       # any sampleflux Flux yielding {boxes xyxy-px, labels}
 val_set:   { ... }
 ```
 
@@ -326,13 +326,13 @@ End-to-end YAML in `examples/`:
   Faster R-CNN + raw `MeanAveragePrecision`, on a synthetic in-memory dataset.
 - `train_fasterrcnn_cppe5_hf.yaml` — the flat HuggingFace example (the
   classification-side analogue of sonair's `train_efficientvit_b0_sonair.yaml`):
-  `HuggingFaceSource("cppe-5")` → `dataflux.ops.target.CocoToTorchVisionDetectionOp`
+  `HuggingFaceSource("cppe-5")` → `sampleflux.ops.target.CocoToTorchVisionDetectionOp`
   → `ToTensorOp` → `LightningDetectionTrainer` with a `!lazy:` torchvision
   Faster R-CNN (the fast MobileNet-320 variant) whose `num_classes` is derived.
 - `train_pennfudan_hf.yaml` — the **fast/tiny** example: Penn-Fudan Pedestrian
   (160 train / 10 test, 1 class — the torchvision detection-tutorial dataset).
   Penn-Fudan ships masks not boxes, so it uses
-  `dataflux.ops.target.MasksToDetectionBoxesOp` (per-instance bbox from the
+  `sampleflux.ops.target.MasksToDetectionBoxesOp` (per-instance bbox from the
   `instance_id` mask) → `ToTensorOp(mode="RGB")` → MobileNet-320 Faster R-CNN.
 - `dfine_train_flux.yaml` / `dfine_evaluate_flux.yaml` — D-FINE on cppe-5 through
   the generic Lightning path (HF transformers, `label_offset: 0`).
