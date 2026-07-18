@@ -40,15 +40,15 @@ model: !lazy:torchvision.models.detection.fasterrcnn_mobilenet_v3_large_320_fpn
 
 # -- Shared op chain: HF `objects` annotation → detection target; PIL image → tensor.
 detection_ops:
-  - !class:dataflux.ops.target.CocoToTorchVisionDetectionOp
+  - !class:sampleflux.ops.target.CocoToTorchVisionDetectionOp
     bbox_format: xywh        # cppe-5 boxes are COCO [x, y, w, h]
     label_offset: 1          # 0..4 → 1..5; reserve class 0 for background
-  - !class:dataflux.ops.torch.ToTensorOp
+  - !class:sampleflux.ops.torch.ToTensorOp
     mode: RGB                # cppe-5 mixes RGB/RGBA/grayscale — force 3-channel for Faster R-CNN
     normalize: true
 
-train_set: !class:dataflux.core.Flux
-  source: !class:dataflux.sources.HuggingFaceSource
+train_set: !class:sampleflux.core.Flux
+  source: !class:sampleflux.sources.HuggingFaceSource
     path: cppe-5
     split: train
     input_feature: image
@@ -56,8 +56,8 @@ train_set: !class:dataflux.core.Flux
     # count: 100             # uncomment to cap samples for a quick smoke run
   ops: !ref:detection_ops
 
-val_set: !class:dataflux.core.Flux
-  source: !class:dataflux.sources.HuggingFaceSource
+val_set: !class:sampleflux.core.Flux
+  source: !class:sampleflux.sources.HuggingFaceSource
     path: cppe-5
     split: test               # cppe-5 ships train / test (no validation split)
     input_feature: image

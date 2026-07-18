@@ -204,8 +204,8 @@ def test_end_to_end_lightning_fit(cls: Any, variant: str, tmp_path: Any) -> None
     pytest.importorskip("transformers")
     import pytorch_lightning as L
     from confluid import flow
-    from dataflux.core import Flux
-    from dataflux.sample import Sample
+    from sampleflux.core import Flux
+    from sampleflux.sample import Sample
 
     from raidar.detection import detection_collate_fn
     from raidar.lightning_trainer import LightningDetectionTrainer

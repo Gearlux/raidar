@@ -32,7 +32,7 @@ def test_categories_enumerable_via_registry() -> None:
 
 def test_yolo_sink_tagged() -> None:
     """``YoloSink`` carries ``category="sink"`` so FluxStudio surfaces it as a ``DatasetProcessor``
-    sink node (``DATAFLUX_OBJECT:sink``) — ``marainer convert`` streams a detection Flux into it on a
+    sink node (``SAMPLEFLUX_OBJECT:sink``) — ``marainer convert`` streams a detection Flux into it on a
     canvas just as the YAML config does."""
     from raidar.yolo_sink import YoloSink
 

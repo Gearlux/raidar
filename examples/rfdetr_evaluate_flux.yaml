@@ -1,4 +1,4 @@
-# Evaluate a trained RF-DETR checkpoint over a DataFlux pipeline (IN-MEMORY, no disk)
+# Evaluate a trained RF-DETR checkpoint over a SampleFlux pipeline (IN-MEMORY, no disk)
 # via RF-DETR's native validation loop (COCO-mAP through its COCOEvalCallback).
 #
 # Run:
@@ -17,13 +17,13 @@ evaluator: !class:raidar.rfdetr_trainer.RFDETREvaluator
   class_names: { 0: Coverall, 1: Face_Shield, 2: Gloves, 3: Goggles, 4: Mask }
   batch_size: 4
   metrics_output_path: ./runs/rfdetr_cppe5/eval_metrics.json
-  val_set: !class:dataflux.core.Flux
-    source: !class:dataflux.sources.HuggingFaceSource
+  val_set: !class:sampleflux.core.Flux
+    source: !class:sampleflux.sources.HuggingFaceSource
       path: cppe-5
       split: test
       input_feature: image
       target_feature: objects
     ops:
-      - !class:dataflux.ops.target.CocoToTorchVisionDetectionOp
+      - !class:sampleflux.ops.target.CocoToTorchVisionDetectionOp
         bbox_format: xywh
         label_offset: 0      # RF-DETR is 0-indexed (background at K)

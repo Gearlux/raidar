@@ -358,7 +358,7 @@ class LightningDetectionTrainer(LightningTrainer):
         a hint to pin ``num_classes`` to skip it. Returns ``None`` for an empty /
         label-less set (the caller then errors or leaves the model's own default).
         """
-        from dataflux import iter_targets
+        from sampleflux import iter_targets
 
         src = flow(source)
         total = len(src) if hasattr(src, "__len__") else None

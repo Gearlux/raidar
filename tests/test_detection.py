@@ -11,7 +11,7 @@ remains here is the batch container + collate the native path uses; the
 from typing import Dict, List
 
 import torch
-from dataflux.sample import Sample
+from sampleflux.sample import Sample
 from torch import Tensor
 
 from raidar.detection import DetectionBatchInput, detection_collate_fn

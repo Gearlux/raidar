@@ -1,10 +1,10 @@
-"""Bridge a DataFlux ``Flux`` into RF-DETR's native in-memory dataset contract.
+"""Bridge a SampleFlux ``Flux`` into RF-DETR's native in-memory dataset contract.
 
 RF-DETR's :class:`rfdetr.training.module_data.RFDETRDataModule` builds its
 datasets via ``build_dataset(split, ns, resolution)`` — which reads a COCO/YOLO
 directory off disk. This module supplies the *in-memory* counterpart so the
 native ``RFDETRModelModule`` / ``build_trainer`` stack can train/eval straight
-from a :class:`dataflux.Flux` with **no disk materialization** — the analogue of
+from a :class:`sampleflux.Flux` with **no disk materialization** — the analogue of
 ``raidar_ultralytics.flux_yolo_dataset.FluxYOLODataset`` for RF-DETR.
 
 How it stays byte-faithful to the disk path: rfdetr's ``CocoDetection.__getitem__``
@@ -38,12 +38,12 @@ from typing import Any, Dict, List, Optional
 
 import numpy as np
 import torch
-from dataflux import Flux, iter_targets
 from loggair import get_logger
 from PIL import Image
 from rfdetr._namespace import build_namespace
 from rfdetr.datasets.coco import ConvertCoco, make_coco_transforms, make_coco_transforms_square_div_64
 from rfdetr.training.module_data import RFDETRDataModule
+from sampleflux import Flux, iter_targets
 
 logger = get_logger(__name__)
 
@@ -143,7 +143,7 @@ class FluxRFDETRDataset(torch.utils.data.Dataset):
     """In-memory ``Dataset`` yielding RF-DETR's ``(normalized-image, target)`` pairs from a Flux.
 
     Args:
-        flux: The :class:`dataflux.Flux` of ``Sample`` triplets.
+        flux: The :class:`sampleflux.Flux` of ``Sample`` triplets.
         image_set: ``"train"`` (augmented) or ``"val"`` / ``"test"`` (no aug).
         resolution: Model input resolution (``model_config.resolution``).
         ns: The merged ``rfdetr`` namespace (``build_namespace(model_config,
@@ -156,7 +156,7 @@ class FluxRFDETRDataset(torch.utils.data.Dataset):
         self._image_set = image_set
         self._transforms = _build_transforms(image_set, resolution, ns)
         self._convert = ConvertCoco(include_masks=False, cat2label=None)
-        # Projection-optimized label cache: walk targets ONLY (dataflux skips input/image
+        # Projection-optimized label cache: walk targets ONLY (sampleflux skips input/image
         # construction) so we never decode images just to index labels. Images decode
         # lazily per __getitem__.
         self._labels = self._cache_labels(flux)

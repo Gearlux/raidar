@@ -11,7 +11,7 @@ from typing import Dict, List
 
 import torch
 from confluid import configurable
-from dataflux.sample import Sample
+from sampleflux.sample import Sample
 from torch import Tensor
 from torch.utils.data import Dataset
 

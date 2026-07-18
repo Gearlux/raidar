@@ -47,8 +47,8 @@ from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 
 import torch
-from dataflux.sample import Sample
 from marainer.outputs import DetectionOutput, DetectionPredictions
+from sampleflux.sample import Sample
 from torch import Tensor
 from torchmetrics import Metric
 from torchvision.ops import box_iou
@@ -277,7 +277,7 @@ def detection_collate_fn(batch: List[Sample]) -> Sample:
     * ``sample.target`` — ``{"boxes": [N, 4] float32, "labels": [N] int64}``
       in torchvision xyxy-pixel format.
 
-    The returned :class:`~dataflux.sample.Sample` has:
+    The returned :class:`~sampleflux.sample.Sample` has:
 
     * ``.input`` — :class:`DetectionBatchInput` carrying ``images`` (list of
       tensors) AND ``targets`` (list of dicts). The specialised

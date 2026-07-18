@@ -1,6 +1,6 @@
 """Tests for :class:`raidar.yolo_sink.YoloSink`.
 
-The sink is a DataFlux DataSink (open/write/flush/close) written one split at a
+The sink is a SampleFlux DataSink (open/write/flush/close) written one split at a
 time; repeated runs into the same output_dir merge data.yaml + metadata.jsonl.
 ``marainer convert`` drives it via DatasetProcessor(flux, sink); the tests
 exercise it directly (and through a Flux) since that's the same write path.
@@ -14,9 +14,9 @@ import numpy as np
 import pytest
 import torch
 import yaml
-from dataflux.core import Flux
-from dataflux.sample import Sample
 from PIL import Image
+from sampleflux.core import Flux
+from sampleflux.sample import Sample
 
 from raidar.yolo_sink import YoloSink, _jsonable_metadata, _to_uint8_hwc, _yolo_lines
 

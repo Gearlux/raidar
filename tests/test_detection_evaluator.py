@@ -14,8 +14,8 @@ import torch
 import torch.nn as nn
 from confluid import Class, LazyClass
 from confluid.fluid import Class as ConfluidClass
-from dataflux.core import Flux
-from dataflux.sample import Sample
+from sampleflux.core import Flux
+from sampleflux.sample import Sample
 from torch import Tensor
 from torch.utils.data import DataLoader
 from torchmetrics.detection import MeanAveragePrecision
