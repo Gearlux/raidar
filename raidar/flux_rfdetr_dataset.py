@@ -19,17 +19,20 @@ So our per-item output is identical to the disk dataset's, and the inherited
 ``collate_fn`` (NestedTensor), DataLoaders and ``transfer_batch_to_device`` work
 unchanged.
 
-Per-``Sample`` contract (the torchvision-detection convention raidar uses
-elsewhere — :class:`raidar.rfdetr.RFDETRModel`):
+Per-``Sample`` contract (read via the typed-bag accessors ``primary`` /
+``item_data`` — the torchvision-detection convention raidar uses elsewhere,
+:class:`raidar.rfdetr.RFDETRModel`):
 
-* ``Sample.input``: a torch tensor / numpy array / PIL image, ``[C, H, W]`` /
-  ``[H, W, C]`` / ``[H, W]`` in **RGB** channel order. Floats in ``[0, 1]`` are
-  rescaled to ``uint8 [0, 255]``; uint8 passes through. (No BGR flip — RF-DETR's
-  ``ToImage``/``Normalize`` expect RGB, unlike ultralytics.)
-* ``Sample.target``: ``{"boxes": [N, 4] xyxy-pixel, "labels": [N] int}`` with
-  labels **0-indexed ``0..K-1``** (RF-DETR reserves index ``K`` for the
-  background class internally — the OPPOSITE of torchvision's background-at-0,
-  so do NOT ``+1``-shift labels for RF-DETR). Empty-target samples are fine.
+* The primary ``input``-role item's payload: a torch tensor / numpy array / PIL
+  image, ``[C, H, W]`` / ``[H, W, C]`` / ``[H, W]`` in **RGB** channel order.
+  Floats in ``[0, 1]`` are rescaled to ``uint8 [0, 255]``; uint8 passes through.
+  (No BGR flip — RF-DETR's ``ToImage``/``Normalize`` expect RGB, unlike
+  ultralytics.)
+* The ``target``-role :class:`sampleflux.Regions` item — ``boxes`` ``[N, 4]``
+  xyxy-pixel + ``labels`` ``[N]`` int — with labels **0-indexed ``0..K-1``**
+  (RF-DETR reserves index ``K`` for the background class internally — the
+  OPPOSITE of torchvision's background-at-0, so do NOT ``+1``-shift labels for
+  RF-DETR). A sample with no ``target`` field is fine.
 """
 
 from __future__ import annotations
@@ -49,7 +52,7 @@ logger = get_logger(__name__)
 
 
 def _sample_input_to_rgb_pil(arr_in: Any) -> Image.Image:
-    """Normalize a ``Sample.input`` into an RGB :class:`PIL.Image`.
+    """Normalize a sample's input-item payload into an RGB :class:`PIL.Image`.
 
     Accepts a PIL image (returned as RGB), or a torch tensor / numpy array in
     ``[C, H, W]`` / ``[H, W, C]`` / ``[H, W]`` layout. Float arrays in ``[0, 1]``
@@ -164,7 +167,7 @@ class FluxRFDETRDataset(torch.utils.data.Dataset):
     """In-memory ``Dataset`` yielding RF-DETR's ``(normalized-image, target)`` pairs from a Flux.
 
     Args:
-        flux: The :class:`sampleflux.Flux` of ``Sample`` triplets.
+        flux: The :class:`sampleflux.Flux` of typed-bag :class:`sampleflux.Sample`.
         image_set: ``"train"`` (augmented) or ``"val"`` / ``"test"`` (no aug).
         resolution: Model input resolution (``model_config.resolution``).
         ns: The merged ``rfdetr`` namespace (``build_namespace(model_config,
