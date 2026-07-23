@@ -5,7 +5,10 @@ description = "Object-detection models and adapters for the Marainer training fr
 authors = [{name = "Taidal"}]
 license = {text = "MIT"}
 dependencies = [
-    "marainer>=0.1.0",
+    # marainer provides OPTIONAL tracking + torch utilities (ensure_sample_dataset /
+    # load_lightning_checkpoint / DetectionOutput contracts). raidar's LightningDetector is a
+    # standard pl.LightningModule and trains without marainer (a couple of tracking lines drop out).
+    "marainer[lightning,mlflow,tensorboard]>=0.2.0",
     "confluid>=0.1.0",
     "sampleflux>=0.1.0",
     "loggair>=0.1.0",
@@ -30,11 +33,6 @@ dependencies = [
     "scipy",
 ]
 requires-python = ">=3.12"
-
-[project.entry-points."marainer.commands"]
-raidar = "raidar.plugin:register"
-# Native RF-DETR verbs (marainer rfdetr-train / rfdetr-evaluate) — see raidar/rfdetr_plugin.py.
-raidar-rfdetr = "raidar.rfdetr_plugin:register"
 
 [project.entry-points."confluid.configurables"]
 raidar = "raidar"

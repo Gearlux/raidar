@@ -56,22 +56,21 @@ def test_hf_detection_models_task_role_tagged() -> None:
 
 def test_task_role_tags() -> None:
     """task/role drive navigaitor's scan-and-generate task surfaces."""
-    from raidar.evaluator import LightningDetectionEvaluator
-    from raidar.lightning_trainer import LightningDetectionTrainer
+    from raidar.detector import LightningDetector
 
     assert RFDETRModel.__confluid_task__ == "detection"
     assert RFDETRModel.__confluid_role__ == "model"
-    assert LightningDetectionTrainer.__confluid_task__ == "detection"
-    assert LightningDetectionTrainer.__confluid_role__ == "trainer"
-    assert LightningDetectionEvaluator.__confluid_role__ == "evaluator"
+    # The merged LightningDetector (train + eval in one standard class) is tagged role="trainer".
+    assert LightningDetector.__confluid_task__ == "detection"
+    assert LightningDetector.__confluid_role__ == "trainer"
     registry = get_registry()
     assert "RFDETRModel" in registry.list_classes(task="detection", role="model")
-    assert "LightningDetectionTrainer" in registry.list_classes(task="detection", role="trainer")
+    assert "LightningDetector" in registry.list_classes(task="detection", role="trainer")
 
 
 def test_detection_is_a_multi_trainer_task() -> None:
     """The native RF-DETR trainer/evaluator are tagged for detection ALONGSIDE the
-    Lightning pair, so navigaitor can navigate multiple trainers per task."""
+    Lightning detector, so navigaitor can navigate multiple trainers per task."""
     from raidar.rfdetr_trainer import RFDETREvaluator, RFDETRTrainer
 
     assert RFDETRTrainer.__confluid_task__ == "detection" and RFDETRTrainer.__confluid_role__ == "trainer"
@@ -80,9 +79,10 @@ def test_detection_is_a_multi_trainer_task() -> None:
     registry = get_registry()
     trainers = registry.list_classes(task="detection", role="trainer")
     evaluators = registry.list_classes(task="detection", role="evaluator")
-    # BOTH detection trainers/evaluators are discoverable (was a single-trainer assumption).
-    assert {"LightningDetectionTrainer", "RFDETRTrainer"} <= set(trainers)
-    assert {"LightningDetectionEvaluator", "RFDETREvaluator"} <= set(evaluators)
+    # The Lightning side is now ONE class (LightningDetector, role="trainer", also evaluates);
+    # RF-DETR keeps its separate framework-native trainer + evaluator.
+    assert {"LightningDetector", "RFDETRTrainer"} <= set(trainers)
+    assert "RFDETREvaluator" in set(evaluators)
 
 
 # torchvision detection BUILDER FUNCTIONS registered by raidar.configurables.

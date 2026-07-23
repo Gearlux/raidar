@@ -1,14 +1,12 @@
-"""Tests for the native :class:`raidar.evaluator.LightningDetectionEvaluator`.
+"""Tests for :class:`raidar.detector.LightningDetector` in the evaluation path (task='test').
 
-The evaluator overrides ``test_step`` to drive a torchvision-native detector
-(``model(images) → List[Dict]``) and a raw ``MeanAveragePrecision`` directly —
-no ``DetectionStepOutput`` / ``DetectionMetricAdapter`` layer.
+The detector's overridden ``test_step`` drives a torchvision-native detector
+(``model(images) → List[Dict]``) and a raw ``MeanAveragePrecision`` directly — no adapter layer.
 """
 
 import json
 from typing import Any, Dict, List
 
-import pytest
 import pytorch_lightning as L
 import torch
 import torch.nn as nn
@@ -21,29 +19,21 @@ from torch.utils.data import DataLoader
 from torchmetrics.detection import MeanAveragePrecision
 
 from raidar.detection import DetectionOutput, detection_collate_fn
-from raidar.evaluator import LightningDetectionEvaluator
+from raidar.detector import LightningDetector
 
 
-def _make_evaluator(**overrides: Any) -> LightningDetectionEvaluator:
-    """Build a LightningDetectionEvaluator, applying overrides as post-construction attributes.
-
-    Mirrors the minimal-ctor pattern: only 'model', 'dataset', 'experiment_name',
-    'run_name' are constructor params (``num_classes`` is read off the trained model
-    in ``initialize()``, not configured); deferred slots (``loader`` / ``lightning`` /
-    ``metrics`` / ``predictions_sink`` / ``metrics_sidecar_path`` / ``class_names``)
-    are set after construction.
-    """
-    _ctor_keys = ("model", "dataset", "experiment_name", "run_name")
-    ctor = {k: overrides.pop(k) for k in _ctor_keys if k in overrides}
-    ev = LightningDetectionEvaluator(**ctor)
+def _evaluator(**overrides: Any) -> LightningDetector:
+    """Build a test-path LightningDetector (maps ``dataset=`` → ``test_set``, sets task='test')."""
+    ctor: Dict[str, Any] = {"task": "test"}
+    for key in ("model", "experiment_name", "run_name"):
+        if key in overrides:
+            ctor[key] = overrides.pop(key)
+    if "dataset" in overrides:
+        ctor["test_set"] = overrides.pop("dataset")
+    ev = LightningDetector(**ctor)
     for _k, _v in overrides.items():
         setattr(ev, _k, _v)
     return ev
-
-
-# ---------------------------------------------------------------------------
-# Helpers (native detector: model(images) → List[DetectionOutput])
-# ---------------------------------------------------------------------------
 
 
 class _NativeDetector(nn.Module):
@@ -52,16 +42,14 @@ class _NativeDetector(nn.Module):
         self.alpha = nn.Parameter(torch.tensor(1.0))
 
     def forward(self, images: List[Tensor]) -> List[DetectionOutput]:
-        preds: List[DetectionOutput] = []
-        for _ in images:
-            preds.append(
-                DetectionOutput(
-                    boxes=torch.zeros((0, 4), dtype=torch.float32),
-                    scores=torch.zeros((0,), dtype=torch.float32),
-                    labels=torch.zeros((0,), dtype=torch.int64),
-                )
+        return [
+            DetectionOutput(
+                boxes=torch.zeros((0, 4), dtype=torch.float32),
+                scores=torch.zeros((0,), dtype=torch.float32),
+                labels=torch.zeros((0,), dtype=torch.int64),
             )
-        return preds
+            for _ in images
+        ]
 
 
 def _make_flux(n: int = 4, size: int = 32) -> Flux:
@@ -91,35 +79,25 @@ class _RecordingSink:
         self.closed = True
 
 
-# ---------------------------------------------------------------------------
-# Defaults
-# ---------------------------------------------------------------------------
-
-
 def test_metrics_default_to_lazy_map() -> None:
-    ev = _make_evaluator(model=_NativeDetector(), dataset=_make_flux(4))
-    assert isinstance(ev.metrics, ConfluidClass)
-    assert ev.metrics.target is MeanAveragePrecision
-    assert ev.metrics.kwargs.get("iou_type") == "bbox"
+    ev = _evaluator(model=_NativeDetector(), dataset=_make_flux(4))
+    assert isinstance(ev.test_metrics, ConfluidClass)
+    assert ev.test_metrics.target is MeanAveragePrecision
+    assert ev.test_metrics.kwargs.get("iou_type") == "bbox"
 
 
 def test_default_loader_uses_detection_collate_fn() -> None:
-    ev = _make_evaluator(model=_NativeDetector(), dataset=_make_flux(4))
-    assert isinstance(ev.loader, ConfluidClass)
-    assert ev.loader.kwargs.get("collate_fn") is detection_collate_fn
-
-
-# ---------------------------------------------------------------------------
-# Full run with sidecar
-# ---------------------------------------------------------------------------
+    ev = _evaluator(model=_NativeDetector(), dataset=_make_flux(4))
+    assert isinstance(ev.test_loader, ConfluidClass)
+    assert ev.test_loader.kwargs.get("collate_fn") is detection_collate_fn
 
 
 def test_evaluator_run_writes_metrics_sidecar(tmp_path: Any) -> None:
     sidecar = tmp_path / "eval_metrics.json"
-    ev = _make_evaluator(
+    ev = _evaluator(
         model=_NativeDetector(),
         dataset=_make_flux(4),
-        loader=Class(DataLoader, batch_size=2, collate_fn=detection_collate_fn),
+        test_loader=Class(DataLoader, batch_size=2, collate_fn=detection_collate_fn),
         lightning=Class(
             L.Trainer,
             accelerator="cpu",
@@ -136,24 +114,17 @@ def test_evaluator_run_writes_metrics_sidecar(tmp_path: Any) -> None:
     assert sidecar.exists(), "Sidecar must be written."
     payload = json.loads(sidecar.read_text())
     assert payload["experiment_name"] == "det_test_exp"
-    assert "metrics" in payload
     metric_values = payload["metrics"]
-    # Raw MeanAveragePrecision surfaces the `map` scalar (among map_50 / mar_* etc.).
     assert any(str(k).endswith("map") for k in metric_values)
     assert isinstance(metric_values["map"], (int, float))
 
 
-# ---------------------------------------------------------------------------
-# Predictions-sink smoke
-# ---------------------------------------------------------------------------
-
-
 def test_evaluator_writes_to_predictions_sink(tmp_path: Any) -> None:
     sink = _RecordingSink()
-    ev = _make_evaluator(
+    ev = _evaluator(
         model=_NativeDetector(),
         dataset=_make_flux(4),
-        loader=Class(DataLoader, batch_size=2, collate_fn=detection_collate_fn),
+        test_loader=Class(DataLoader, batch_size=2, collate_fn=detection_collate_fn),
         predictions_sink=sink,
         lightning=Class(
             L.Trainer,
@@ -172,14 +143,8 @@ def test_evaluator_writes_to_predictions_sink(tmp_path: Any) -> None:
         assert isinstance(meta, dict)
 
 
-# ---------------------------------------------------------------------------
-# initialize(): model-driven num_classes (NO ctor knob, mirrors sonair)
-# ---------------------------------------------------------------------------
-
-
 class _NumClassesDetector(nn.Module):
-    """Native detector exposing ``num_classes`` — stands in for a trained model
-    (RFDETRModel / YOLO26Model) whose head size is authoritative at eval time."""
+    """Native detector exposing ``num_classes`` — stands in for a trained model at eval time."""
 
     def __init__(self, num_classes: int = 3) -> None:
         super().__init__()
@@ -190,55 +155,43 @@ class _NumClassesDetector(nn.Module):
         return _NativeDetector.forward(self, images)  # type: ignore[arg-type]
 
 
-def test_no_num_classes_ctor_arg() -> None:
-    # Model-driven design (mirrors sonair): the evaluator has NO num_classes knob.
-    with pytest.raises(TypeError):
-        LightningDetectionEvaluator(
-            model=_NativeDetector(), dataset=_make_flux(4), num_classes=2  # type: ignore[call-arg]
-        )
-
-
 def test_initialize_reads_num_classes_off_trained_model() -> None:
-    # initialize() flows the model first, then reads num_classes off the LIVE model.
-    ev = _make_evaluator(model=LazyClass(_NumClassesDetector, num_classes=5), dataset=_make_flux(4))
+    # On the eval path, initialize() flows the model first, then reads num_classes off the LIVE model.
+    ev = _evaluator(model=LazyClass(_NumClassesDetector, num_classes=5), dataset=_make_flux(4))
     assert ev.num_classes is None  # not resolved until initialize()
     ev.initialize()
-    assert isinstance(ev.model, _NumClassesDetector)  # model flowed to a live instance
+    assert isinstance(ev.model, _NumClassesDetector)
     assert ev.num_classes == 5
 
 
 def test_initialize_reads_num_classes_from_torchvision_head() -> None:
-    # A torchvision two-stage box-predictor head is read via _model_num_classes.
     model = nn.Module()
     model.roi_heads = nn.Module()  # type: ignore[assignment]
     model.roi_heads.box_predictor = nn.Module()  # type: ignore[attr-defined]
     model.roi_heads.box_predictor.cls_score = nn.Linear(10, 7)  # type: ignore[attr-defined]
-    ev = _make_evaluator(model=model, dataset=_make_flux(4))
+    ev = _evaluator(model=model, dataset=_make_flux(4))
     ev.initialize()
     assert ev.num_classes == 7
 
 
 def test_initialize_best_effort_when_model_lacks_num_classes() -> None:
-    # The MAP metric is class-agnostic — a detector that exposes no count leaves
-    # num_classes None WITHOUT erroring (unlike sonair, which raises).
-    ev = _make_evaluator(model=_NativeDetector(), dataset=_make_flux(4))
+    # The MAP metric is class-agnostic — a detector that exposes no count leaves num_classes None.
+    ev = _evaluator(model=_NativeDetector(), dataset=_make_flux(4))
     ev.initialize()
     assert ev.num_classes is None
 
 
 def test_initialize_normalizes_dataset_to_flux() -> None:
-    # ensure_sample_dataset normalizes the wired source to a Dataset[Sample] (a Flux).
-    ev = _make_evaluator(model=_NativeDetector(), dataset=_make_flux(4))
+    ev = _evaluator(model=_NativeDetector(), dataset=_make_flux(4))
     ev.initialize()
-    assert isinstance(ev.dataset, Flux)
+    assert isinstance(ev.test_set, Flux)
 
 
 def test_run_calls_initialize(tmp_path: Any) -> None:
-    # run() invokes initialize() (model flowed, num_classes resolved) before the base loop.
-    ev = _make_evaluator(
+    ev = _evaluator(
         model=LazyClass(_NumClassesDetector, num_classes=6),
         dataset=_make_flux(4),
-        loader=Class(DataLoader, batch_size=2, collate_fn=detection_collate_fn),
+        test_loader=Class(DataLoader, batch_size=2, collate_fn=detection_collate_fn),
         lightning=Class(
             L.Trainer,
             accelerator="cpu",

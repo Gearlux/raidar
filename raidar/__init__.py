@@ -7,7 +7,7 @@ from raidar.detection import (
     DetectionPredictions,
     detection_collate_fn,
 )
-from raidar.evaluator import LightningDetectionEvaluator
+from raidar.detector import LightningDetector
 
 # Hugging Face transformers native detection wrappers (D-FINE / RT-DETRv2 — both
 # Apache-2.0, so they live in raidar core). Cheap to import: the `transformers`
@@ -15,7 +15,6 @@ from raidar.evaluator import LightningDetectionEvaluator
 # Discovered via the `confluid.configurables` package scan (their
 # `@configurable(task="detection", role="model")` tags), like RFDETRModel.
 from raidar.hf_detection import DFINEModel, HFDetectionModel, RTDETRv2Model
-from raidar.lightning_trainer import LightningDetectionTrainer
 from raidar.rfdetr import RFDETRModel
 
 # The native RF-DETR trainer/evaluator are imported here so confluid's
@@ -35,8 +34,7 @@ __all__ = [
     "DetectionOutput",
     "DetectionPredictions",
     "HFDetectionModel",
-    "LightningDetectionEvaluator",
-    "LightningDetectionTrainer",
+    "LightningDetector",
     "RFDETRModel",
     "RFDETREvaluator",
     "RFDETRTrainer",

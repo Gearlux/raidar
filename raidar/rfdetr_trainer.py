@@ -108,7 +108,7 @@ def _sidecar_from_output_dir(output_dir: str, out_path: Optional[str]) -> None:
 
 def _enable_mlflow_system_metrics_if_tracking(enabled: bool) -> None:
     if enabled and os.environ.get("MLFLOW_TRACKING_URI"):
-        from marainer.system_metrics import enable_mlflow_system_metrics
+        from marainer.tracking.system import enable_mlflow_system_metrics
 
         enable_mlflow_system_metrics()
 

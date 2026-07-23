@@ -1,4 +1,4 @@
-"""Tests for the specialised :class:`raidar.lightning_trainer.LightningDetectionTrainer`.
+"""Tests for the specialised :class:`raidar.lightning_trainer.LightningDetector`.
 
 These tests cover the **native** path — overridden ``training_step`` /
 ``validation_step`` / ``test_step`` consume torchvision-native models
@@ -21,7 +21,7 @@ from torchmetrics import MetricCollection
 from torchmetrics.detection import MeanAveragePrecision
 
 from raidar.detection import DetectionConfusionMatrix, detection_collate_fn
-from raidar.lightning_trainer import LightningDetectionTrainer, _model_num_classes
+from raidar.detector import LightningDetector, _model_num_classes
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -99,7 +99,7 @@ def _make_flux(n: int = 4, size: int = 32) -> Flux:
 def test_loss_fn_is_none() -> None:
     """Specialised trainer drops the loss_fn parameter entirely — native
     detection models compute loss inside forward."""
-    trainer = LightningDetectionTrainer(
+    trainer = LightningDetector(
         model=_NativeDetector(),
         train_set=_make_flux(4),
         num_classes=2,
@@ -108,7 +108,7 @@ def test_loss_fn_is_none() -> None:
 
 
 def test_train_metrics_default_none() -> None:
-    trainer = LightningDetectionTrainer(
+    trainer = LightningDetector(
         model=_NativeDetector(),
         train_set=_make_flux(4),
         num_classes=2,
@@ -121,7 +121,7 @@ def test_val_test_metrics_default_to_lazy_map() -> None:
     so they're independent and materialise through the base trainer's ``flow()`` step."""
     from confluid.fluid import Class as ConfluidClass
 
-    trainer = LightningDetectionTrainer(
+    trainer = LightningDetector(
         model=_NativeDetector(),
         train_set=_make_flux(4),
         num_classes=2,
@@ -136,7 +136,7 @@ def test_val_test_metrics_default_to_lazy_map() -> None:
 def test_user_supplied_instance_metric_passes_through() -> None:
     """An already-instantiated metric is held verbatim — no Lazy wrapping needed."""
     custom = MeanAveragePrecision(iou_type="bbox", class_metrics=True)
-    trainer = LightningDetectionTrainer(model=_NativeDetector(), train_set=_make_flux(4), num_classes=2)
+    trainer = LightningDetector(model=_NativeDetector(), train_set=_make_flux(4), num_classes=2)
     trainer.val_metrics = custom
     assert trainer.val_metrics is custom
 
@@ -151,7 +151,7 @@ def test_metric_collection_with_native_confusion_matrix_construction() -> None:
             "confusion": DetectionConfusionMatrix(iou_threshold=0.5),
         }
     )
-    trainer = LightningDetectionTrainer(model=_NativeDetector(), train_set=_make_flux(4), num_classes=2)
+    trainer = LightningDetector(model=_NativeDetector(), train_set=_make_flux(4), num_classes=2)
     trainer.val_metrics = coll
     assert trainer.val_metrics is coll
 
@@ -159,7 +159,7 @@ def test_metric_collection_with_native_confusion_matrix_construction() -> None:
 def test_default_loader_uses_detection_collate_fn() -> None:
     from confluid.fluid import Class as ConfluidClass
 
-    trainer = LightningDetectionTrainer(
+    trainer = LightningDetector(
         model=_NativeDetector(),
         train_set=_make_flux(4),
         num_classes=2,
@@ -176,7 +176,7 @@ def test_default_loader_uses_detection_collate_fn() -> None:
 
 
 def test_training_step_sums_native_loss_dict_with_grad() -> None:
-    trainer = LightningDetectionTrainer(
+    trainer = LightningDetector(
         model=_NativeDetector(),
         train_set=_make_flux(4),
         num_classes=2,
@@ -193,7 +193,7 @@ def test_training_step_sums_native_loss_dict_with_grad() -> None:
 def test_training_step_rejects_missing_targets() -> None:
     from raidar.detection import DetectionBatchInput
 
-    trainer = LightningDetectionTrainer(
+    trainer = LightningDetector(
         model=_NativeDetector(),
         train_set=_make_flux(4),
         num_classes=2,
@@ -223,7 +223,7 @@ def test_training_step_rejects_non_dict_model_output() -> None:
         ) -> Any:
             return [{"boxes": torch.zeros((0, 4))} for _ in images]
 
-    trainer = LightningDetectionTrainer(
+    trainer = LightningDetector(
         model=_BrokenDetector(),
         train_set=_make_flux(4),
         num_classes=2,
@@ -235,7 +235,7 @@ def test_training_step_rejects_non_dict_model_output() -> None:
 
 
 def test_validation_step_updates_metric_with_predictions() -> None:
-    trainer = LightningDetectionTrainer(model=_NativeDetector(), train_set=_make_flux(4), num_classes=2)
+    trainer = LightningDetector(model=_NativeDetector(), train_set=_make_flux(4), num_classes=2)
     trainer.val_set = _make_flux(2)
     trainer.val_metrics = MeanAveragePrecision(iou_type="bbox")
     trainer.eval()
@@ -247,7 +247,7 @@ def test_validation_step_updates_metric_with_predictions() -> None:
 
 
 def test_test_step_uses_test_metric() -> None:
-    trainer = LightningDetectionTrainer(model=_NativeDetector(), train_set=_make_flux(4), num_classes=2)
+    trainer = LightningDetector(model=_NativeDetector(), train_set=_make_flux(4), num_classes=2)
     trainer.test_set = _make_flux(2)
     trainer.test_metrics = MeanAveragePrecision(iou_type="bbox")
     trainer.eval()
@@ -269,7 +269,7 @@ def test_end_to_end_native_trainer_fit(tmp_path: Any) -> None:
     train_flux = _make_flux(4)
     val_flux = _make_flux(2)
 
-    trainer = LightningDetectionTrainer(model=_NativeDetector(), train_set=train_flux, num_classes=2)
+    trainer = LightningDetector(model=_NativeDetector(), train_set=train_flux, num_classes=2)
     trainer.val_set = val_flux
 
     lightning_trainer = L.Trainer(
@@ -339,7 +339,7 @@ def _labelled_flux(label_sets: List[List[int]], size: int = 16) -> Flux:
 
 def test_initialize_derives_num_classes_from_targets_and_flows_lazy_model() -> None:
     # Labels up to 2 → derived num_classes = max + 1 = 3; injected into the lazy model.
-    trainer = LightningDetectionTrainer(model=LazyClass(_NumClassesDetector), train_set=_labelled_flux([[1, 2], [1]]))
+    trainer = LightningDetector(model=LazyClass(_NumClassesDetector), train_set=_labelled_flux([[1, 2], [1]]))
     trainer.initialize()
     assert trainer.num_classes == 3
     assert isinstance(trainer.model, _NumClassesDetector)
@@ -347,9 +347,7 @@ def test_initialize_derives_num_classes_from_targets_and_flows_lazy_model() -> N
 
 
 def test_initialize_explicit_num_classes_injected_into_lazy_model() -> None:
-    trainer = LightningDetectionTrainer(
-        model=LazyClass(_NumClassesDetector), train_set=_labelled_flux([[1]]), num_classes=7
-    )
+    trainer = LightningDetector(model=LazyClass(_NumClassesDetector), train_set=_labelled_flux([[1]]), num_classes=7)
     trainer.initialize()
     assert isinstance(trainer.model, _NumClassesDetector)
     assert trainer.num_classes == 7 and trainer.model.num_classes == 7
@@ -357,9 +355,7 @@ def test_initialize_explicit_num_classes_injected_into_lazy_model() -> None:
 
 def test_initialize_lazy_model_pinned_num_classes_used() -> None:
     # num_classes pinned on the lazy model's kwargs is used as-is.
-    trainer = LightningDetectionTrainer(
-        model=LazyClass(_NumClassesDetector, num_classes=9), train_set=_labelled_flux([[1]])
-    )
+    trainer = LightningDetector(model=LazyClass(_NumClassesDetector, num_classes=9), train_set=_labelled_flux([[1]]))
     trainer.initialize()
     assert isinstance(trainer.model, _NumClassesDetector)
     assert trainer.num_classes == 9 and trainer.model.num_classes == 9
@@ -368,7 +364,7 @@ def test_initialize_lazy_model_pinned_num_classes_used() -> None:
 def test_initialize_concrete_model_num_classes_is_authoritative() -> None:
     # A concrete model's head wins over a (mismatched) explicit trainer arg.
     model = _NumClassesDetector(num_classes=4)
-    trainer = LightningDetectionTrainer(model=model, train_set=_labelled_flux([[1]]), num_classes=99)
+    trainer = LightningDetector(model=model, train_set=_labelled_flux([[1]]), num_classes=99)
     trainer.initialize()
     assert trainer.num_classes == 4
     assert trainer.model is model
@@ -376,16 +372,14 @@ def test_initialize_concrete_model_num_classes_is_authoritative() -> None:
 
 def test_initialize_model_without_num_classes_param_flowed_plainly() -> None:
     # A lazy model whose builder takes no num_classes is flowed plainly (no kwarg error).
-    trainer = LightningDetectionTrainer(
-        model=LazyClass(_NativeDetector), train_set=_labelled_flux([[1]]), num_classes=3
-    )
+    trainer = LightningDetector(model=LazyClass(_NativeDetector), train_set=_labelled_flux([[1]]), num_classes=3)
     trainer.initialize()
     assert isinstance(trainer.model, _NativeDetector)
     assert trainer.num_classes == 3
 
 
 def test_trained_model_output_raises_before_run_returns_after_flow() -> None:
-    trainer = LightningDetectionTrainer(model=LazyClass(_NumClassesDetector), train_set=_labelled_flux([[1]]))
+    trainer = LightningDetector(model=LazyClass(_NumClassesDetector), train_set=_labelled_flux([[1]]))
     with pytest.raises(RuntimeError, match="only available after run"):
         _ = trainer.trained_model
     trainer.initialize()  # flows the model into a live instance
