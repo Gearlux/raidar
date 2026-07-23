@@ -7,12 +7,14 @@ path needs — there is no adapter / indirection layer (the marainer-generic
 path was removed; detection now runs exclusively through the specialised trainer
 that drives torchvision-native models and raw ``torchmetrics`` metrics directly):
 
-* :class:`DetectionBatchInput` carries images and (optionally) targets through
-  ``batch.input`` so variable-size per-image tensors survive collation. The
-  specialised trainer's step functions read ``batch.input.images`` /
-  ``batch.input.targets`` and hand them straight to the native model.
-* :func:`detection_collate_fn` is the DataLoader collate that builds a
-  :class:`DetectionBatchInput` and keeps per-image targets as lists (never
+* :class:`DetectionBatchInput` carries images and (optionally) targets so
+  variable-size per-image tensors survive collation. It rides as the payload of
+  the batched :class:`~sampleflux.TypedSample`'s primary ``input`` field; the
+  specialised trainer's step functions recover it (``_batch_detection``) and read
+  ``.images`` / ``.targets``, handing them straight to the native model.
+* :func:`detection_collate_fn` is the DataLoader collate that consumes the typed
+  :class:`~sampleflux.TypedSample`\\ s the sources now yield, builds a
+  :class:`DetectionBatchInput`, and keeps per-image targets as lists (never
   padded, never dropped).
 * :class:`DetectionConfusionMatrix` is a native ``torchmetrics.Metric`` that
   accumulates TP / FP / FN (+ derived precision / recall / F1) and drops
@@ -44,11 +46,12 @@ Typical wiring (YAML)::
 """
 
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, cast
 
+import numpy as np
 import torch
 from marainer.torch.outputs import DetectionOutput, DetectionPredictions
-from sampleflux.sample import Sample
+from sampleflux import Label, Regions, TypedSample, item_data, primary
 from torch import Tensor
 from torchmetrics import Metric
 from torchvision.ops import box_iou
@@ -60,13 +63,14 @@ from torchvision.ops import box_iou
 
 @dataclass
 class DetectionBatchInput:
-    """Container that carries images and (optionally) targets through ``batch.input``.
+    """Container that carries images and (optionally) targets as the batch's primary input.
 
     Torchvision detectors compute loss *inside* their forward by consuming a
     list of targets alongside the images — there is no way to split "run the
-    model" from "compute loss". We carry both through ``batch.input`` so the
-    specialised :class:`~raidar.lightning_trainer.LightningDetectionTrainer`'s
-    step functions can unwrap ``(images, targets)`` and hand them to the model.
+    model" from "compute loss". We carry both as the payload of the batched
+    :class:`~sampleflux.TypedSample`'s primary ``input`` field so the specialised
+    :class:`~raidar.detector.LightningDetector`'s step functions can unwrap
+    ``(images, targets)`` and hand them to the model.
 
     Attributes:
         images: List of ``[3, H_i, W_i]`` float tensors, one per image. Sizes
@@ -267,38 +271,84 @@ class DetectionConfusionMatrix(Metric):
 # ---------------------------------------------------------------------------
 
 
-def detection_collate_fn(batch: List[Sample]) -> Sample:
-    """Collate variable-length detection samples into a batch the trainer can use.
+def _as_tensor(value: Any) -> Tensor:
+    """Coerce an item payload (a torch tensor or numpy array) to a torch tensor (memory-sharing)."""
+    if isinstance(value, Tensor):
+        return value
+    return torch.as_tensor(np.asarray(value))
 
-    Each input ``Sample`` is expected to carry:
 
-    * ``sample.input`` — a ``[3, H, W]`` float tensor (e.g. produced by
-      :class:`waivefront.targets.RegionsToDetectionBoxesOp`).
-    * ``sample.target`` — ``{"boxes": [N, 4] float32, "labels": [N] int64}``
-      in torchvision xyxy-pixel format.
+def _detection_target(sample: TypedSample) -> Dict[str, Tensor]:
+    """The torchvision ``{boxes, labels}`` target dict from a typed sample's primary ``target``.
 
-    The returned :class:`~sampleflux.sample.Sample` has:
+    The typed detection-target op (``sampleflux.ops.target.CocoToTorchVisionDetection`` /
+    ``MasksToDetectionBoxes``) writes the target as a :class:`~sampleflux.Regions` item whose
+    ``boxes`` = the ``[N, 4]`` xyxy tensor and ``labels`` = the ``[N]`` class-id tensor; unwrap it
+    into the ``{"boxes", "labels"}`` dict the native torchvision model consumes. A field that already
+    carries the dict verbatim (a :class:`~sampleflux.Label` wrapper or a raw dict) is passed through.
+    """
+    _, item = primary(sample, "target")
+    if isinstance(item, Regions):
+        return {"boxes": _as_tensor(item.boxes), "labels": _as_tensor(item.labels)}
+    data = item.value if isinstance(item, Label) else item_data(item)
+    return cast(Dict[str, Tensor], data)
 
-    * ``.input`` — :class:`DetectionBatchInput` carrying ``images`` (list of
-      tensors) AND ``targets`` (list of dicts). The specialised
-      :class:`~raidar.lightning_trainer.LightningDetectionTrainer` unwraps this
-      into ``(images, targets)`` for the native model in train and val alike.
-    * ``.target`` — the same list of target dicts, so a metric's
-      ``update(preds, targets)`` receives per-image ground truth.
-    * ``.metadata`` — list of the per-sample metadata dicts (preserved for
-      sinks that write per-sample predictions).
+
+def _sample_metadata(sample: TypedSample) -> Dict[str, Any]:
+    """Gather a :class:`~sampleflux.TypedSample`'s NON-primary fields into a plain metadata dict.
+
+    Every field that is not the primary input or the primary target becomes ``{name: value}`` (a
+    :class:`~sampleflux.Label`'s ``.value``, else the item payload) so string-valued fields survive
+    collation and predictions sinks can correlate per-image outputs.
+    """
+    input_key, _ = primary(sample, "input")
+    try:
+        target_key: Any = primary(sample, "target")[0]
+    except KeyError:
+        target_key = None
+    return {
+        key: (item.value if isinstance(item, Label) else item_data(item))
+        for key, item in sample.items()
+        if key not in (input_key, target_key)
+    }
+
+
+def detection_collate_fn(batch: List[TypedSample]) -> TypedSample:
+    """Collate variable-length detection :class:`~sampleflux.TypedSample`\\ s into ONE batched bag.
+
+    Each per-sample :class:`~sampleflux.TypedSample` carries an :class:`~sampleflux.Image` input
+    (``[3, H, W]`` float) and a :class:`~sampleflux.Regions` target (boxes + labels). This reads the
+    primary ``input`` image (``item_data(primary(s, "input"))``, coerced to a tensor) and the primary
+    ``target`` region set (unwrapped to a torchvision ``{boxes, labels}`` dict by
+    :func:`_detection_target`), then returns ONE batched :class:`~sampleflux.TypedSample`:
+
+    * field ``"detection"`` (role ``input``) — a :class:`DetectionBatchInput` carried VERBATIM as the
+      field payload. It is a custom container (variable-N images + per-image target dicts), NOT an
+      array item, so it must NOT be forced into an :class:`~sampleflux.Image` (which would ``np.asarray``
+      it); ``item_data`` returns it unchanged, and the specialised
+      :class:`~raidar.detector.LightningDetector` recovers it via ``_batch_detection`` and unwraps
+      ``(images, targets)`` for the native model.
+    * field ``"targets"`` (role ``target``) — the SAME list of per-image target dicts, so a metric's
+      ``update(preds, targets)`` receives per-image ground truth (``batch["targets"] is
+      batch_detection.targets``).
+    * field ``"metadata"`` (role ``aux``) — a ``list`` of the per-sample metadata dicts (the
+      non-primary fields), preserved for sinks that write per-sample predictions.
+
+    Per-image targets are kept as lists — never padded, never dropped (the variable-N detection
+    batch convention).
     """
     images: List[Tensor] = []
     targets: List[Dict[str, Tensor]] = []
     metas: List[Dict[str, Any]] = []
     for s in batch:
-        images.append(s.input)
-        targets.append(s.target)
-        metas.append(s.meta if s.meta is not None else {})
-    return Sample(
-        input=DetectionBatchInput(images=images, targets=targets),
-        target=targets,
-        metadata={"per_sample": metas},
+        _, img_item = primary(s, "input")
+        images.append(_as_tensor(item_data(img_item)))
+        targets.append(_detection_target(s))
+        metas.append(_sample_metadata(s))
+    batch_input = DetectionBatchInput(images=images, targets=targets)
+    return TypedSample(
+        {"detection": batch_input, "targets": targets, "metadata": metas},
+        roles={"detection": "input", "targets": "target", "metadata": "aux"},
     )
 
 
