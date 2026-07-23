@@ -28,9 +28,9 @@ Compared to the in-memory ``raidar_ultralytics.flux_yolo_dataset.FluxYOLODataset
 dataset trades startup cost for faster epochs and lets third-party tools
 (FiftyOne, pycocotools, ultralytics' own CLI) consume the same data.
 
-Generic over any detection Flux whose ``Sample`` carries ``input`` as an image
+Generic over any detection Flux whose primary input item is an image
 (``[3,H,W]`` / ``[H,W,3]`` / ``[H,W]``, float ``[0,1]`` or ``uint8``, numpy or
-torch) and ``target={"boxes": [N,4] xyxy-pixel float32, "labels": [N] int64}``
+torch) and whose target-role item is ``{"boxes": [N,4] xyxy-pixel float32, "labels": [N] int64}``
 — i.e. exactly what :class:`waivefront.targets.RegionsToDetectionBoxesOp`
 produces. (No ``ultralytics`` import — it only writes the on-disk layout.)
 """
