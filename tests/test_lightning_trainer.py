@@ -14,6 +14,7 @@ import pytorch_lightning as L
 import torch
 import torch.nn as nn
 from confluid import LazyClass
+from sampleflux import Image, Label, Regions, TypedSample
 from sampleflux.core import Flux
 from sampleflux.sample import Sample
 from torch import Tensor
@@ -64,23 +65,32 @@ class _NativeDetector(nn.Module):
         return out
 
 
-def _make_samples(n: int = 4, size: int = 32) -> List[Sample]:
-    samples: List[Sample] = []
+def _regions(boxes: Any, labels: Any) -> Regions:
+    """A detection-target Regions carrying tensor boxes/labels (as the typed detection op produces)."""
+    return Regions(boxes=boxes, labels=labels)
+
+
+def _make_samples(n: int = 4, size: int = 32) -> List[TypedSample]:
+    """Per-sample TypedSamples shaped like a typed detection source: Image input + Regions target + aux."""
+    samples: List[TypedSample] = []
     for i in range(n):
         samples.append(
-            Sample(
-                input=torch.rand(3, size, size),
-                target={
-                    "boxes": torch.tensor([[4.0, 4.0, 20.0, 20.0]], dtype=torch.float32),
-                    "labels": torch.tensor([1], dtype=torch.int64),
+            TypedSample(
+                {
+                    "image": Image(torch.rand(3, size, size).numpy(), layout="CHW"),
+                    "target": _regions(
+                        torch.tensor([[4.0, 4.0, 20.0, 20.0]], dtype=torch.float32),
+                        torch.tensor([1], dtype=torch.int64),
+                    ),
+                    "idx": Label(i),
                 },
-                metadata={"idx": i},
+                roles={"target": "target", "idx": "aux"},
             )
         )
     return samples
 
 
-def _make_batch(n: int = 2, size: int = 32) -> Sample:
+def _make_batch(n: int = 2, size: int = 32) -> TypedSample:
     return detection_collate_fn(_make_samples(n=n, size=size))
 
 

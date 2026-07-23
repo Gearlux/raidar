@@ -12,8 +12,8 @@ import torch
 import torch.nn as nn
 from confluid import Class, LazyClass
 from confluid.fluid import Class as ConfluidClass
+from sampleflux import Image, Label, Regions, TypedSample
 from sampleflux.core import Flux
-from sampleflux.sample import Sample
 from torch import Tensor
 from torch.utils.data import DataLoader
 from torchmetrics.detection import MeanAveragePrecision
@@ -52,15 +52,23 @@ class _NativeDetector(nn.Module):
         ]
 
 
+def _regions(boxes: Any, labels: Any) -> Regions:
+    """A detection-target Regions carrying tensor boxes/labels (as the typed detection op produces)."""
+    return Regions(boxes=boxes, labels=labels)
+
+
 def _make_flux(n: int = 4, size: int = 32) -> Flux:
     samples = [
-        Sample(
-            input=torch.rand(3, size, size),
-            target={
-                "boxes": torch.tensor([[4.0, 4.0, 20.0, 20.0]], dtype=torch.float32),
-                "labels": torch.tensor([1], dtype=torch.int64),
+        TypedSample(
+            {
+                "image": Image(torch.rand(3, size, size).numpy(), layout="CHW"),
+                "target": _regions(
+                    torch.tensor([[4.0, 4.0, 20.0, 20.0]], dtype=torch.float32),
+                    torch.tensor([1], dtype=torch.int64),
+                ),
+                "idx": Label(i),
             },
-            metadata={"idx": i},
+            roles={"target": "target", "idx": "aux"},
         )
         for i in range(n)
     ]

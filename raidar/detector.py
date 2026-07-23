@@ -28,13 +28,14 @@ from marainer.run_names import generate_run_name
 from marainer.torch import ensure_sample_dataset
 from marainer.tracking.base import Tracker
 from pytorch_lightning.loggers import Logger
+from sampleflux import TypedSample, item_data, primary
 from sampleflux.runnable import ProgressReporting, TorchRunner, entrypoint
 from torch import Tensor
 from torch.utils.data import DataLoader
 from torchmetrics.detection import MeanAveragePrecision
 from tqdm import tqdm
 
-from raidar.detection import detection_collate_fn
+from raidar.detection import DetectionBatchInput, detection_collate_fn
 
 logger = get_logger(__name__)
 
@@ -51,6 +52,22 @@ def _log_scalar_dict(module: L.LightningModule, metric: Any, prefix: str) -> Non
                 module.log(f"{prefix}{k}", v)
     elif isinstance(result, Tensor) and result.ndim == 0 and result.is_floating_point():
         module.log(f"{prefix}{type(metric).__name__}", result)
+
+
+def _batch_detection(batch: Any) -> DetectionBatchInput:
+    """Recover the :class:`~raidar.detection.DetectionBatchInput` (images + optional targets) from a batch.
+
+    The typed collate (:func:`raidar.detection.detection_collate_fn`) returns a batched
+    :class:`~sampleflux.TypedSample` whose primary ``input`` field carries the
+    :class:`~raidar.detection.DetectionBatchInput` VERBATIM (it is a custom container, not an array item
+    nor a ``data``-field wrapper, so ``item_data`` returns it unchanged). A legacy ``Sample`` batch (for
+    any path still fed the legacy carrier — e.g. a directly-built ``Sample(input=DetectionBatchInput(...))``)
+    exposes it as ``.input``.
+    """
+    if isinstance(batch, TypedSample):
+        _, item = primary(batch, "input")
+        return cast(DetectionBatchInput, item_data(item))
+    return cast(DetectionBatchInput, batch.input)
 
 
 def _model_num_classes(model: nn.Module) -> Optional[int]:
@@ -228,8 +245,9 @@ class LightningDetector(TorchRunner, ProgressReporting, L.LightningModule):
 
     # ---- detection step functions ------------------------------------------- #
     def training_step(self, batch: Any, batch_idx: int) -> Tensor:
-        images: List[Tensor] = batch.input.images
-        targets: Optional[List[Dict[str, Tensor]]] = batch.input.targets
+        batch_input = _batch_detection(batch)
+        images: List[Tensor] = batch_input.images
+        targets: Optional[List[Dict[str, Tensor]]] = batch_input.targets
         if targets is None:
             raise ValueError("LightningDetector.training_step requires targets on the batch.")
         loss_dict = cast(nn.Module, self.model)(images, targets)
@@ -248,15 +266,17 @@ class LightningDetector(TorchRunner, ProgressReporting, L.LightningModule):
         return total
 
     def validation_step(self, batch: Any, batch_idx: int) -> None:  # type: ignore[override]
-        images: List[Tensor] = batch.input.images
-        targets: Optional[List[Dict[str, Tensor]]] = batch.input.targets
+        batch_input = _batch_detection(batch)
+        images: List[Tensor] = batch_input.images
+        targets: Optional[List[Dict[str, Tensor]]] = batch_input.targets
         predictions = cast(nn.Module, self.model)(images)
         if self.val_metrics is not None and targets is not None:
             self.val_metrics.update(predictions, targets)
 
     def test_step(self, batch: Any, batch_idx: int) -> Any:
-        images: List[Tensor] = batch.input.images
-        targets: Optional[List[Dict[str, Tensor]]] = batch.input.targets
+        batch_input = _batch_detection(batch)
+        images: List[Tensor] = batch_input.images
+        targets: Optional[List[Dict[str, Tensor]]] = batch_input.targets
         predictions = cast(nn.Module, self.model)(images)
         if self.test_metrics is not None and targets is not None:
             self.test_metrics.update(predictions, targets)
@@ -265,7 +285,7 @@ class LightningDetector(TorchRunner, ProgressReporting, L.LightningModule):
         return predictions
 
     def predict_step(self, batch: Any, batch_idx: int) -> Any:
-        images: List[Tensor] = batch.input.images
+        images: List[Tensor] = _batch_detection(batch).images
         predictions = cast(nn.Module, self.model)(images)
         if self.predictions_sink is not None:
             self._write_predictions(predictions, batch)
@@ -365,11 +385,15 @@ class LightningDetector(TorchRunner, ProgressReporting, L.LightningModule):
 
     def _write_predictions(self, preds: Any, batch: Any) -> None:
         per_sample_meta = None
-        meta = getattr(batch, "metadata", None)
-        if isinstance(meta, list):
-            per_sample_meta = meta
-        elif isinstance(meta, dict):
-            per_sample_meta = meta.get("per_sample")
+        if isinstance(batch, TypedSample):
+            # The typed collate stashes the per-sample metadata dicts under a "metadata" field.
+            per_sample_meta = batch["metadata"] if "metadata" in batch else None
+        else:
+            meta = getattr(batch, "metadata", None)
+            if isinstance(meta, list):
+                per_sample_meta = meta
+            elif isinstance(meta, dict):
+                per_sample_meta = meta.get("per_sample")
         items = (
             preds["predictions"]
             if isinstance(preds, dict) and "predictions" in preds
