@@ -11,7 +11,7 @@ remains here is the batch container + collate the native path uses; the
 from typing import Any, Dict, List
 
 import torch
-from sampleflux import Image, Regions, TypedSample, item_data, primary
+from sampleflux import Image, Regions, Sample, item_data, primary
 from torch import Tensor
 
 from raidar.detection import DetectionBatchInput, detection_collate_fn
@@ -40,12 +40,12 @@ def _regions(boxes: Any, labels: Any) -> Regions:
     return Regions(boxes=boxes, labels=labels)
 
 
-def _synthetic_detection_samples(n: int, size: int = 64) -> List[TypedSample]:
-    """Per-sample TypedSamples shaped like a typed detection source: Image input + Regions target."""
-    samples: List[TypedSample] = []
+def _synthetic_detection_samples(n: int, size: int = 64) -> List[Sample]:
+    """Per-sample Samples shaped like a typed detection source: Image input + Regions target."""
+    samples: List[Sample] = []
     for _ in range(n):
         samples.append(
-            TypedSample(
+            Sample(
                 {
                     "image": Image(torch.rand(3, size, size).numpy(), layout="CHW"),
                     "target": _regions(
@@ -83,7 +83,7 @@ def test_detection_batch_input_targets_optional() -> None:
 def test_detection_collate_preserves_lists_and_sets_batch_input() -> None:
     samples = _synthetic_detection_samples(3, size=32)
     batch = detection_collate_fn(samples)
-    assert isinstance(batch, TypedSample)
+    assert isinstance(batch, Sample)
     # The DetectionBatchInput rides verbatim as the primary input field payload.
     _, input_item = primary(batch, "input")
     bi = item_data(input_item)

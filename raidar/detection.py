@@ -9,11 +9,11 @@ that drives torchvision-native models and raw ``torchmetrics`` metrics directly)
 
 * :class:`DetectionBatchInput` carries images and (optionally) targets so
   variable-size per-image tensors survive collation. It rides as the payload of
-  the batched :class:`~sampleflux.TypedSample`'s primary ``input`` field; the
+  the batched :class:`~sampleflux.Sample`'s primary ``input`` field; the
   specialised trainer's step functions recover it (``_batch_detection``) and read
   ``.images`` / ``.targets``, handing them straight to the native model.
 * :func:`detection_collate_fn` is the DataLoader collate that consumes the typed
-  :class:`~sampleflux.TypedSample`\\ s the sources now yield, builds a
+  :class:`~sampleflux.Sample`\\ s the sources now yield, builds a
   :class:`DetectionBatchInput`, and keeps per-image targets as lists (never
   padded, never dropped).
 * :class:`DetectionConfusionMatrix` is a native ``torchmetrics.Metric`` that
@@ -51,7 +51,7 @@ from typing import Any, Dict, List, Optional, Tuple, cast
 import numpy as np
 import torch
 from marainer.torch.outputs import DetectionOutput, DetectionPredictions
-from sampleflux import Label, Regions, TypedSample, item_data, primary
+from sampleflux import Label, Regions, Sample, item_data, primary
 from torch import Tensor
 from torchmetrics import Metric
 from torchvision.ops import box_iou
@@ -68,7 +68,7 @@ class DetectionBatchInput:
     Torchvision detectors compute loss *inside* their forward by consuming a
     list of targets alongside the images — there is no way to split "run the
     model" from "compute loss". We carry both as the payload of the batched
-    :class:`~sampleflux.TypedSample`'s primary ``input`` field so the specialised
+    :class:`~sampleflux.Sample`'s primary ``input`` field so the specialised
     :class:`~raidar.detector.LightningDetector`'s step functions can unwrap
     ``(images, targets)`` and hand them to the model.
 
@@ -278,7 +278,7 @@ def _as_tensor(value: Any) -> Tensor:
     return torch.as_tensor(np.asarray(value))
 
 
-def _detection_target(sample: TypedSample) -> Dict[str, Tensor]:
+def _detection_target(sample: Sample) -> Dict[str, Tensor]:
     """The torchvision ``{boxes, labels}`` target dict from a typed sample's primary ``target``.
 
     The typed detection-target op (``sampleflux.ops.target.CocoToTorchVisionDetection`` /
@@ -294,8 +294,8 @@ def _detection_target(sample: TypedSample) -> Dict[str, Tensor]:
     return cast(Dict[str, Tensor], data)
 
 
-def _sample_metadata(sample: TypedSample) -> Dict[str, Any]:
-    """Gather a :class:`~sampleflux.TypedSample`'s NON-primary fields into a plain metadata dict.
+def _sample_metadata(sample: Sample) -> Dict[str, Any]:
+    """Gather a :class:`~sampleflux.Sample`'s NON-primary fields into a plain metadata dict.
 
     Every field that is not the primary input or the primary target becomes ``{name: value}`` (a
     :class:`~sampleflux.Label`'s ``.value``, else the item payload) so string-valued fields survive
@@ -313,14 +313,14 @@ def _sample_metadata(sample: TypedSample) -> Dict[str, Any]:
     }
 
 
-def detection_collate_fn(batch: List[TypedSample]) -> TypedSample:
-    """Collate variable-length detection :class:`~sampleflux.TypedSample`\\ s into ONE batched bag.
+def detection_collate_fn(batch: List[Sample]) -> Sample:
+    """Collate variable-length detection :class:`~sampleflux.Sample`\\ s into ONE batched bag.
 
-    Each per-sample :class:`~sampleflux.TypedSample` carries an :class:`~sampleflux.Image` input
+    Each per-sample :class:`~sampleflux.Sample` carries an :class:`~sampleflux.Image` input
     (``[3, H, W]`` float) and a :class:`~sampleflux.Regions` target (boxes + labels). This reads the
     primary ``input`` image (``item_data(primary(s, "input"))``, coerced to a tensor) and the primary
     ``target`` region set (unwrapped to a torchvision ``{boxes, labels}`` dict by
-    :func:`_detection_target`), then returns ONE batched :class:`~sampleflux.TypedSample`:
+    :func:`_detection_target`), then returns ONE batched :class:`~sampleflux.Sample`:
 
     * field ``"detection"`` (role ``input``) — a :class:`DetectionBatchInput` carried VERBATIM as the
       field payload. It is a custom container (variable-N images + per-image target dicts), NOT an
@@ -346,7 +346,7 @@ def detection_collate_fn(batch: List[TypedSample]) -> TypedSample:
         targets.append(_detection_target(s))
         metas.append(_sample_metadata(s))
     batch_input = DetectionBatchInput(images=images, targets=targets)
-    return TypedSample(
+    return Sample(
         {"detection": batch_input, "targets": targets, "metadata": metas},
         roles={"detection": "input", "targets": "target", "metadata": "aux"},
     )
