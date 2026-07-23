@@ -1,33 +1,52 @@
-"""Raidar CLI — object-detection training and evaluation commands.
+"""Raidar CLI — object-detection training and evaluation.
 
-Provides ``raidar train`` / ``raidar evaluate`` for the Lightning detection
-flow. The native-ultralytics escape hatch lives in the
-[raidar-ultralytics](https://github.com/Gearlux/raidar-ultralytics) sibling
-package as ``raidar-ultralytics train`` / ``raidar-ultralytics evaluate``
-(or ``marainer ultralytics-train`` / ``marainer ultralytics-evaluate``).
+``raidar train`` / ``raidar evaluate`` / ``raidar predict`` bind the single
+:class:`~raidar.detector.LightningDetector` (a standard Lightning module) and run it
+with the matching ``task`` (the verb wins over the YAML's ``task:``). The RF-DETR
+framework-native trainer keeps its own ``raidar-rfdetr`` CLI; the ultralytics escape
+hatch lives in the raidar-ultralytics sibling. A generic ``sampleflux run`` also works.
 """
+
+from typing import Any
 
 from liquifai import LiquifyApp
 from loggair import get_logger
-
-from raidar.evaluator import LightningDetectionEvaluator
-from raidar.lightning_trainer import LightningDetectionTrainer
 
 logger = get_logger(__name__)
 
 app = LiquifyApp(name="raidar", description="Raidar object-detection commands")
 
 
-@app.script_command(flow_mode="auto")
-def train(trainer: LightningDetectionTrainer) -> None:
-    """Train an object-detection model via the Lightning trainer subclass."""
-    trainer.run()
+def _dispatch(detector: Any, task: str) -> None:
+    if detector is None:
+        logger.error("No detector was bound — provide one under 'runnable:' in your YAML.")
+        return
+    from confluid import flow
+    from confluid.fluid import Fluid
+
+    if isinstance(detector, Fluid):
+        detector = flow(detector)
+    if hasattr(detector, "task"):
+        detector.task = task
+    detector.run()
 
 
 @app.script_command(flow_mode="auto")
-def evaluate(evaluator: LightningDetectionEvaluator) -> None:
-    """Evaluate a trained object-detection model via the Lightning evaluator subclass."""
-    evaluator.run()
+def train(runnable: Any) -> None:
+    """Train an object-detection model (task=fit)."""
+    _dispatch(runnable, "fit")
+
+
+@app.script_command(flow_mode="auto")
+def evaluate(runnable: Any) -> None:
+    """Evaluate a trained detector over the test set (task=test)."""
+    _dispatch(runnable, "test")
+
+
+@app.script_command(flow_mode="auto")
+def predict(runnable: Any) -> None:
+    """Stream detection predictions to the sink (task=predict)."""
+    _dispatch(runnable, "predict")
 
 
 def main() -> None:

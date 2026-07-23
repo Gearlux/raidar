@@ -3,7 +3,7 @@
 The native wrappers return a single-key loss dict in train mode and a per-image
 ``DetectionOutput`` list in eval mode — the same contract torchvision detectors
 and :class:`raidar.rfdetr.RFDETRModel` speak, so they run through the generic
-:class:`raidar.lightning_trainer.LightningDetectionTrainer` with no adapter.
+:class:`raidar.lightning_trainer.LightningDetector` with no adapter.
 
 Pure-helper / map / guard tests run with no network. The real-model forward and
 end-to-end tests build the SMALLEST checkpoints with ``pretrained=False`` (random
@@ -194,7 +194,7 @@ def test_num_classes_attr_drives_head(models: Dict[str, HFDetectionModel], key: 
 
 
 # ---------------------------------------------------------------------------
-# End-to-end through the generic LightningDetectionTrainer (slow — real backbone)
+# End-to-end through the generic LightningDetector (slow — real backbone)
 # ---------------------------------------------------------------------------
 
 
@@ -208,7 +208,7 @@ def test_end_to_end_lightning_fit(cls: Any, variant: str, tmp_path: Any) -> None
     from sampleflux.sample import Sample
 
     from raidar.detection import detection_collate_fn
-    from raidar.lightning_trainer import LightningDetectionTrainer
+    from raidar.detector import LightningDetector
 
     def _flux(n: int) -> Flux:
         samples = [
@@ -225,7 +225,7 @@ def test_end_to_end_lightning_fit(cls: Any, variant: str, tmp_path: Any) -> None
         return Flux(source=samples)
 
     model = cls(num_classes=2, variant=variant, pretrained=False, image_size=_IMG)
-    trainer = LightningDetectionTrainer(model=model, train_set=_flux(4), num_classes=2)
+    trainer = LightningDetector(model=model, train_set=_flux(4), num_classes=2)
     trainer.val_set = _flux(2)
     trainer.val_metrics = flow(trainer.val_metrics)
     trainer.train_loader = torch.utils.data.DataLoader(_flux(4), batch_size=2, collate_fn=detection_collate_fn)

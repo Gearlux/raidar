@@ -47,7 +47,7 @@ from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 
 import torch
-from marainer.outputs import DetectionOutput, DetectionPredictions
+from marainer.torch.outputs import DetectionOutput, DetectionPredictions
 from sampleflux.sample import Sample
 from torch import Tensor
 from torchmetrics import Metric
