@@ -43,7 +43,7 @@ from PIL import Image
 from rfdetr._namespace import build_namespace
 from rfdetr.datasets.coco import ConvertCoco, make_coco_transforms, make_coco_transforms_square_div_64
 from rfdetr.training.module_data import RFDETRDataModule
-from sampleflux import Flux, iter_targets
+from sampleflux import Flux, Regions, item_data, iter_targets, primary
 
 logger = get_logger(__name__)
 
@@ -80,6 +80,27 @@ def _sample_input_to_rgb_pil(arr_in: Any) -> Image.Image:
         arr = np.repeat(arr, 3, axis=-1)
 
     return Image.fromarray(np.ascontiguousarray(arr), mode="RGB")
+
+
+def _target_boxes_labels(target: Any) -> Any:
+    """Extract ``(boxes, labels)`` from a projected detection target — a typed
+    :class:`~sampleflux.Regions` (the ``CocoToTorchVisionDetection`` op output) or a raw
+    ``{"boxes", "labels"}`` dict. Returns ``(None, None)`` when either is absent."""
+    if target is None:
+        return None, None
+    if isinstance(target, Regions):
+        return target.boxes, target.labels
+    if hasattr(target, "boxes") and hasattr(target, "labels"):
+        return target.boxes, target.labels
+    if isinstance(target, dict):
+        return target.get("boxes"), target.get("labels")
+    return None, None
+
+
+def _sample_primary_input(sample: Any) -> Any:
+    """The primary ``input`` payload of a typed :class:`~sampleflux.Sample` (image tensor / array / PIL)."""
+    _, item = primary(sample, "input")
+    return item_data(item)
 
 
 def _as_f32(value: Any) -> torch.Tensor:
@@ -165,8 +186,9 @@ class FluxRFDETRDataset(torch.utils.data.Dataset):
     def _cache_labels(flux: Flux) -> List[Dict[str, torch.Tensor]]:
         cached: List[Dict[str, torch.Tensor]] = []
         for target in iter_targets(flux):
-            if target and target.get("boxes") is not None and target.get("labels") is not None:
-                cached.append({"boxes": _as_f32(target["boxes"]).reshape(-1, 4), "labels": _as_i64(target["labels"])})
+            boxes, labels = _target_boxes_labels(target)
+            if boxes is not None and labels is not None:
+                cached.append({"boxes": _as_f32(boxes).reshape(-1, 4), "labels": _as_i64(labels)})
             else:
                 cached.append(
                     {"boxes": torch.zeros((0, 4), dtype=torch.float32), "labels": torch.zeros((0,), dtype=torch.int64)}
@@ -178,7 +200,7 @@ class FluxRFDETRDataset(torch.utils.data.Dataset):
 
     def __getitem__(self, i: int) -> Any:
         sample = self._flux[i]
-        pil = _sample_input_to_rgb_pil(sample.input)
+        pil = _sample_input_to_rgb_pil(_sample_primary_input(sample))
         cached = self._labels[i]
         coco_target = {
             "image_id": i,

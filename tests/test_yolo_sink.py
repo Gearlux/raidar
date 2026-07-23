@@ -15,8 +15,9 @@ import pytest
 import torch
 import yaml
 from PIL import Image
+from sampleflux import Image as SFImage
+from sampleflux import Regions, Sample
 from sampleflux.core import Flux
-from sampleflux.sample import Sample
 
 from raidar.yolo_sink import YoloSink, _jsonable_metadata, _to_uint8_hwc, _yolo_lines
 
@@ -24,15 +25,23 @@ from raidar.yolo_sink import YoloSink, _jsonable_metadata, _to_uint8_hwc, _yolo_
 def _make_sample(
     height: int = 400, width: int = 400, boxes_xyxy: Any = None, labels: Any = None, metadata: Any = None
 ) -> Sample:
-    """Sample matching RegionsToDetectionBoxesOp: input [3,H,W] float32 [0,1];
-    target {"boxes": [N,4] xyxy-pixel, "labels": [N] int64}."""
-    boxes = (
+    """Typed detection Sample matching CocoToTorchVisionDetection: Image input [3,H,W]; Regions target
+    (boxes [N,4] xyxy-pixel + labels [N] int64); each metadata entry rides as an aux field."""
+    boxes: Any = (
         torch.zeros((0, 4), dtype=torch.float32)
         if boxes_xyxy is None
         else torch.as_tensor(boxes_xyxy, dtype=torch.float32)
     )
-    lbls = torch.zeros((0,), dtype=torch.int64) if labels is None else torch.as_tensor(labels, dtype=torch.int64)
-    return Sample(input=torch.rand(3, height, width), target={"boxes": boxes, "labels": lbls}, metadata=metadata or {})
+    lbls: Any = torch.zeros((0,), dtype=torch.int64) if labels is None else torch.as_tensor(labels, dtype=torch.int64)
+    fields: dict = {
+        "image": SFImage(torch.rand(3, height, width).numpy(), layout="CHW"),
+        "regions": Regions(boxes=boxes, labels=lbls),
+    }
+    roles: dict = {"regions": "target"}
+    for _k, _v in (metadata or {}).items():
+        fields[_k] = _v
+        roles[_k] = "aux"
+    return Sample(fields, roles)
 
 
 def _convert(

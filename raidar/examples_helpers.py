@@ -7,11 +7,11 @@ end-to-end. Real training jobs should provide a real Flux pipeline
 (typically via waivefront op chains over annotated data).
 """
 
-from typing import Dict, List
+from typing import Any, List
 
 import torch
 from confluid import configurable
-from sampleflux.sample import Sample
+from sampleflux import Image, Regions, Sample
 from torch import Tensor
 from torch.utils.data import Dataset
 
@@ -58,8 +58,13 @@ class SyntheticDetectionDataset(Dataset):
         image = self._images[idx]
         # One foreground box centred in the image, class id varies by index.
         s = self.image_size
-        target: Dict[str, Tensor] = {
-            "boxes": torch.tensor([[s * 0.25, s * 0.25, s * 0.75, s * 0.75]], dtype=torch.float32),
-            "labels": torch.tensor([1 + (idx % max(self.num_classes - 1, 1))], dtype=torch.int64),
-        }
-        return Sample(input=image, target=target, metadata={"idx": idx})
+        boxes: Any = torch.tensor([[s * 0.25, s * 0.25, s * 0.75, s * 0.75]], dtype=torch.float32)
+        labels: Any = torch.tensor([1 + (idx % max(self.num_classes - 1, 1))], dtype=torch.int64)
+        return Sample(
+            {
+                "image": Image(image.numpy(), layout="CHW"),
+                "regions": Regions(boxes=boxes, labels=labels),
+                "idx": idx,
+            },
+            roles={"regions": "target", "idx": "aux"},
+        )

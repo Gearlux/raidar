@@ -28,7 +28,7 @@ from marainer.run_names import generate_run_name
 from marainer.torch import ensure_sample_dataset
 from marainer.tracking.base import Tracker
 from pytorch_lightning.loggers import Logger
-from sampleflux import TypedSample, item_data, primary
+from sampleflux import Regions, Sample, item_data, primary
 from sampleflux.runnable import ProgressReporting, TorchRunner, entrypoint
 from torch import Tensor
 from torch.utils.data import DataLoader
@@ -58,16 +58,15 @@ def _batch_detection(batch: Any) -> DetectionBatchInput:
     """Recover the :class:`~raidar.detection.DetectionBatchInput` (images + optional targets) from a batch.
 
     The typed collate (:func:`raidar.detection.detection_collate_fn`) returns a batched
-    :class:`~sampleflux.TypedSample` whose primary ``input`` field carries the
+    :class:`~sampleflux.Sample` whose primary ``input`` field carries the
     :class:`~raidar.detection.DetectionBatchInput` VERBATIM (it is a custom container, not an array item
-    nor a ``data``-field wrapper, so ``item_data`` returns it unchanged). A legacy ``Sample`` batch (for
-    any path still fed the legacy carrier — e.g. a directly-built ``Sample(input=DetectionBatchInput(...))``)
-    exposes it as ``.input``.
+    nor a ``data``-field wrapper, so ``item_data`` returns it unchanged). A raw
+    :class:`~raidar.detection.DetectionBatchInput` (fed directly, unwrapped) is passed through.
     """
-    if isinstance(batch, TypedSample):
+    if isinstance(batch, Sample):
         _, item = primary(batch, "input")
         return cast(DetectionBatchInput, item_data(item))
-    return cast(DetectionBatchInput, batch.input)
+    return cast(DetectionBatchInput, batch)
 
 
 def _model_num_classes(model: nn.Module) -> Optional[int]:
@@ -229,9 +228,13 @@ class LightningDetector(TorchRunner, ProgressReporting, L.LightningModule):
         logger.info("raidar: deriving num_classes from detection targets (pin num_classes to skip)")
         highest = -1
         for target in tqdm(iter_targets(src), total=total, desc="raidar: deriving num_classes", unit="sample"):
-            if not isinstance(target, dict):
+            labels: Any
+            if isinstance(target, Regions):
+                labels = target.labels
+            elif isinstance(target, dict):
+                labels = target.get("labels")
+            else:
                 continue
-            labels = target.get("labels")
             if labels is None:
                 continue
             if hasattr(labels, "numel"):
@@ -385,7 +388,7 @@ class LightningDetector(TorchRunner, ProgressReporting, L.LightningModule):
 
     def _write_predictions(self, preds: Any, batch: Any) -> None:
         per_sample_meta = None
-        if isinstance(batch, TypedSample):
+        if isinstance(batch, Sample):
             # The typed collate stashes the per-sample metadata dicts under a "metadata" field.
             per_sample_meta = batch["metadata"] if "metadata" in batch else None
         else:

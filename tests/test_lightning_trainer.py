@@ -14,9 +14,8 @@ import pytorch_lightning as L
 import torch
 import torch.nn as nn
 from confluid import LazyClass
-from sampleflux import Image, Label, Regions, TypedSample
+from sampleflux import Image, Label, Regions, Sample
 from sampleflux.core import Flux
-from sampleflux.sample import Sample
 from torch import Tensor
 from torchmetrics import MetricCollection
 from torchmetrics.detection import MeanAveragePrecision
@@ -70,12 +69,12 @@ def _regions(boxes: Any, labels: Any) -> Regions:
     return Regions(boxes=boxes, labels=labels)
 
 
-def _make_samples(n: int = 4, size: int = 32) -> List[TypedSample]:
-    """Per-sample TypedSamples shaped like a typed detection source: Image input + Regions target + aux."""
-    samples: List[TypedSample] = []
+def _make_samples(n: int = 4, size: int = 32) -> List[Sample]:
+    """Per-sample Samples shaped like a typed detection source: Image input + Regions target + aux."""
+    samples: List[Sample] = []
     for i in range(n):
         samples.append(
-            TypedSample(
+            Sample(
                 {
                     "image": Image(torch.rand(3, size, size).numpy(), layout="CHW"),
                     "target": _regions(
@@ -90,7 +89,7 @@ def _make_samples(n: int = 4, size: int = 32) -> List[TypedSample]:
     return samples
 
 
-def _make_batch(n: int = 2, size: int = 32) -> TypedSample:
+def _make_batch(n: int = 2, size: int = 32) -> Sample:
     return detection_collate_fn(_make_samples(n=n, size=size))
 
 
@@ -210,9 +209,12 @@ def test_training_step_rejects_missing_targets() -> None:
     )
     trainer.train()
     batch = Sample(
-        input=DetectionBatchInput(images=[torch.rand(3, 32, 32)], targets=None),
-        target=[],
-        metadata={"per_sample": [{}]},
+        {
+            "detection": DetectionBatchInput(images=[torch.rand(3, 32, 32)], targets=None),
+            "targets": [],
+            "metadata": [{}],
+        },
+        roles={"detection": "input", "targets": "target", "metadata": "aux"},
     )
     with pytest.raises(ValueError, match="requires targets"):
         trainer.training_step(batch, 0)
@@ -335,12 +337,14 @@ def _labelled_flux(label_sets: List[List[int]], size: int = 16) -> Flux:
     """A detection Flux whose per-image targets carry the given label lists."""
     samples = [
         Sample(
-            input=torch.rand(3, size, size),
-            target={
-                "boxes": torch.zeros((len(lbls), 4), dtype=torch.float32),
-                "labels": torch.tensor(lbls, dtype=torch.int64),
+            {
+                "image": Image(torch.rand(3, size, size).numpy(), layout="CHW"),
+                "regions": _regions(
+                    torch.zeros((len(lbls), 4), dtype=torch.float32),
+                    torch.tensor(lbls, dtype=torch.int64),
+                ),
             },
-            metadata={},
+            roles={"regions": "target"},
         )
         for lbls in label_sets
     ]

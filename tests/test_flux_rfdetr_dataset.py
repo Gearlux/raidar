@@ -15,21 +15,31 @@ pytest.importorskip("rfdetr.training")  # the [train,loggers] extras
 
 import torch  # noqa: E402
 from rfdetr.config import RFDETRNanoConfig, TrainConfig  # noqa: E402
+from sampleflux import Image, Regions, Sample  # noqa: E402
 from sampleflux.core import Flux  # noqa: E402
-from sampleflux.sample import Sample  # noqa: E402
 
 import raidar.flux_rfdetr_dataset as frd  # noqa: E402
 from raidar.flux_rfdetr_dataset import FluxRFDETRDataModule, FluxRFDETRDataset  # noqa: E402
+
+
+def _det_sample(image: Any, boxes: Any, labels: Any, idx: int) -> Sample:
+    """A typed detection Sample: Image input + Regions target (the CocoToTorchVisionDetection shape)."""
+    return Sample(
+        {"image": Image(image.numpy(), layout="CHW"), "regions": Regions(boxes=boxes, labels=labels), "idx": idx},
+        roles={"regions": "target", "idx": "aux"},
+    )
 
 
 def _flux(n: int = 4, *, h: int = 40, w: int = 60, empty: bool = False) -> Flux:
     samples = []
     for i in range(n):
         if empty:
-            target = {"boxes": torch.zeros((0, 4), dtype=torch.float32), "labels": torch.zeros((0,), dtype=torch.int64)}
+            boxes = torch.zeros((0, 4), dtype=torch.float32)
+            labels = torch.zeros((0,), dtype=torch.int64)
         else:
-            target = {"boxes": torch.tensor([[4.0, 4.0, 20.0, 24.0]]), "labels": torch.tensor([1])}
-        samples.append(Sample(input=torch.rand(3, h, w), target=target, metadata={"idx": i}))
+            boxes = torch.tensor([[4.0, 4.0, 20.0, 24.0]])
+            labels = torch.tensor([1])
+        samples.append(_det_sample(torch.rand(3, h, w), boxes, labels, i))
     return Flux(source=samples)
 
 

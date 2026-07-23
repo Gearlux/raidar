@@ -12,7 +12,7 @@ import torch
 import torch.nn as nn
 from confluid import Class, LazyClass
 from confluid.fluid import Class as ConfluidClass
-from sampleflux import Image, Label, Regions, TypedSample
+from sampleflux import Image, Label, Regions, Sample
 from sampleflux.core import Flux
 from torch import Tensor
 from torch.utils.data import DataLoader
@@ -59,7 +59,7 @@ def _regions(boxes: Any, labels: Any) -> Regions:
 
 def _make_flux(n: int = 4, size: int = 32) -> Flux:
     samples = [
-        TypedSample(
+        Sample(
             {
                 "image": Image(torch.rand(3, size, size).numpy(), layout="CHW"),
                 "target": _regions(

@@ -47,7 +47,7 @@ import yaml
 from confluid import configurable
 from loggair import get_logger
 from PIL import Image
-from sampleflux.sample import Sample
+from sampleflux import Label, Regions, Sample, item_data, primary
 from sampleflux.storage.base import Storage
 
 logger = get_logger(__name__)
@@ -85,6 +85,41 @@ def _to_uint8_hwc(arr_in: Any) -> np.ndarray:
         return arr
     arr = np.clip(arr, 0.0, 1.0) * 255.0
     return arr.astype(np.uint8)
+
+
+def _sample_image(sample: Sample) -> Any:
+    """The primary ``input`` image payload (tensor / ndarray / PIL) of a typed :class:`~sampleflux.Sample`."""
+    _, item = primary(sample, "input")
+    return item_data(item)
+
+
+def _sample_target_dict(sample: Sample) -> Dict[str, Any]:
+    """The ``{boxes, labels}`` detection target of a typed sample — a :class:`~sampleflux.Regions`
+    item (the ``CocoToTorchVisionDetection`` output) unwrapped, a dict-valued ``Label`` / raw dict
+    passed through, or ``{}`` when there is no target field."""
+    try:
+        _, item = primary(sample, "target")
+    except KeyError:
+        return {}
+    if isinstance(item, Regions):
+        return {"boxes": item.boxes, "labels": item.labels}
+    data = item.value if isinstance(item, Label) else item_data(item)
+    return data if isinstance(data, dict) else {}
+
+
+def _sample_metadata(sample: Sample) -> Dict[str, Any]:
+    """Gather a typed sample's NON-primary fields into a plain metadata dict (a ``Label``'s ``.value``,
+    else the item payload) — the per-sample provenance the YOLO/COCO sidecar records."""
+    input_key, _ = primary(sample, "input")
+    try:
+        target_key: Any = primary(sample, "target")[0]
+    except KeyError:
+        target_key = None
+    return {
+        key: (item.value if isinstance(item, Label) else item_data(item))
+        for key, item in sample.items()
+        if key not in (input_key, target_key)
+    }
 
 
 def _yolo_lines(target: Dict[str, Any], height: int, width: int) -> List[str]:
@@ -295,7 +330,7 @@ class YoloSink(Storage):
     def write(self, sample: Sample) -> None:
         assert self._images_dir is not None and self._labels_dir is not None, "YoloSink.write before open()"
         idx = self._counter
-        image = _to_uint8_hwc(sample.input)
+        image = _to_uint8_hwc(_sample_image(sample))
         h, w = int(image.shape[0]), int(image.shape[1])
         stem = f"{idx:0{self.index_padding}d}"
         image_filename = f"{stem}.{self.image_format}"
@@ -303,12 +338,13 @@ class YoloSink(Storage):
         save_kwargs: Dict[str, Any] = {"quality": self.jpeg_quality} if self.image_format == "jpg" else {}
         Image.fromarray(image).save(self._images_dir / image_filename, **save_kwargs)
 
-        lines = _yolo_lines(sample.target, h, w)
+        target = _sample_target_dict(sample)
+        lines = _yolo_lines(target, h, w)
         (self._labels_dir / f"{stem}.txt").write_text("\n".join(lines))
 
         if self.write_coco:
             self._coco_images.append({"id": idx, "file_name": image_filename, "height": h, "width": w})
-            new_anns, self._next_ann_id = _coco_annotation_records(sample.target, idx, self._next_ann_id)
+            new_anns, self._next_ann_id = _coco_annotation_records(target, idx, self._next_ann_id)
             self._coco_anns.extend(new_anns)
 
         self._meta_lines.append(
@@ -318,7 +354,7 @@ class YoloSink(Storage):
                     "split": self.split,
                     "image": f"images/{self.split}/{image_filename}",
                     "label": f"labels/{self.split}/{stem}.txt",
-                    "source_metadata": _jsonable_metadata(getattr(sample, "metadata", None)),
+                    "source_metadata": _jsonable_metadata(_sample_metadata(sample)),
                 }
             )
         )
