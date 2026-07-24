@@ -48,7 +48,8 @@ lightning: !class:pytorch_lightning.Trainer
   log_every_n_steps: 1
   enable_progress_bar: true
 
-trainer: !class:raidar.lightning_trainer.LightningDetectionTrainer
+runnable: !class:raidar.detector.LightningDetector
+  task: fit
   experiment_name: raidar_native_smoke
   run_name: faster_rcnn_native
   num_classes: !ref:num_classes

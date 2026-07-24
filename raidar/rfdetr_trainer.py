@@ -1,6 +1,6 @@
 """Native RF-DETR trainer/evaluator — wraps RF-DETR's OWN PyTorch-Lightning stack.
 
-Companion to :class:`raidar.lightning_trainer.LightningDetectionTrainer`. Where
+Companion to :class:`raidar.detector.LightningDetector`. Where
 that trainer drives the bare ``LWDETR`` module through marainer's generic loop,
 this one hands off to RF-DETR's **own** training recipe — ``RFDETRModelModule`` +
 ``RFDETRDataModule`` + ``build_trainer`` (COCO-mAP eval via torchmetrics, EMA,

@@ -1,5 +1,5 @@
 # Train a torchvision Faster R-CNN on the HuggingFace **cppe-5** detection dataset
-# via `marainer train`. cppe-5 is the "hello world" of HF object detection — 1000
+# via `raidar train`. cppe-5 is the "hello world" of HF object detection — 1000
 # medical-PPE images, 5 classes (Coverall / Face_Shield / Gloves / Goggles / Mask),
 # COCO-format boxes — the detection analogue of MNIST for classification.
 #
@@ -11,7 +11,7 @@
 # background), so num_classes = 6.
 #
 # Run:
-#   marainer train examples/train_fasterrcnn_cppe5_hf.yaml
+#   raidar train examples/train_fasterrcnn_cppe5_hf.yaml
 #
 # SPEED — detection is heavy; the biggest lever is the MODEL, not the dataset size
 # (torchvision resizes every image to the detector's min_size). This config uses the
@@ -21,7 +21,8 @@
 # `max_epochs`, or use a SMALLER dataset — any Roboflow-universe mirror with the same
 # `objects` schema drops straight into this op chain, e.g. `path: Francesco/animals-ij5d2`.
 
-trainer: !class:raidar.lightning_trainer.LightningDetectionTrainer
+runnable: !class:raidar.detector.LightningDetector
+  task: fit
   experiment_name: cppe5_detection
   run_name: fasterrcnn_cppe5
   # Pinned (cppe-5 = 5 fg + background) — also skips the one-time startup walk that

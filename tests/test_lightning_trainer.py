@@ -1,4 +1,4 @@
-"""Tests for the specialised :class:`raidar.lightning_trainer.LightningDetector`.
+"""Tests for the specialised :class:`raidar.detector.LightningDetector`.
 
 These tests cover the **native** path — overridden ``training_step`` /
 ``validation_step`` / ``test_step`` consume torchvision-native models

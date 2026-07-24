@@ -1,14 +1,17 @@
 # Raidar
 
-Object-detection models and trainers for the [Marainer](https://github.com/Gearlux/marainer) training framework.
+Standard PyTorch Lightning object-detection models and trainers.
 
 Raidar drives torchvision-native detectors — torchvision (Faster R-CNN),
 Roboflow's RF-DETR, and the Hugging Face transformers real-time detectors
-(D-FINE, RT-DETRv2) — through a **single specialised path**: the
-`LightningDetectionTrainer` / `LightningDetectionEvaluator` (subclasses of
-marainer's base) **override** the step functions and talk to native detection
-models and raw `torchmetrics` metrics directly. There is **no** adapter layer
-between trainer and loss/metric.
+(D-FINE, RT-DETRv2) — through a **single specialised path**:
+`raidar.detector.LightningDetector` — one self-contained standard
+`pytorch_lightning.LightningModule` that **overrides** the step functions and
+talks to native detection models and raw `torchmetrics` metrics directly, with a
+`task` knob (`fit`/`evaluate`/`test`/`predict`) its `run()` dispatches on. There
+is **no** adapter layer between trainer and loss/metric. It uses
+[Marainer](https://github.com/Gearlux/marainer) only for optional experiment
+tracking + `marainer.torch` utilities.
 
 The ultralytics-backed detectors (YOLO26, RT-DETR) plus the native
 ultralytics trainer/evaluator live in the
@@ -20,7 +23,7 @@ The native model contract is the shape torchvision detectors already speak:
 * `model.train(); model(images, targets) → Dict[str, Tensor]` — loss dict
   (the trainer sums it for the optimisation scalar).
 * `model.eval();  model(images)         → List[Dict[str, Tensor]]` — per-image
-  `{boxes, scores, labels}` (a `marainer.outputs.DetectionOutput` list, fed
+  `{boxes, scores, labels}` (a `marainer.torch.outputs.DetectionOutput` list, fed
   straight to the metric).
 
 `raidar.detection` holds the small native plumbing both paths use:
@@ -30,7 +33,7 @@ The native model contract is the shape torchvision detectors already speak:
 | `DetectionBatchInput` | Carries images + targets through `batch.input` so variable-size per-image tensors survive collation; the trainer/evaluator unwrap `(images, targets)` from it. Exposes `.shape` for Lightning's batch-size logging. |
 | `detection_collate_fn` | DataLoader collate that builds a `DetectionBatchInput` and keeps per-image targets as lists. |
 | `DetectionConfusionMatrix` | Native `torchmetrics.Metric` accumulating TP / FP / FN (+ precision / recall / F1); drops into a `MetricCollection` next to `MeanAveragePrecision`. |
-| `DetectionOutput` / `DetectionPredictions` | Task-agnostic per-image prediction schema, re-exported from `marainer.outputs`. |
+| `DetectionOutput` / `DetectionPredictions` | Task-agnostic per-image prediction schema, re-exported from `marainer.torch.outputs`. |
 
 ## Installation
 
@@ -66,7 +69,8 @@ model: !class:torchvision.models.detection.fasterrcnn_resnet50_fpn_v2
   num_classes: !ref:num_classes
   weights_backbone: DEFAULT
 
-trainer: !class:raidar.lightning_trainer.LightningDetectionTrainer
+runnable: !class:raidar.detector.LightningDetector
+  task: fit
   experiment_name: my_detection
   run_name: faster_rcnn_v2
   num_classes: !ref:num_classes
@@ -87,13 +91,14 @@ trainer: !class:raidar.lightning_trainer.LightningDetectionTrainer
 Run:
 
 ```bash
-marainer train path/to/config.yaml   # or: raidar train path/to/config.yaml
+raidar train path/to/config.yaml   # or the generic runner: sampleflux run path/to/config.yaml
 ```
 
 ### Dataset-derived `num_classes` (`!lazy:` model)
 
-Like `sonair.LightningClassificationTrainer`, the trainer resolves `num_classes`
-in an `initialize()` hook at run time and injects it into a **`!lazy:`** model —
+Like `sonair.LightningClassifier`, `LightningDetector` resolves
+`num_classes` in an `initialize()` hook at run time and injects it into a
+**`!lazy:`** model —
 so you can omit `num_classes` entirely and have it derived from the data
 (`max(label) + 1`). Resolution order: a concrete model's head → explicit trainer
 arg → a lazy model's pinned `num_classes` → a target walk. This works for a raw
@@ -104,7 +109,8 @@ torchvision builder *function* (confluid flows it with the derived count):
 model: !lazy:torchvision.models.detection.fasterrcnn_resnet50_fpn
   weights_backbone: DEFAULT
 
-trainer: !class:raidar.lightning_trainer.LightningDetectionTrainer
+runnable: !class:raidar.detector.LightningDetector
+  task: fit
   model: !ref:model
   train_set: !ref:train_set
   val_set: !ref:val_set
@@ -116,25 +122,26 @@ A full flat HuggingFace example is
 [`examples/train_fasterrcnn_cppe5_hf.yaml`](examples/train_fasterrcnn_cppe5_hf.yaml)
 (cppe-5 — the "MNIST of object detection").
 
-### Evaluation — model-driven `num_classes` (no evaluator knob)
+### Evaluation — model-driven `num_classes`
 
-`LightningDetectionEvaluator` mirrors `sonair.LightningClassificationEvaluator`:
-it has **no** `num_classes` constructor argument. Its `initialize()` hook (run at
-the top of `run()`, before the base eval loop) **flows the model first** and reads
-`num_classes` straight off the live trained model — the model loaded its own
-checkpoint, so its head is the single source of truth (not the eval dataset, which
-may be a subset). The read is *best-effort*: the default `MeanAveragePrecision` is
-class-count-agnostic, so a detector that doesn't expose its count just leaves
-`num_classes` unset without erroring. `initialize()` also normalizes the wired
-dataset to a `Dataset[Sample]` via marainer's `ensure_sample_dataset`.
+Evaluation is the SAME `LightningDetector` run with `task: test` (or `evaluate`).
+On an eval task its `initialize()` hook (run at the top of `run()`, before the
+eval loop) **flows the model first** and reads `num_classes` straight off the live
+trained model — the model loaded its own checkpoint, so its head is the single
+source of truth (not the eval dataset, which may be a subset). The read is
+*best-effort*: the default `MeanAveragePrecision` is class-count-agnostic, so a
+detector that doesn't expose its count just leaves `num_classes` unset without
+erroring. `initialize()` also normalizes the wired dataset to a `Dataset[Sample]`
+via marainer's `ensure_sample_dataset`.
 
 ```yaml
-# No num_classes on the evaluator — read off the trained model (which carries it).
-evaluator: !class:raidar.evaluator.LightningDetectionEvaluator
+# task: test — num_classes is read off the trained model (which carries it).
+runnable: !class:raidar.detector.LightningDetector
+  task: test
   model: !class:raidar.rfdetr.RFDETRModel
     num_classes: 2                             # the model carries the count
     checkpoint_path: ./checkpoints/last.ckpt   # the model loads itself
-  dataset: !ref:eval_set
+  test_set: !ref:eval_set
   metrics_sidecar_path: ./eval_metrics.json    # optional logger-agnostic dump
 ```
 
@@ -197,8 +204,8 @@ instance-mask / keypoint targets, not the `{boxes, labels}` shape
 
 Two detection training paths ship in core raidar:
 
-- the **generic Lightning path** above (`raidar train`, `LightningDetectionTrainer`),
-  which drives bare torchvision-native models through marainer's loop; and
+- the **generic Lightning path** above (`raidar train`, `LightningDetector`),
+  which drives bare torchvision-native models through the standard Lightning loop; and
 - the **native RF-DETR path** (`raidar-rfdetr train`, `RFDETRTrainer`), which hands
   off to RF-DETR's **own** PyTorch-Lightning recipe — COCO-mAP eval, EMA,
   best-checkpoint saving, LR schedule. It's the in-core analogue of
@@ -206,7 +213,7 @@ Two detection training paths ship in core raidar:
   AGPL ultralytics) it needs no sibling package.
 
 `RFDETRTrainer` / `RFDETREvaluator` are tagged `@configurable(task="detection",
-role=…)`, so navigaitor lists them **alongside** the Lightning pair (detection is a
+role=…)`, so navigaitor lists them **alongside** the Lightning detector (detection is a
 multi-trainer task — pick either). Hard deps: `pip install 'rfdetr[train,loggers]'`
 + `faster-coco-eval` (RF-DETR's mAP backend).
 
@@ -241,7 +248,7 @@ trainer: !class:raidar.rfdetr_trainer.RFDETRTrainer
 > (`CocoToTorchVisionDetectionOp(label_offset=0)`), **not** the `+1` shift the
 > Faster R-CNN example uses.
 
-`raidar-rfdetr evaluate` (or `marainer rfdetr-evaluate`) runs RF-DETR's native
+`raidar-rfdetr evaluate` runs RF-DETR's native
 validation/test loop over a trained checkpoint (`weights:`). See
 `examples/rfdetr_train_disk.yaml`, `examples/rfdetr_train_flux.yaml`,
 `examples/rfdetr_evaluate_flux.yaml`.
@@ -260,7 +267,8 @@ from the installed `transformers` — no extra/unmaintained dependency:
 - **`HFDetectionModel`** — the generic base; point `model_id` at any HF object-detection checkpoint.
 
 ```yaml
-trainer: !class:raidar.lightning_trainer.LightningDetectionTrainer
+runnable: !class:raidar.detector.LightningDetector
+  task: fit
   num_classes: 5                         # K foreground classes; injected into the !lazy: model
 model: !lazy:raidar.hf_detection.DFINEModel
   variant: small
@@ -290,7 +298,7 @@ Two convenience behaviours of the wrapper, grounded in the models' processors:
 
 When `num_classes != 80`, the COCO-pretrained class head is re-initialised
 (`ignore_mismatched_sizes=True`) while the backbone / encoder / decoder stay
-pretrained. Evaluate with `LightningDetectionEvaluator` (model-driven
+pretrained. Evaluate with `LightningDetector` run at `task: test` (model-driven
 `num_classes`; pass the trained `.ckpt` via the model's `checkpoint_path`). See
 `examples/dfine_train_flux.yaml`, `examples/dfine_evaluate_flux.yaml`,
 `examples/rtdetrv2_train_flux.yaml`, `examples/rtdetrv2_evaluate_flux.yaml`.
@@ -298,36 +306,39 @@ pretrained. Evaluate with `LightningDetectionEvaluator` (model-driven
 ## Discovery
 
 Detection `@configurable` classes carry `task`/`role` tags — `RFDETRModel`
-(`detection_model`), `LightningDetectionTrainer` **and** `RFDETRTrainer`
-(`role="trainer"`), `LightningDetectionEvaluator` **and** `RFDETREvaluator`
-(`role="evaluator"`) — so navigaitor's `list_configurable_classes(category=...)` /
+(`detection_model`), `LightningDetector` **and** `RFDETRTrainer`
+(`role="trainer"`; `LightningDetector` also serves evaluate/test/predict via
+`@entrypoint`-annotated methods), and `RFDETREvaluator` (`role="evaluator"`) — so
+navigaitor's `list_configurable_classes(category=...)` /
 `list_classes(task=…, role=…)` and the visual-editor form-spec enumerate them by
 kind. Detection is a **multi-trainer task**: `(detection, trainer)` resolves to both
 trainers, and navigaitor's `train_detection` config is a `Union` over them (pick
-either). The Lightning trainer computes loss inside the model's `forward`, so there
+either). The Lightning detector computes loss inside the model's `forward`, so there
 is no detection-loss config.
 Discovery is automatic from the `@configurable` registry; there are no
 hand-written manifest files.
 
-## Inherited from marainer
+## Tracking & checkpointing
 
-`LightningDetectionTrainer` / `LightningDetectionEvaluator` subclass marainer's
-base trainer/evaluator, so they automatically pick up marainer's default
-`ModelCheckpoint` (`save_last=True` + best by the first val metric) and
-YAML-config artifact logging. Wire stock `pytorch_lightning.loggers.*` classes
-under `lightning.logger:`. See marainer's README → *Default checkpointing* for
-the full semantics.
+`LightningDetector` is a self-contained standard `pytorch_lightning.LightningModule`,
+so checkpointing and logging are plain Lightning concerns. Wire stock
+`pytorch_lightning.loggers.*` classes via the `logger:` flat knob (or under the
+`lightning:` `L.Trainer` block), and add a `pytorch_lightning.callbacks.ModelCheckpoint`
+to the trainer's callbacks for best/last saving. For optional experiment tracking,
+wire `marainer.tracking` backends under `trackers:` — a `TrackingCallback` is
+attached automatically, and system-metric + progress callbacks come for free. See
+marainer's README for the tracking backends.
 
 ## Examples
 
 End-to-end YAML in `examples/`:
 
-- `lightning_train_native.yaml` — `LightningDetectionTrainer` + raw torchvision
+- `lightning_train_native.yaml` — `LightningDetector` + raw torchvision
   Faster R-CNN + raw `MeanAveragePrecision`, on a synthetic in-memory dataset.
 - `train_fasterrcnn_cppe5_hf.yaml` — the flat HuggingFace example (the
   classification-side analogue of sonair's `train_efficientvit_b0_sonair.yaml`):
   `HuggingFaceSource("cppe-5")` → `sampleflux.ops.target.CocoToTorchVisionDetectionOp`
-  → `ToTensorOp` → `LightningDetectionTrainer` with a `!lazy:` torchvision
+  → `ToTensorOp` → `LightningDetector` with a `!lazy:` torchvision
   Faster R-CNN (the fast MobileNet-320 variant) whose `num_classes` is derived.
 - `train_pennfudan_hf.yaml` — the **fast/tiny** example: Penn-Fudan Pedestrian
   (160 train / 10 test, 1 class — the torchvision detection-tutorial dataset).

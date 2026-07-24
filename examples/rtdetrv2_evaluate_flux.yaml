@@ -3,14 +3,15 @@
 #
 # Run:
 #   raidar evaluate examples/rtdetrv2_evaluate_flux.yaml
-#   marainer evaluate examples/rtdetrv2_evaluate_flux.yaml
+#   raidar evaluate examples/rtdetrv2_evaluate_flux.yaml
 #
 # num_classes is MODEL-DRIVEN: the evaluator reads it off the live model's head
 # (no evaluator num_classes knob). The model loads its OWN checkpoint via
 # `checkpoint_path` — set it to the .ckpt your training run wrote. `variant` /
 # `num_classes` MUST match the trained run. Labels are 0-indexed — `label_offset: 0`.
 
-evaluator: !class:raidar.evaluator.LightningDetectionEvaluator
+runnable: !class:raidar.detector.LightningDetector
+  task: test
   experiment_name: cppe5_rtdetrv2_eval
   model: !class:raidar.hf_detection.RTDETRv2Model
     variant: r50vd

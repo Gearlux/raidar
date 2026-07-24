@@ -1,7 +1,7 @@
 [project]
 name = "raidar"
 version = "0.1.0"
-description = "Object-detection models and adapters for the Marainer training framework."
+description = "Object-detection models and a standard-Lightning detector (Faster R-CNN, RF-DETR, D-FINE, RT-DETRv2)."
 authors = [{name = "Taidal"}]
 license = {text = "MIT"}
 dependencies = [

@@ -1,5 +1,5 @@
 """Native object-detection plumbing for the specialised
-:class:`~raidar.lightning_trainer.LightningDetectionTrainer`.
+:class:`~raidar.detector.LightningDetector`.
 
 This module holds the small, detector-agnostic pieces the **native** detection
 path needs — there is no adapter / indirection layer (the marainer-generic
@@ -21,7 +21,7 @@ that drives torchvision-native models and raw ``torchmetrics`` metrics directly)
   straight into a ``MetricCollection`` alongside ``MeanAveragePrecision``.
 
 The per-image prediction schema is the task-agnostic
-:class:`marainer.outputs.DetectionOutput`, re-exported here for convenience.
+:class:`marainer.torch.outputs.DetectionOutput`, re-exported here for convenience.
 
 Native model contract (the shape torchvision detectors already speak):
 
@@ -31,7 +31,8 @@ Native model contract (the shape torchvision detectors already speak):
 
 Typical wiring (YAML)::
 
-    trainer: !class:raidar.lightning_trainer.LightningDetectionTrainer
+    runnable: !class:raidar.detector.LightningDetector
+      task: fit
       num_classes: !ref:num_classes
       model: !class:torchvision.models.detection.fasterrcnn_resnet50_fpn
         num_classes: !ref:num_classes
@@ -106,7 +107,7 @@ class DetectionConfusionMatrix(Metric):
     recall / F1 in its ``compute()`` dict.
 
     Native-API metric for the specialised
-    :class:`~raidar.lightning_trainer.LightningDetectionTrainer`: its
+    :class:`~raidar.detector.LightningDetector`: its
     ``update(predictions: List[DetectionOutput], targets: List[Dict])``
     consumes the same per-image lists ``torchmetrics.MeanAveragePrecision``
     does, so it drops straight into a ``MetricCollection``::

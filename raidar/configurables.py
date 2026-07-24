@@ -2,7 +2,7 @@
 
 torchvision ships its detection models as builder FUNCTIONS (``fasterrcnn_resnet50_fpn(...)``,
 ``ssdlite320_mobilenet_v3_large(...)``, …), NOT classes — and they already conform to the native
-detection contract :class:`raidar.lightning_trainer.LightningDetectionTrainer` consumes
+detection contract :class:`raidar.detector.LightningDetector` consumes
 (``model(images, targets) → loss dict`` in train, ``model(images) → predictions list`` in eval). We
 ``register`` each here with ``task="detection", role="model"`` (→ derived ``category="detection_model"``,
 the same bucket as ``RFDETRModel``) + ``lazy=True`` so:
@@ -19,7 +19,7 @@ the same bucket as ``RFDETRModel``) + ``lazy=True`` so:
   ``LazyClass(builder, …)``) wires STRAIGHT into a detection trainer's ``model`` slot — no Retag.
 
 Registered with a presentation-only ``group="detection"`` for palette nesting (mirroring how
-``marainer.configurables`` groups the torch optimizers). The ``role="model"`` is what lets these raw
+``marainer.lightning.configurables`` groups the torch optimizers). The ``role="model"`` is what lets these raw
 builders sit beside the raidar wrapper class (``RFDETRModel``) in every model picker.
 
 Mask R-CNN / Keypoint R-CNN are intentionally excluded — they need instance masks / keypoints in the

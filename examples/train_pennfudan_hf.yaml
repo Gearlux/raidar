@@ -1,5 +1,5 @@
 # Train a torchvision Faster R-CNN on the **Penn-Fudan Pedestrian** database
-# (HuggingFace mirror) via `marainer train`. Penn-Fudan is the dataset from the
+# (HuggingFace mirror) via `raidar train`. Penn-Fudan is the dataset from the
 # official torchvision object-detection finetuning tutorial — tiny (160 train /
 # 10 test images), ONE foreground class (pedestrian), so it trains fast and is a
 # great quick-iteration detection example.
@@ -12,13 +12,14 @@
 # the trainer, the !lazy: model gets num_classes injected.
 #
 # Run:
-#   marainer train examples/train_pennfudan_hf.yaml
+#   raidar train examples/train_pennfudan_hf.yaml
 #
 # Fast by default: MobileNetV3-320 Faster R-CNN (320 px). For higher accuracy swap to
 # the heavier ResNet50-FPN (800 px, slower):
 #   model: !lazy:torchvision.models.detection.fasterrcnn_resnet50_fpn
 
-trainer: !class:raidar.lightning_trainer.LightningDetectionTrainer
+runnable: !class:raidar.detector.LightningDetector
+  task: fit
   experiment_name: pennfudan_detection
   run_name: fasterrcnn_pennfudan
   num_classes: 2            # background + pedestrian (pinned; skips the startup derivation walk)
