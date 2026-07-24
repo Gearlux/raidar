@@ -20,7 +20,7 @@ from torch.utils.data import Dataset
 class SyntheticDetectionDataset(Dataset):
     """Synthetic detection dataset producing one box per image at a fixed location.
 
-    Useful only for smoke-testing the wiring of LightningDetectionTrainer +
+    Useful only for smoke-testing the wiring of LightningDetector +
     raidar's detector wrappers. Replace with a real Flux pipeline for actual
     training.
 

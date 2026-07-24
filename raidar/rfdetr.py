@@ -117,7 +117,7 @@ def _decode_rfdetr_predictions(
     score_threshold: float,
 ) -> List[DetectionOutput]:
     """Convert RF-DETR's ``PostProcess`` output into per-image
-    :class:`~marainer.outputs.DetectionOutput` dicts. Drops the no-object
+    :class:`~marainer.torch.outputs.DetectionOutput` dicts. Drops the no-object
     slot at index ``num_classes`` and filters by ``score_threshold``.
     """
     predictions: List[DetectionOutput] = []
@@ -139,7 +139,7 @@ def _decode_rfdetr_predictions(
 @configurable(task="detection", role="model")
 class RFDETRModel(nn.Module):
     """Torchvision-native RF-DETR wrapper for
-    :class:`~raidar.lightning_trainer.LightningDetectionTrainer`.
+    :class:`~raidar.detector.LightningDetector`.
 
     Forward contract:
 

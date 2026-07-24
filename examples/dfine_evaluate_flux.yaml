@@ -3,7 +3,7 @@
 #
 # Run:
 #   raidar evaluate examples/dfine_evaluate_flux.yaml
-#   marainer evaluate examples/dfine_evaluate_flux.yaml
+#   raidar evaluate examples/dfine_evaluate_flux.yaml
 #
 # num_classes is MODEL-DRIVEN: the evaluator reads it off the live model's head
 # (no evaluator num_classes knob). The model loads its OWN checkpoint via
@@ -11,7 +11,8 @@
 # logs dir). `variant` / `num_classes` MUST match the trained run. Labels are
 # 0-indexed (see the train example) — `label_offset: 0`.
 
-evaluator: !class:raidar.evaluator.LightningDetectionEvaluator
+runnable: !class:raidar.detector.LightningDetector
+  task: test
   experiment_name: cppe5_dfine_eval
   model: !class:raidar.hf_detection.DFINEModel
     variant: small

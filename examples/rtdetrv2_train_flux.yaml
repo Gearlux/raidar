@@ -9,7 +9,7 @@
 #
 # Run:
 #   raidar train examples/rtdetrv2_train_flux.yaml
-#   marainer train examples/rtdetrv2_train_flux.yaml
+#   raidar train examples/rtdetrv2_train_flux.yaml
 #
 # ⚠️ 0-INDEXED LABELS. HF detectors use class ids 0..K-1 with NO background class
 # (OPPOSITE of torchvision's background-at-0): `label_offset: 0`, `num_classes: 5`.
@@ -17,7 +17,8 @@
 # (HF processor is do_normalize=False), so the op chain is the same as the Faster
 # R-CNN example bar `label_offset`.
 
-trainer: !class:raidar.lightning_trainer.LightningDetectionTrainer
+runnable: !class:raidar.detector.LightningDetector
+  task: fit
   experiment_name: cppe5_rtdetrv2
   run_name: rtdetrv2_r50vd_cppe5
   num_classes: 5             # 5 FOREGROUND classes (0..4); injected into the !lazy: model

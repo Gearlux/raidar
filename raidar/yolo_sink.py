@@ -242,7 +242,7 @@ def _jsonable_metadata(metadata: Any, *, max_array_elems: int = _MAX_META_ARRAY_
 class YoloSink(Storage):
     """DataSink that materialises one split of a detection Flux to a YOLO dataset dir.
 
-    Wired as the ``sink:`` of a ``marainer.processing.DatasetProcessor`` and run
+    Wired as the ``sink:`` of a ``sampleflux.processing.DatasetProcessor`` and run
     via ``marainer convert``. Writes ``images/<split>`` + ``labels/<split>``
     (+ optional ``annotations/<split>.json``), appends per-image provenance to
     ``metadata.jsonl``, and merges ``data.yaml`` so repeated runs (one per

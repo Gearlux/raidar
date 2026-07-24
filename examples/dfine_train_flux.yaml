@@ -9,7 +9,7 @@
 #
 # Run:
 #   raidar train examples/dfine_train_flux.yaml
-#   marainer train examples/dfine_train_flux.yaml
+#   raidar train examples/dfine_train_flux.yaml
 #
 # ⚠️ 0-INDEXED LABELS. HF detectors (like RF-DETR) use class ids 0..K-1 with NO
 # background class — the OPPOSITE of torchvision's background-at-0. So
@@ -20,7 +20,8 @@
 # is just CocoToTorchVisionDetectionOp + ToTensorOp(normalize=true) — same as the
 # torchvision Faster R-CNN example, only `label_offset` differs.
 
-trainer: !class:raidar.lightning_trainer.LightningDetectionTrainer
+runnable: !class:raidar.detector.LightningDetector
+  task: fit
   experiment_name: cppe5_dfine
   run_name: dfine_small_cppe5
   # 5 FOREGROUND classes (0..4). Pinned so initialize() skips the startup walk and

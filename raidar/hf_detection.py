@@ -1,8 +1,8 @@
 """Hugging Face transformers object detectors — torchvision-native wrappers.
 
 Wraps any `transformers` object-detection model (`AutoModelForObjectDetection`)
-so the specialised :class:`raidar.lightning_trainer.LightningDetectionTrainer` /
-:class:`raidar.evaluator.LightningDetectionEvaluator` can drive it without an
+so the specialised :class:`raidar.detector.LightningDetector` /
+:class:`raidar.detector.LightningDetector` can drive it without an
 adapter layer, exactly like :class:`raidar.rfdetr.RFDETRModel` and
 ``raidar_ultralytics.YOLO26Model``:
 

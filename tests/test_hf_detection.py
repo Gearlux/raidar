@@ -3,7 +3,7 @@
 The native wrappers return a single-key loss dict in train mode and a per-image
 ``DetectionOutput`` list in eval mode — the same contract torchvision detectors
 and :class:`raidar.rfdetr.RFDETRModel` speak, so they run through the generic
-:class:`raidar.lightning_trainer.LightningDetector` with no adapter.
+:class:`raidar.detector.LightningDetector` with no adapter.
 
 Pure-helper / map / guard tests run with no network. The real-model forward and
 end-to-end tests build the SMALLEST checkpoints with ``pretrained=False`` (random
