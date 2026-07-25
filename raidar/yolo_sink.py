@@ -4,7 +4,7 @@ A SampleFlux ``DataSink`` (``open`` / ``write(sample)`` / ``flush`` / ``close``)
 ``marainer convert`` streams a detection Flux into it via
 ``DatasetProcessor(flux=…, sink=YoloSink(…))``, exactly like any other
 source → ops → sink pipeline — there is no bespoke processor. Each
-:class:`sampleflux.sample.Sample` is materialised to the layout
+record dict is materialised to the layout
 ``YOLO.train(data=<output_dir>/data.yaml)`` natively consumes:
 
 ::
@@ -28,9 +28,9 @@ Compared to the in-memory ``raidar_ultralytics.flux_yolo_dataset.FluxYOLODataset
 dataset trades startup cost for faster epochs and lets third-party tools
 (FiftyOne, pycocotools, ultralytics' own CLI) consume the same data.
 
-Generic over any detection Flux whose primary input item is an image
+Generic over any detection Flux whose input-key value is an image
 (``[3,H,W]`` / ``[H,W,3]`` / ``[H,W]``, float ``[0,1]`` or ``uint8``, numpy or
-torch) and whose target-role item is ``{"boxes": [N,4] xyxy-pixel float32, "labels": [N] int64}``
+torch) and whose target-key value is ``{"boxes": [N,4] xyxy-pixel float32, "labels": [N] int64}``
 — i.e. exactly what :class:`waivefront.targets.RegionsToDetectionBoxesOp`
 produces. (No ``ultralytics`` import — it only writes the on-disk layout.)
 """
@@ -47,7 +47,7 @@ import yaml
 from confluid import configurable
 from loggair import get_logger
 from PIL import Image
-from sampleflux import Label, Regions, Sample, item_data, primary
+from sampleflux import Label, Record, Regions, item_data
 from sampleflux.storage.base import Storage
 
 logger = get_logger(__name__)
@@ -87,37 +87,30 @@ def _to_uint8_hwc(arr_in: Any) -> np.ndarray:
     return arr.astype(np.uint8)
 
 
-def _sample_image(sample: Sample) -> Any:
-    """The primary ``input`` image payload (tensor / ndarray / PIL) of a typed :class:`~sampleflux.Sample`."""
-    _, item = primary(sample, "input")
-    return item_data(item)
+def _record_image(record: Record, input_key: str) -> Any:
+    """The image payload (tensor / ndarray / PIL) under ``input_key`` in a record."""
+    return item_data(record[input_key])
 
 
-def _sample_target_dict(sample: Sample) -> Dict[str, Any]:
-    """The ``{boxes, labels}`` detection target of a typed sample — a :class:`~sampleflux.Regions`
+def _record_target_dict(record: Record, target_key: str) -> Dict[str, Any]:
+    """The ``{boxes, labels}`` detection target under ``target_key`` — a :class:`~sampleflux.Regions`
     item (the ``CocoToTorchVisionDetection`` output) unwrapped, a dict-valued ``Label`` / raw dict
-    passed through, or ``{}`` when there is no target field."""
-    try:
-        _, item = primary(sample, "target")
-    except KeyError:
+    passed through, or ``{}`` when the key is absent."""
+    if target_key not in record:
         return {}
+    item = record[target_key]
     if isinstance(item, Regions):
         return {"boxes": item.boxes, "labels": item.labels}
     data = item.value if isinstance(item, Label) else item_data(item)
     return data if isinstance(data, dict) else {}
 
 
-def _sample_metadata(sample: Sample) -> Dict[str, Any]:
-    """Gather a typed sample's NON-primary fields into a plain metadata dict (a ``Label``'s ``.value``,
+def _record_metadata(record: Record, input_key: str, target_key: str) -> Dict[str, Any]:
+    """Gather a record's remaining keys into a plain metadata dict (a ``Label``'s ``.value``,
     else the item payload) — the per-sample provenance the YOLO/COCO sidecar records."""
-    input_key, _ = primary(sample, "input")
-    try:
-        target_key: Any = primary(sample, "target")[0]
-    except KeyError:
-        target_key = None
     return {
         key: (item.value if isinstance(item, Label) else item_data(item))
-        for key, item in sample.items()
+        for key, item in record.items()
         if key not in (input_key, target_key)
     }
 
@@ -190,7 +183,7 @@ _MAX_META_ARRAY_ELEMS = 256
 
 
 def _jsonable_metadata(metadata: Any, *, max_array_elems: int = _MAX_META_ARRAY_ELEMS) -> Any:
-    """Best-effort JSON-friendly conversion of a ``Sample.metadata`` payload — NEVER raises.
+    """Best-effort JSON-friendly conversion of a record's metadata payload — NEVER raises.
 
     Source metadata can carry values ``json.dumps`` cannot encode: NumPy/torch arrays, **complex**
     IQ samples, and FluxStudio's internal ``__taidal_stash_*`` snapshots (a stashed complex signal
@@ -257,6 +250,8 @@ class YoloSink(Storage):
         jpeg_quality: PIL JPEG quality (1-95); ignored for PNG.
         index_padding: Zero-padding width for the per-split sequential filenames (``6`` → ``000000.png``).
         write_coco: Also write ``annotations/<split>.json`` in COCO format alongside the YOLO-txt labels.
+        input_key: Record key carrying the input image (default ``"image"``).
+        target_key: Record key carrying the detection target ``Regions`` (default ``"target"``).
     """
 
     def __init__(
@@ -268,6 +263,8 @@ class YoloSink(Storage):
         jpeg_quality: int = 95,
         index_padding: int = 6,
         write_coco: bool = True,
+        input_key: str = "image",
+        target_key: str = "target",
     ) -> None:
         # Lazy / zero-arg: store config only; validate + create dirs in open().
         self.output_dir = output_dir
@@ -277,6 +274,8 @@ class YoloSink(Storage):
         self.jpeg_quality = int(jpeg_quality)
         self.index_padding = int(index_padding)
         self.write_coco = bool(write_coco)
+        self.input_key = str(input_key)
+        self.target_key = str(target_key)
         # Per-run state (populated in open()).
         self._root: Optional[Path] = None
         self._images_dir: Optional[Path] = None
@@ -327,10 +326,10 @@ class YoloSink(Storage):
         self._meta_lines = []
         return self
 
-    def write(self, sample: Sample) -> None:
+    def write(self, record: Record) -> None:
         assert self._images_dir is not None and self._labels_dir is not None, "YoloSink.write before open()"
         idx = self._counter
-        image = _to_uint8_hwc(_sample_image(sample))
+        image = _to_uint8_hwc(_record_image(record, self.input_key))
         h, w = int(image.shape[0]), int(image.shape[1])
         stem = f"{idx:0{self.index_padding}d}"
         image_filename = f"{stem}.{self.image_format}"
@@ -338,7 +337,7 @@ class YoloSink(Storage):
         save_kwargs: Dict[str, Any] = {"quality": self.jpeg_quality} if self.image_format == "jpg" else {}
         Image.fromarray(image).save(self._images_dir / image_filename, **save_kwargs)
 
-        target = _sample_target_dict(sample)
+        target = _record_target_dict(record, self.target_key)
         lines = _yolo_lines(target, h, w)
         (self._labels_dir / f"{stem}.txt").write_text("\n".join(lines))
 
@@ -354,7 +353,7 @@ class YoloSink(Storage):
                     "split": self.split,
                     "image": f"images/{self.split}/{image_filename}",
                     "label": f"labels/{self.split}/{stem}.txt",
-                    "source_metadata": _jsonable_metadata(_sample_metadata(sample)),
+                    "source_metadata": _jsonable_metadata(_record_metadata(record, self.input_key, self.target_key)),
                 }
             )
         )

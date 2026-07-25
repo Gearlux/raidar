@@ -14,6 +14,7 @@ optimisation scalar; per-image ``{boxes, scores, labels}`` fed to ``MeanAverageP
 
 import inspect
 import json
+from functools import partial
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Literal, Optional, Union, cast
 
@@ -28,7 +29,7 @@ from marainer.run_names import generate_run_name
 from marainer.torch import ensure_sample_dataset
 from marainer.tracking.base import Tracker
 from pytorch_lightning.loggers import Logger
-from sampleflux import Regions, Sample, item_data, primary
+from sampleflux import Regions
 from sampleflux.runnable import ProgressReporting, TorchRunner, entrypoint
 from torch import Tensor
 from torch.utils.data import DataLoader
@@ -57,15 +58,13 @@ def _log_scalar_dict(module: L.LightningModule, metric: Any, prefix: str) -> Non
 def _batch_detection(batch: Any) -> DetectionBatchInput:
     """Recover the :class:`~raidar.detection.DetectionBatchInput` (images + optional targets) from a batch.
 
-    The typed collate (:func:`raidar.detection.detection_collate_fn`) returns a batched
-    :class:`~sampleflux.Sample` whose primary ``input`` field carries the
-    :class:`~raidar.detection.DetectionBatchInput` VERBATIM (it is a custom container, not an array item
-    nor a ``data``-field wrapper, so ``item_data`` returns it unchanged). A raw
+    The detection collate (:func:`raidar.detection.detection_collate_fn`) returns a batched record
+    dict whose ``"detection"`` key carries the :class:`~raidar.detection.DetectionBatchInput`
+    VERBATIM (it is a custom container, not an item). A raw
     :class:`~raidar.detection.DetectionBatchInput` (fed directly, unwrapped) is passed through.
     """
-    if isinstance(batch, Sample):
-        _, item = primary(batch, "input")
-        return cast(DetectionBatchInput, item_data(item))
+    if isinstance(batch, dict):
+        return cast(DetectionBatchInput, batch["detection"])
     return cast(DetectionBatchInput, batch)
 
 
@@ -95,6 +94,8 @@ class LightningDetector(TorchRunner, ProgressReporting, L.LightningModule):
         task: Entry point :meth:`run` dispatches to.
         max_epochs / batch_size / num_workers / logger: ergonomic flat-config knobs.
         experiment_name / run_name: tracking identity.
+        input_key: Record key carrying the input image (default ``"image"``).
+        target_key: Record key carrying the detection target ``Regions`` (default ``"target"``).
 
     Post-construction slots: ``val_set``, ``optimizer``, ``train/val/test_loader``, ``lightning``,
     ``val_metrics`` / ``test_metrics``, ``predictions_sink``, ``metrics_sidecar_path``, ``trackers``,
@@ -114,6 +115,8 @@ class LightningDetector(TorchRunner, ProgressReporting, L.LightningModule):
         logger: Optional[Union[Logger, Iterable[Logger], bool]] = None,
         experiment_name: str = "raidar_detection",
         run_name: Optional[str] = None,
+        input_key: str = "image",
+        target_key: str = "target",
     ) -> None:
         super().__init__()
         self.model: Any = model
@@ -124,11 +127,13 @@ class LightningDetector(TorchRunner, ProgressReporting, L.LightningModule):
         self.task: DetectorTask = task
         self.experiment_name = experiment_name
         self.run_name = run_name if run_name is not None else generate_run_name(prefix=_run_prefix(task))
+        self.input_key = str(input_key)
+        self.target_key = str(target_key)
         # Native detection models compute loss inside forward — no separate loss_fn callable.
         self.loss_fn = None
         self.optimizer: Any = LazyClass(torch.optim.AdamW, lr=1e-4, weight_decay=0.05)
         loader_kw = dict(
-            collate_fn=detection_collate_fn,
+            collate_fn=partial(detection_collate_fn, input_key=self.input_key, target_key=self.target_key),
             batch_size=batch_size,
             num_workers=num_workers,
             persistent_workers=num_workers != 0,
@@ -219,7 +224,7 @@ class LightningDetector(TorchRunner, ProgressReporting, L.LightningModule):
         return self._num_classes_from_targets(self.train_set)
 
     def _num_classes_from_targets(self, source: Any) -> Optional[int]:
-        from sampleflux import iter_targets
+        from sampleflux import iter_key
 
         if source is None:
             return None
@@ -227,7 +232,9 @@ class LightningDetector(TorchRunner, ProgressReporting, L.LightningModule):
         total = len(src) if hasattr(src, "__len__") else None
         logger.info("raidar: deriving num_classes from detection targets (pin num_classes to skip)")
         highest = -1
-        for target in tqdm(iter_targets(src), total=total, desc="raidar: deriving num_classes", unit="sample"):
+        for target in tqdm(
+            iter_key(src, self.target_key), total=total, desc="raidar: deriving num_classes", unit="sample"
+        ):
             labels: Any
             if isinstance(target, Regions):
                 labels = target.labels
@@ -388,9 +395,9 @@ class LightningDetector(TorchRunner, ProgressReporting, L.LightningModule):
 
     def _write_predictions(self, preds: Any, batch: Any) -> None:
         per_sample_meta = None
-        if isinstance(batch, Sample):
-            # The typed collate stashes the per-sample metadata dicts under a "metadata" field.
-            per_sample_meta = batch["metadata"] if "metadata" in batch else None
+        if isinstance(batch, dict):
+            # The detection collate stashes the per-sample metadata dicts under the "metadata" key.
+            per_sample_meta = batch.get("metadata")
         else:
             meta = getattr(batch, "metadata", None)
             if isinstance(meta, list):

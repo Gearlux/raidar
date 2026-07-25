@@ -8,14 +8,13 @@ path was removed; detection now runs exclusively through the specialised trainer
 that drives torchvision-native models and raw ``torchmetrics`` metrics directly):
 
 * :class:`DetectionBatchInput` carries images and (optionally) targets so
-  variable-size per-image tensors survive collation. It rides as the payload of
-  the batched :class:`~sampleflux.Sample`'s primary ``input`` field; the
-  specialised trainer's step functions recover it (``_batch_detection``) and read
-  ``.images`` / ``.targets``, handing them straight to the native model.
-* :func:`detection_collate_fn` is the DataLoader collate that consumes the typed
-  :class:`~sampleflux.Sample`\\ s the sources now yield, builds a
-  :class:`DetectionBatchInput`, and keeps per-image targets as lists (never
-  padded, never dropped).
+  variable-size per-image tensors survive collation. It rides under the batched
+  record's ``"detection"`` key; the specialised trainer's step functions recover
+  it (``_batch_detection``) and read ``.images`` / ``.targets``, handing them
+  straight to the native model.
+* :func:`detection_collate_fn` is the DataLoader collate that consumes the
+  record dicts the sources now yield, builds a :class:`DetectionBatchInput`,
+  and keeps per-image targets as lists (never padded, never dropped).
 * :class:`DetectionConfusionMatrix` is a native ``torchmetrics.Metric`` that
   accumulates TP / FP / FN (+ derived precision / recall / F1) and drops
   straight into a ``MetricCollection`` alongside ``MeanAveragePrecision``.
@@ -52,7 +51,7 @@ from typing import Any, Dict, List, Optional, Tuple, cast
 import numpy as np
 import torch
 from marainer.torch.outputs import DetectionOutput, DetectionPredictions
-from sampleflux import Label, Regions, Sample, item_data, primary
+from sampleflux import Label, Record, Regions, item_data
 from torch import Tensor
 from torchmetrics import Metric
 from torchvision.ops import box_iou
@@ -68,8 +67,8 @@ class DetectionBatchInput:
 
     Torchvision detectors compute loss *inside* their forward by consuming a
     list of targets alongside the images — there is no way to split "run the
-    model" from "compute loss". We carry both as the payload of the batched
-    :class:`~sampleflux.Sample`'s primary ``input`` field so the specialised
+    model" from "compute loss". We carry both under the batched record's
+    ``"detection"`` key so the specialised
     :class:`~raidar.detector.LightningDetector`'s step functions can unwrap
     ``(images, targets)`` and hand them to the model.
 
@@ -279,78 +278,73 @@ def _as_tensor(value: Any) -> Tensor:
     return torch.as_tensor(np.asarray(value))
 
 
-def _detection_target(sample: Sample) -> Dict[str, Tensor]:
-    """The torchvision ``{boxes, labels}`` target dict from a typed sample's primary ``target``.
+def _detection_target(record: Record, target_key: str) -> Dict[str, Tensor]:
+    """The torchvision ``{boxes, labels}`` target dict under ``target_key`` in a record.
 
     The typed detection-target op (``sampleflux.ops.target.CocoToTorchVisionDetection`` /
     ``MasksToDetectionBoxes``) writes the target as a :class:`~sampleflux.Regions` item whose
     ``boxes`` = the ``[N, 4]`` xyxy tensor and ``labels`` = the ``[N]`` class-id tensor; unwrap it
-    into the ``{"boxes", "labels"}`` dict the native torchvision model consumes. A field that already
+    into the ``{"boxes", "labels"}`` dict the native torchvision model consumes. A value that already
     carries the dict verbatim (a :class:`~sampleflux.Label` wrapper or a raw dict) is passed through.
     """
-    _, item = primary(sample, "target")
+    item = record[target_key]
     if isinstance(item, Regions):
         return {"boxes": _as_tensor(item.boxes), "labels": _as_tensor(item.labels)}
     data = item.value if isinstance(item, Label) else item_data(item)
     return cast(Dict[str, Tensor], data)
 
 
-def _sample_metadata(sample: Sample) -> Dict[str, Any]:
-    """Gather a :class:`~sampleflux.Sample`'s NON-primary fields into a plain metadata dict.
+def _record_metadata(record: Record, input_key: str, target_key: str) -> Dict[str, Any]:
+    """Gather a record's remaining keys (neither input nor target) into a plain metadata dict.
 
-    Every field that is not the primary input or the primary target becomes ``{name: value}`` (a
-    :class:`~sampleflux.Label`'s ``.value``, else the item payload) so string-valued fields survive
+    Every key besides the configured input and target becomes ``{name: value}`` (a
+    :class:`~sampleflux.Label`'s ``.value``, else the item payload) so string-valued values survive
     collation and predictions sinks can correlate per-image outputs.
     """
-    input_key, _ = primary(sample, "input")
-    try:
-        target_key: Any = primary(sample, "target")[0]
-    except KeyError:
-        target_key = None
     return {
         key: (item.value if isinstance(item, Label) else item_data(item))
-        for key, item in sample.items()
+        for key, item in record.items()
         if key not in (input_key, target_key)
     }
 
 
-def detection_collate_fn(batch: List[Sample]) -> Sample:
-    """Collate variable-length detection :class:`~sampleflux.Sample`\\ s into ONE batched bag.
+def detection_collate_fn(batch: List[Record], input_key: str = "image", target_key: str = "target") -> Record:
+    """Collate variable-length detection record dicts into ONE batched record.
 
-    Each per-sample :class:`~sampleflux.Sample` carries an :class:`~sampleflux.Image` input
-    (``[3, H, W]`` float) and a :class:`~sampleflux.Regions` target (boxes + labels). This reads the
-    primary ``input`` image (``item_data(primary(s, "input"))``, coerced to a tensor) and the primary
-    ``target`` region set (unwrapped to a torchvision ``{boxes, labels}`` dict by
-    :func:`_detection_target`), then returns ONE batched :class:`~sampleflux.Sample`:
+    Each per-sample record carries an :class:`~sampleflux.Image` input (``[3, H, W]`` float) under
+    ``input_key`` and a :class:`~sampleflux.Regions` target (boxes + labels) under ``target_key``.
+    This reads the input image (``item_data(record[input_key])``, coerced to a tensor) and the
+    target region set (unwrapped to a torchvision ``{boxes, labels}`` dict by
+    :func:`_detection_target`), then returns ONE batched record dict:
 
-    * field ``"detection"`` (role ``input``) — a :class:`DetectionBatchInput` carried VERBATIM as the
-      field payload. It is a custom container (variable-N images + per-image target dicts), NOT an
-      array item, so it must NOT be forced into an :class:`~sampleflux.Image` (which would ``np.asarray``
-      it); ``item_data`` returns it unchanged, and the specialised
-      :class:`~raidar.detector.LightningDetector` recovers it via ``_batch_detection`` and unwraps
-      ``(images, targets)`` for the native model.
-    * field ``"targets"`` (role ``target``) — the SAME list of per-image target dicts, so a metric's
+    * key ``"detection"`` — a :class:`DetectionBatchInput` carried VERBATIM as the value. It is a
+      custom container (variable-N images + per-image target dicts), NOT an array item, so it must
+      NOT be forced into an :class:`~sampleflux.Image` (which would ``np.asarray`` it); the
+      specialised :class:`~raidar.detector.LightningDetector` recovers it via ``_batch_detection``
+      and unwraps ``(images, targets)`` for the native model.
+    * key ``"targets"`` — the SAME list of per-image target dicts, so a metric's
       ``update(preds, targets)`` receives per-image ground truth (``batch["targets"] is
       batch_detection.targets``).
-    * field ``"metadata"`` (role ``aux``) — a ``list`` of the per-sample metadata dicts (the
-      non-primary fields), preserved for sinks that write per-sample predictions.
+    * key ``"metadata"`` — a ``list`` of the per-sample metadata dicts (the remaining keys),
+      preserved for sinks that write per-sample predictions.
 
     Per-image targets are kept as lists — never padded, never dropped (the variable-N detection
     batch convention).
+
+    Args:
+        batch: List of per-sample record dicts.
+        input_key: Record key carrying the input image (default ``"image"``).
+        target_key: Record key carrying the target ``Regions`` (default ``"target"``).
     """
     images: List[Tensor] = []
     targets: List[Dict[str, Tensor]] = []
     metas: List[Dict[str, Any]] = []
-    for s in batch:
-        _, img_item = primary(s, "input")
-        images.append(_as_tensor(item_data(img_item)))
-        targets.append(_detection_target(s))
-        metas.append(_sample_metadata(s))
+    for r in batch:
+        images.append(_as_tensor(item_data(r[input_key])))
+        targets.append(_detection_target(r, target_key))
+        metas.append(_record_metadata(r, input_key, target_key))
     batch_input = DetectionBatchInput(images=images, targets=targets)
-    return Sample(
-        {"detection": batch_input, "targets": targets, "metadata": metas},
-        roles={"detection": "input", "targets": "target", "metadata": "aux"},
-    )
+    return {"detection": batch_input, "targets": targets, "metadata": metas}
 
 
 __all__ = [

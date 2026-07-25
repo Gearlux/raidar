@@ -11,7 +11,7 @@ from typing import Any, List
 
 import torch
 from confluid import configurable
-from sampleflux import Image, Regions, Sample
+from sampleflux import Image, Record, Regions
 from torch import Tensor
 from torch.utils.data import Dataset
 
@@ -50,7 +50,7 @@ class SyntheticDetectionDataset(Dataset):
     def __len__(self) -> int:
         return self.n
 
-    def __getitem__(self, idx: int) -> Sample:
+    def __getitem__(self, idx: int) -> Record:
         if idx < 0:
             idx += self.n
         if not 0 <= idx < self.n:
@@ -60,11 +60,10 @@ class SyntheticDetectionDataset(Dataset):
         s = self.image_size
         boxes: Any = torch.tensor([[s * 0.25, s * 0.25, s * 0.75, s * 0.75]], dtype=torch.float32)
         labels: Any = torch.tensor([1 + (idx % max(self.num_classes - 1, 1))], dtype=torch.int64)
-        return Sample(
-            {
-                "image": Image(image.numpy(), layout="CHW"),
-                "regions": Regions(boxes=boxes, labels=labels),
-                "idx": idx,
-            },
-            roles={"regions": "target", "idx": "aux"},
-        )
+        # "target" matches the detection pipeline's convention key (the default the
+        # CocoToTorchVisionDetection / MasksToDetectionBoxes ops write and the collate reads).
+        return {
+            "image": Image(image.numpy(), layout="CHW"),
+            "target": Regions(boxes=boxes, labels=labels),
+            "idx": idx,
+        }
