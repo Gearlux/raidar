@@ -19,20 +19,20 @@ So our per-item output is identical to the disk dataset's, and the inherited
 ``collate_fn`` (NestedTensor), DataLoaders and ``transfer_batch_to_device`` work
 unchanged.
 
-Per-``Sample`` contract (read via the typed-bag accessors ``primary`` /
-``item_data`` — the torchvision-detection convention raidar uses elsewhere,
+Per-record contract (read via ``item_data`` over the configured keys — the
+torchvision-detection convention raidar uses elsewhere,
 :class:`raidar.rfdetr.RFDETRModel`):
 
-* The primary ``input``-role item's payload: a torch tensor / numpy array / PIL
+* The ``input_key`` value's payload: a torch tensor / numpy array / PIL
   image, ``[C, H, W]`` / ``[H, W, C]`` / ``[H, W]`` in **RGB** channel order.
   Floats in ``[0, 1]`` are rescaled to ``uint8 [0, 255]``; uint8 passes through.
   (No BGR flip — RF-DETR's ``ToImage``/``Normalize`` expect RGB, unlike
   ultralytics.)
-* The ``target``-role :class:`sampleflux.Regions` item — ``boxes`` ``[N, 4]``
+* The ``target_key`` :class:`sampleflux.Regions` value — ``boxes`` ``[N, 4]``
   xyxy-pixel + ``labels`` ``[N]`` int — with labels **0-indexed ``0..K-1``**
   (RF-DETR reserves index ``K`` for the background class internally — the
   OPPOSITE of torchvision's background-at-0, so do NOT ``+1``-shift labels for
-  RF-DETR). A sample with no ``target`` field is fine.
+  RF-DETR). A record with no target key is fine.
 """
 
 from __future__ import annotations
@@ -46,7 +46,7 @@ from PIL import Image
 from rfdetr._namespace import build_namespace
 from rfdetr.datasets.coco import ConvertCoco, make_coco_transforms, make_coco_transforms_square_div_64
 from rfdetr.training.module_data import RFDETRDataModule
-from sampleflux import Flux, Regions, item_data, iter_targets, primary
+from sampleflux import Flux, Regions, item_data, iter_key
 
 logger = get_logger(__name__)
 
@@ -100,10 +100,9 @@ def _target_boxes_labels(target: Any) -> Any:
     return None, None
 
 
-def _sample_primary_input(sample: Any) -> Any:
-    """The primary ``input`` payload of a typed :class:`~sampleflux.Sample` (image tensor / array / PIL)."""
-    _, item = primary(sample, "input")
-    return item_data(item)
+def _record_input(record: Any, input_key: str) -> Any:
+    """The image payload (tensor / array / PIL) under ``input_key`` in a record."""
+    return item_data(record[input_key])
 
 
 def _as_f32(value: Any) -> torch.Tensor:
@@ -167,28 +166,39 @@ class FluxRFDETRDataset(torch.utils.data.Dataset):
     """In-memory ``Dataset`` yielding RF-DETR's ``(normalized-image, target)`` pairs from a Flux.
 
     Args:
-        flux: The :class:`sampleflux.Flux` of typed-bag :class:`sampleflux.Sample`.
+        flux: The :class:`sampleflux.Flux` of record dicts.
         image_set: ``"train"`` (augmented) or ``"val"`` / ``"test"`` (no aug).
         resolution: Model input resolution (``model_config.resolution``).
         ns: The merged ``rfdetr`` namespace (``build_namespace(model_config,
             train_config)``) — carries ``square_resize_div_64`` / ``multi_scale`` /
             ``patch_size`` / ``num_windows`` / ``aug_config`` that drive the transform.
+        input_key: Record key carrying the input image (default ``"image"``).
+        target_key: Record key carrying the target ``Regions`` (default ``"target"``).
     """
 
-    def __init__(self, flux: Flux, image_set: str, resolution: int, ns: Any) -> None:
+    def __init__(
+        self,
+        flux: Flux,
+        image_set: str,
+        resolution: int,
+        ns: Any,
+        input_key: str = "image",
+        target_key: str = "target",
+    ) -> None:
         self._flux = flux
         self._image_set = image_set
+        self._input_key = str(input_key)
         self._transforms = _build_transforms(image_set, resolution, ns)
         self._convert = ConvertCoco(include_masks=False, cat2label=None)
-        # Projection-optimized label cache: walk targets ONLY (sampleflux skips input/image
-        # construction) so we never decode images just to index labels. Images decode
-        # lazily per __getitem__.
-        self._labels = self._cache_labels(flux)
+        # Projection-optimized label cache: walk the target key ONLY (sampleflux key
+        # projection skips input/image construction) so we never decode images just to
+        # index labels. Images decode lazily per __getitem__.
+        self._labels = self._cache_labels(flux, str(target_key))
 
     @staticmethod
-    def _cache_labels(flux: Flux) -> List[Dict[str, torch.Tensor]]:
+    def _cache_labels(flux: Flux, target_key: str) -> List[Dict[str, torch.Tensor]]:
         cached: List[Dict[str, torch.Tensor]] = []
-        for target in iter_targets(flux):
+        for target in iter_key(flux, target_key):
             boxes, labels = _target_boxes_labels(target)
             if boxes is not None and labels is not None:
                 cached.append({"boxes": _as_f32(boxes).reshape(-1, 4), "labels": _as_i64(labels)})
@@ -202,8 +212,8 @@ class FluxRFDETRDataset(torch.utils.data.Dataset):
         return len(self._flux)
 
     def __getitem__(self, i: int) -> Any:
-        sample = self._flux[i]
-        pil = _sample_input_to_rgb_pil(_sample_primary_input(sample))
+        record = self._flux[i]
+        pil = _sample_input_to_rgb_pil(_record_input(record, self._input_key))
         cached = self._labels[i]
         coco_target = {
             "image_id": i,
