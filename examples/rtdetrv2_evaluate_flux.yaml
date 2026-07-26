@@ -28,9 +28,9 @@ val_set: !class:sampleflux.core.Flux
     input_feature: image
     target_feature: objects
   ops:
-    - !class:sampleflux.ops.target.CocoToTorchVisionDetectionOp
+    - !class:sampleflux.ops.target.CocoToTorchVisionDetection
       bbox_format: xywh
       label_offset: 0      # HF detectors are 0-indexed (no background)
-    - !class:sampleflux.ops.torch.ToTensorOp
+    - !class:sampleflux.ops.torch.ToTensor
       mode: RGB
       normalize: true

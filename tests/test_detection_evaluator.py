@@ -12,7 +12,7 @@ import torch
 import torch.nn as nn
 from confluid import Class, LazyClass
 from confluid.fluid import Class as ConfluidClass
-from sampleflux import Image, Label, Regions, Sample
+from sampleflux import Image, Regions
 from sampleflux.core import Flux
 from torch import Tensor
 from torch.utils.data import DataLoader
@@ -59,17 +59,14 @@ def _regions(boxes: Any, labels: Any) -> Regions:
 
 def _make_flux(n: int = 4, size: int = 32) -> Flux:
     samples = [
-        Sample(
-            {
-                "image": Image(torch.rand(3, size, size).numpy(), layout="CHW"),
-                "target": _regions(
-                    torch.tensor([[4.0, 4.0, 20.0, 20.0]], dtype=torch.float32),
-                    torch.tensor([1], dtype=torch.int64),
-                ),
-                "idx": Label(i),
-            },
-            roles={"target": "target", "idx": "aux"},
-        )
+        {
+            "image": Image(torch.rand(3, size, size).numpy(), layout="CHW"),
+            "target": _regions(
+                torch.tensor([[4.0, 4.0, 20.0, 20.0]], dtype=torch.float32),
+                torch.tensor([1], dtype=torch.int64),
+            ),
+            "idx": i,
+        }
         for i in range(n)
     ]
     return Flux(source=samples)
@@ -95,9 +92,14 @@ def test_metrics_default_to_lazy_map() -> None:
 
 
 def test_default_loader_uses_detection_collate_fn() -> None:
+    from functools import partial
+
     ev = _evaluator(model=_NativeDetector(), dataset=_make_flux(4))
     assert isinstance(ev.test_loader, ConfluidClass)
-    assert ev.test_loader.kwargs.get("collate_fn") is detection_collate_fn
+    # The collate is a partial binding the configured record keys onto detection_collate_fn.
+    collate = ev.test_loader.kwargs.get("collate_fn")
+    assert isinstance(collate, partial) and collate.func is detection_collate_fn
+    assert collate.keywords == {"input_key": "image", "target_key": "target"}
 
 
 def test_evaluator_run_writes_metrics_sidecar(tmp_path: Any) -> None:

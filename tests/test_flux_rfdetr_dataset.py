@@ -15,19 +15,16 @@ pytest.importorskip("rfdetr.training")  # the [train,loggers] extras
 
 import torch  # noqa: E402
 from rfdetr.config import RFDETRNanoConfig, TrainConfig  # noqa: E402
-from sampleflux import Image, Regions, Sample  # noqa: E402
+from sampleflux import Image, Record, Regions  # noqa: E402
 from sampleflux.core import Flux  # noqa: E402
 
 import raidar.flux_rfdetr_dataset as frd  # noqa: E402
 from raidar.flux_rfdetr_dataset import FluxRFDETRDataModule, FluxRFDETRDataset  # noqa: E402
 
 
-def _det_sample(image: Any, boxes: Any, labels: Any, idx: int) -> Sample:
-    """A typed detection Sample: Image input + Regions target (the CocoToTorchVisionDetection shape)."""
-    return Sample(
-        {"image": Image(image.numpy(), layout="CHW"), "regions": Regions(boxes=boxes, labels=labels), "idx": idx},
-        roles={"regions": "target", "idx": "aux"},
-    )
+def _det_sample(image: Any, boxes: Any, labels: Any, idx: int) -> Record:
+    """A detection record: Image under "image" + Regions under "target" (the CocoToTorchVisionDetection shape)."""
+    return {"image": Image(image.numpy(), layout="CHW"), "target": Regions(boxes=boxes, labels=labels), "idx": idx}
 
 
 def _flux(n: int = 4, *, h: int = 40, w: int = 60, empty: bool = False) -> Flux:
@@ -117,18 +114,18 @@ def test_labels_cached_via_projection_without_image_decode(monkeypatch: Any) -> 
 
     monkeypatch.setattr(frd, "_sample_input_to_rgb_pil", _counting_decode)
 
-    # Spy: labels are cached via the target-only projection helper.
+    # Spy: labels are cached via the key-restricted projection helper.
     projection_calls = {"n": 0}
-    real_iter_targets = frd.iter_targets
+    real_iter_key = frd.iter_key
 
-    def _counting_iter_targets(src: Any) -> Any:
+    def _counting_iter_key(src: Any, key: str) -> Any:
         projection_calls["n"] += 1
-        return real_iter_targets(src)
+        return real_iter_key(src, key)
 
-    monkeypatch.setattr(frd, "iter_targets", _counting_iter_targets)
+    monkeypatch.setattr(frd, "iter_key", _counting_iter_key)
 
     ds = _val_dataset(flux, resolution=256)
-    assert projection_calls["n"] == 1, "labels must be cached via iter_targets (target-only projection)"
+    assert projection_calls["n"] == 1, "labels must be cached via iter_key (target-key-only projection)"
     assert decode_calls["n"] == 0, "no image should be decoded while caching labels"
     assert len(ds._labels) == 4
 

@@ -204,7 +204,7 @@ def test_end_to_end_lightning_fit(cls: Any, variant: str, tmp_path: Any) -> None
     pytest.importorskip("transformers")
     import pytorch_lightning as L
     from confluid import flow
-    from sampleflux import Image, Label, Regions, Sample
+    from sampleflux import Image, Regions
     from sampleflux.core import Flux
 
     from raidar.detection import detection_collate_fn
@@ -215,17 +215,14 @@ def test_end_to_end_lightning_fit(cls: Any, variant: str, tmp_path: Any) -> None
 
     def _flux(n: int) -> Flux:
         samples = [
-            Sample(
-                {
-                    "image": Image(torch.rand(3, 128, 128).numpy(), layout="CHW"),
-                    "target": _regions(
-                        torch.tensor([[10.0, 10.0, 90.0, 90.0]], dtype=torch.float32),
-                        torch.tensor([0], dtype=torch.int64),
-                    ),
-                    "idx": Label(i),
-                },
-                roles={"target": "target", "idx": "aux"},
-            )
+            {
+                "image": Image(torch.rand(3, 128, 128).numpy(), layout="CHW"),
+                "target": _regions(
+                    torch.tensor([[10.0, 10.0, 90.0, 90.0]], dtype=torch.float32),
+                    torch.tensor([0], dtype=torch.int64),
+                ),
+                "idx": i,
+            }
             for i in range(n)
         ]
         return Flux(source=samples)

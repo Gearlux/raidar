@@ -18,7 +18,7 @@
 #
 # RF-DETR's in-memory dataset takes the PIL image straight from the HF source (it
 # applies its own resize + ImageNet-normalize), so the op chain only shapes the
-# TARGET — no ToTensorOp needed.
+# TARGET — no ToTensor needed.
 
 trainer: !class:raidar.rfdetr_trainer.RFDETRTrainer
   experiment_name: cppe5_rfdetr
@@ -37,7 +37,7 @@ trainer: !class:raidar.rfdetr_trainer.RFDETRTrainer
       target_feature: objects
       # count: 100           # uncomment to cap samples for a quick smoke run
     ops:
-      - !class:sampleflux.ops.target.CocoToTorchVisionDetectionOp
+      - !class:sampleflux.ops.target.CocoToTorchVisionDetection
         bbox_format: xywh    # cppe-5 boxes are COCO [x, y, w, h]
         label_offset: 0      # RF-DETR is 0-indexed (background at K) — do NOT +1
   val_set: !class:sampleflux.core.Flux
@@ -47,6 +47,6 @@ trainer: !class:raidar.rfdetr_trainer.RFDETRTrainer
       input_feature: image
       target_feature: objects
     ops:
-      - !class:sampleflux.ops.target.CocoToTorchVisionDetectionOp
+      - !class:sampleflux.ops.target.CocoToTorchVisionDetection
         bbox_format: xywh
         label_offset: 0

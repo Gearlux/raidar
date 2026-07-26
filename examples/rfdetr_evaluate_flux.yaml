@@ -24,6 +24,6 @@ evaluator: !class:raidar.rfdetr_trainer.RFDETREvaluator
       input_feature: image
       target_feature: objects
     ops:
-      - !class:sampleflux.ops.target.CocoToTorchVisionDetectionOp
+      - !class:sampleflux.ops.target.CocoToTorchVisionDetection
         bbox_format: xywh
         label_offset: 0      # RF-DETR is 0-indexed (background at K)

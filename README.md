@@ -131,7 +131,7 @@ trained model — the model loaded its own checkpoint, so its head is the single
 source of truth (not the eval dataset, which may be a subset). The read is
 *best-effort*: the default `MeanAveragePrecision` is class-count-agnostic, so a
 detector that doesn't expose its count just leaves `num_classes` unset without
-erroring. `initialize()` also normalizes the wired dataset to a `Dataset[Sample]`
+erroring. `initialize()` also normalizes the wired dataset to a record-yielding `Dataset`
 via marainer's `ensure_sample_dataset`.
 
 ```yaml

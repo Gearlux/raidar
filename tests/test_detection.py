@@ -11,7 +11,7 @@ remains here is the batch container + collate the native path uses; the
 from typing import Any, Dict, List
 
 import torch
-from sampleflux import Image, Regions, Sample, item_data, primary
+from sampleflux import Image, Record, Regions
 from torch import Tensor
 
 from raidar.detection import DetectionBatchInput, detection_collate_fn
@@ -40,21 +40,18 @@ def _regions(boxes: Any, labels: Any) -> Regions:
     return Regions(boxes=boxes, labels=labels)
 
 
-def _synthetic_detection_samples(n: int, size: int = 64) -> List[Sample]:
-    """Per-sample Samples shaped like a typed detection source: Image input + Regions target."""
-    samples: List[Sample] = []
+def _synthetic_detection_samples(n: int, size: int = 64) -> List[Record]:
+    """Per-sample records shaped like a detection source: Image under "image" + Regions under "target"."""
+    samples: List[Record] = []
     for _ in range(n):
         samples.append(
-            Sample(
-                {
-                    "image": Image(torch.rand(3, size, size).numpy(), layout="CHW"),
-                    "target": _regions(
-                        torch.tensor([[4.0, 4.0, 28.0, 28.0]], dtype=torch.float32),
-                        torch.tensor([1], dtype=torch.int64),
-                    ),
-                },
-                roles={"target": "target"},
-            )
+            {
+                "image": Image(torch.rand(3, size, size).numpy(), layout="CHW"),
+                "target": _regions(
+                    torch.tensor([[4.0, 4.0, 28.0, 28.0]], dtype=torch.float32),
+                    torch.tensor([1], dtype=torch.int64),
+                ),
+            }
         )
     return samples
 
@@ -83,10 +80,9 @@ def test_detection_batch_input_targets_optional() -> None:
 def test_detection_collate_preserves_lists_and_sets_batch_input() -> None:
     samples = _synthetic_detection_samples(3, size=32)
     batch = detection_collate_fn(samples)
-    assert isinstance(batch, Sample)
-    # The DetectionBatchInput rides verbatim as the primary input field payload.
-    _, input_item = primary(batch, "input")
-    bi = item_data(input_item)
+    assert isinstance(batch, dict)
+    # The DetectionBatchInput rides VERBATIM under the batched record's "detection" key.
+    bi = batch["detection"]
     assert isinstance(bi, DetectionBatchInput)
     assert bi.shape[0] == 3
     assert len(bi.images) == 3

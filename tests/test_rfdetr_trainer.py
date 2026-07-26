@@ -194,7 +194,7 @@ def _best_available_device() -> str:
 @pytest.mark.slow
 def test_flux_train_smoke(tmp_path: Any) -> None:
     pytest.importorskip("rfdetr.training")
-    from sampleflux import Image, Regions, Sample
+    from sampleflux import Image, Regions
     from sampleflux.core import Flux
 
     def _regions(boxes: Any, labels: Any) -> Regions:
@@ -203,14 +203,11 @@ def test_flux_train_smoke(tmp_path: Any) -> None:
     def _flux(n: int) -> Flux:
         return Flux(
             source=[
-                Sample(
-                    {
-                        "image": Image(torch.rand(3, 256, 256).numpy(), layout="CHW"),
-                        "regions": _regions(torch.tensor([[10.0, 10.0, 80.0, 80.0]]), torch.tensor([0])),
-                        "i": i,
-                    },
-                    roles={"regions": "target", "i": "aux"},
-                )
+                {
+                    "image": Image(torch.rand(3, 256, 256).numpy(), layout="CHW"),
+                    "target": _regions(torch.tensor([[10.0, 10.0, 80.0, 80.0]]), torch.tensor([0])),
+                    "i": i,
+                }
                 for i in range(n)
             ]
         )
