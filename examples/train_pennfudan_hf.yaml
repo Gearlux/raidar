@@ -5,7 +5,7 @@
 # great quick-iteration detection example.
 #
 # Penn-Fudan ships SEGMENTATION MASKS, not boxes — the torchvision tutorial derives
-# per-object boxes from the per-instance mask. `MasksToDetectionBoxesOp` does exactly
+# per-object boxes from the per-instance mask. `MasksToDetectionBoxes` does exactly
 # that: each distinct non-zero pixel value in the `instance_id` mask is one object,
 # and its tight extent becomes a box (class 1 = pedestrian, class 0 = background →
 # num_classes = 2). Mirrors sonair's flat HF config — top-level keys broadcast into
@@ -29,10 +29,10 @@ model: !lazy:torchvision.models.detection.fasterrcnn_mobilenet_v3_large_320_fpn
 
 # -- Op chain: instance mask → detection target; PIL image → 3-channel tensor.
 detection_ops:
-  - !class:sampleflux.ops.target.MasksToDetectionBoxesOp
+  - !class:sampleflux.ops.target.MasksToDetectionBoxes
     label: 1                # all objects are pedestrians (class 1; 0 = background)
     # connected: false      # default — instance_id is already a per-instance mask
-  - !class:sampleflux.ops.torch.ToTensorOp
+  - !class:sampleflux.ops.torch.ToTensor
     mode: RGB               # force 3-channel for Faster R-CNN
     normalize: true
 

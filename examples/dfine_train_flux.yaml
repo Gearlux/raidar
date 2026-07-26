@@ -17,7 +17,7 @@
 #
 # The DFINEModel wrapper resizes images to a square `image_size` internally and
 # expects [0,1] pixels (the HF processor uses do_normalize=False), so the op chain
-# is just CocoToTorchVisionDetectionOp + ToTensorOp(normalize=true) — same as the
+# is just CocoToTorchVisionDetection + ToTensor(normalize=true) — same as the
 # torchvision Faster R-CNN example, only `label_offset` differs.
 
 runnable: !class:raidar.detector.LightningDetector
@@ -38,10 +38,10 @@ model: !lazy:raidar.hf_detection.DFINEModel
 
 # -- Shared op chain: HF `objects` annotation → detection target; PIL image → [0,1] tensor.
 detection_ops:
-  - !class:sampleflux.ops.target.CocoToTorchVisionDetectionOp
+  - !class:sampleflux.ops.target.CocoToTorchVisionDetection
     bbox_format: xywh        # cppe-5 boxes are COCO [x, y, w, h]
     label_offset: 0          # HF detectors are 0-indexed (no background) — do NOT +1
-  - !class:sampleflux.ops.torch.ToTensorOp
+  - !class:sampleflux.ops.torch.ToTensor
     mode: RGB                # cppe-5 mixes RGB/RGBA/grayscale — force 3-channel
     normalize: true          # [0,255] → [0,1] (HF processor is do_normalize=False)
 

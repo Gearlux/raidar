@@ -14,7 +14,7 @@ import pytorch_lightning as L
 import torch
 import torch.nn as nn
 from confluid import LazyClass
-from sampleflux import Image, Label, Regions, Sample
+from sampleflux import Image, Record, Regions
 from sampleflux.core import Flux
 from torch import Tensor
 from torchmetrics import MetricCollection
@@ -69,27 +69,24 @@ def _regions(boxes: Any, labels: Any) -> Regions:
     return Regions(boxes=boxes, labels=labels)
 
 
-def _make_samples(n: int = 4, size: int = 32) -> List[Sample]:
-    """Per-sample Samples shaped like a typed detection source: Image input + Regions target + aux."""
-    samples: List[Sample] = []
+def _make_samples(n: int = 4, size: int = 32) -> List[Record]:
+    """Per-sample records shaped like a detection source: Image + Regions target + plain meta key."""
+    samples: List[Record] = []
     for i in range(n):
         samples.append(
-            Sample(
-                {
-                    "image": Image(torch.rand(3, size, size).numpy(), layout="CHW"),
-                    "target": _regions(
-                        torch.tensor([[4.0, 4.0, 20.0, 20.0]], dtype=torch.float32),
-                        torch.tensor([1], dtype=torch.int64),
-                    ),
-                    "idx": Label(i),
-                },
-                roles={"target": "target", "idx": "aux"},
-            )
+            {
+                "image": Image(torch.rand(3, size, size).numpy(), layout="CHW"),
+                "target": _regions(
+                    torch.tensor([[4.0, 4.0, 20.0, 20.0]], dtype=torch.float32),
+                    torch.tensor([1], dtype=torch.int64),
+                ),
+                "idx": i,
+            }
         )
     return samples
 
 
-def _make_batch(n: int = 2, size: int = 32) -> Sample:
+def _make_batch(n: int = 2, size: int = 32) -> Record:
     return detection_collate_fn(_make_samples(n=n, size=size))
 
 
@@ -166,6 +163,8 @@ def test_metric_collection_with_native_confusion_matrix_construction() -> None:
 
 
 def test_default_loader_uses_detection_collate_fn() -> None:
+    from functools import partial
+
     from confluid.fluid import Class as ConfluidClass
 
     trainer = LightningDetector(
@@ -173,10 +172,12 @@ def test_default_loader_uses_detection_collate_fn() -> None:
         train_set=_make_flux(4),
         num_classes=2,
     )
-    assert isinstance(trainer.train_loader, ConfluidClass)
-    assert trainer.train_loader.kwargs.get("collate_fn") is detection_collate_fn
-    assert isinstance(trainer.val_loader, ConfluidClass)
-    assert trainer.val_loader.kwargs.get("collate_fn") is detection_collate_fn
+    # The collate is a partial binding the configured record keys onto detection_collate_fn.
+    for loader in (trainer.train_loader, trainer.val_loader):
+        assert isinstance(loader, ConfluidClass)
+        collate = loader.kwargs.get("collate_fn")
+        assert isinstance(collate, partial) and collate.func is detection_collate_fn
+        assert collate.keywords == {"input_key": "image", "target_key": "target"}
 
 
 # ---------------------------------------------------------------------------
@@ -208,14 +209,11 @@ def test_training_step_rejects_missing_targets() -> None:
         num_classes=2,
     )
     trainer.train()
-    batch = Sample(
-        {
-            "detection": DetectionBatchInput(images=[torch.rand(3, 32, 32)], targets=None),
-            "targets": [],
-            "metadata": [{}],
-        },
-        roles={"detection": "input", "targets": "target", "metadata": "aux"},
-    )
+    batch: Record = {
+        "detection": DetectionBatchInput(images=[torch.rand(3, 32, 32)], targets=None),
+        "targets": [],
+        "metadata": [{}],
+    }
     with pytest.raises(ValueError, match="requires targets"):
         trainer.training_step(batch, 0)
 
@@ -334,18 +332,15 @@ class _NumClassesDetector(nn.Module):
 
 
 def _labelled_flux(label_sets: List[List[int]], size: int = 16) -> Flux:
-    """A detection Flux whose per-image targets carry the given label lists."""
+    """A detection Flux whose per-image targets carry the given label lists (under "target")."""
     samples = [
-        Sample(
-            {
-                "image": Image(torch.rand(3, size, size).numpy(), layout="CHW"),
-                "regions": _regions(
-                    torch.zeros((len(lbls), 4), dtype=torch.float32),
-                    torch.tensor(lbls, dtype=torch.int64),
-                ),
-            },
-            roles={"regions": "target"},
-        )
+        {
+            "image": Image(torch.rand(3, size, size).numpy(), layout="CHW"),
+            "target": _regions(
+                torch.zeros((len(lbls), 4), dtype=torch.float32),
+                torch.tensor(lbls, dtype=torch.int64),
+            ),
+        }
         for lbls in label_sets
     ]
     return Flux(source=samples)

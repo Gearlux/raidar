@@ -32,10 +32,10 @@ model: !lazy:raidar.hf_detection.RTDETRv2Model
 
 # -- Shared op chain: HF `objects` annotation → detection target; PIL image → [0,1] tensor.
 detection_ops:
-  - !class:sampleflux.ops.target.CocoToTorchVisionDetectionOp
+  - !class:sampleflux.ops.target.CocoToTorchVisionDetection
     bbox_format: xywh        # cppe-5 boxes are COCO [x, y, w, h]
     label_offset: 0          # HF detectors are 0-indexed (no background) — do NOT +1
-  - !class:sampleflux.ops.torch.ToTensorOp
+  - !class:sampleflux.ops.torch.ToTensor
     mode: RGB                # cppe-5 mixes RGB/RGBA/grayscale — force 3-channel
     normalize: true          # [0,255] → [0,1] (HF processor is do_normalize=False)
 

@@ -6,7 +6,7 @@
 # Mirrors sonair's flat HF classification config (train_efficientvit_b0_sonair.yaml):
 # top-level keys are wired into the trainer by Confluid broadcasting (no nesting /
 # !ref needed), and the !lazy: model gets `num_classes` injected at run time.
-# cppe-5's 5 categories are 0-indexed (0..4); CocoToTorchVisionDetectionOp's
+# cppe-5's 5 categories are 0-indexed (0..4); CocoToTorchVisionDetection's
 # `label_offset: 1` shifts them to torchvision foreground ids 1..5 (class 0 =
 # background), so num_classes = 6.
 #
@@ -41,10 +41,10 @@ model: !lazy:torchvision.models.detection.fasterrcnn_mobilenet_v3_large_320_fpn
 
 # -- Shared op chain: HF `objects` annotation → detection target; PIL image → tensor.
 detection_ops:
-  - !class:sampleflux.ops.target.CocoToTorchVisionDetectionOp
+  - !class:sampleflux.ops.target.CocoToTorchVisionDetection
     bbox_format: xywh        # cppe-5 boxes are COCO [x, y, w, h]
     label_offset: 1          # 0..4 → 1..5; reserve class 0 for background
-  - !class:sampleflux.ops.torch.ToTensorOp
+  - !class:sampleflux.ops.torch.ToTensor
     mode: RGB                # cppe-5 mixes RGB/RGBA/grayscale — force 3-channel for Faster R-CNN
     normalize: true
 
