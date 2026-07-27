@@ -21,7 +21,7 @@ from typing import Any, Dict, Iterable, List, Literal, Optional, Union, cast
 import pytorch_lightning as L
 import torch
 import torch.nn as nn
-from confluid import Fluid, LazyClass, Mandatory, configurable, flow, output
+from confluid import Fluid, LazyClass, Mandatory, configurable, flow, get_hierarchy_from_instance, output
 from confluid.registry import resolve_class
 from loggair import get_logger
 from marainer.lightning import TrackingCallback, activate_for_lightning, attach_lightning_progress, scalar_metrics
@@ -386,10 +386,15 @@ class LightningDetector(TorchRunner, ProgressReporting, L.LightningModule):
         return trainer
 
     def _config_params(self) -> Dict[str, Any]:
-        try:
-            from liquifai.discovery import get_configurable_paths
+        """Flat ``{dotted-path: live value}`` of this runnable's configuration, for tracker params.
 
-            return dict(get_configurable_paths(self))
+        Walks the FLOWED object graph (not the static signature), so it sees defaults the user
+        never wrote into YAML plus post-construction keys. ``log_run_context`` keeps only the
+        JSON-scalar values, so nested objects here are harmless. Best-effort by design: a
+        tracking detail must never take down a training run.
+        """
+        try:
+            return {path: value for path, (_, value, _) in get_hierarchy_from_instance(self).items()}
         except Exception:  # pragma: no cover - best effort
             return {}
 
