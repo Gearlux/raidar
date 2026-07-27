@@ -1,8 +1,8 @@
-"""YoloSink — write a detection Flux to a native Ultralytics dataset dir.
+"""YoloSink — write a detection Stream to a native Ultralytics dataset dir.
 
-A SampleFlux ``DataSink`` (``open`` / ``write(sample)`` / ``flush`` / ``close``):
-``marainer convert`` streams a detection Flux into it via
-``DatasetProcessor(flux=…, sink=YoloSink(…))``, exactly like any other
+A RecordStream ``DataSink`` (``open`` / ``write(record)`` / ``flush`` / ``close``):
+``marainer convert`` streams a detection Stream into it via
+``DatasetProcessor(stream=…, sink=YoloSink(…))``, exactly like any other
 source → ops → sink pipeline — there is no bespoke processor. Each
 record dict is materialised to the layout
 ``YOLO.train(data=<output_dir>/data.yaml)`` natively consumes:
@@ -23,12 +23,12 @@ and the source); each run rewrites only its own ``images/<split>`` /
 (and appends to ``metadata.jsonl``), so the splits accumulate without clobbering
 each other.
 
-Compared to the in-memory ``raidar_ultralytics.flux_yolo_dataset.FluxYOLODataset``
+Compared to the in-memory ``raidar_ultralytics.stream_yolo_dataset.StreamYOLODataset``
 (which recomputes spectrograms every epoch from the IQ source), the on-disk
 dataset trades startup cost for faster epochs and lets third-party tools
 (FiftyOne, pycocotools, ultralytics' own CLI) consume the same data.
 
-Generic over any detection Flux whose input-key value is an image
+Generic over any detection Stream whose input-key value is an image
 (``[3,H,W]`` / ``[H,W,3]`` / ``[H,W]``, float ``[0,1]`` or ``uint8``, numpy or
 torch) and whose target-key value is ``{"boxes": [N,4] xyxy-pixel float32, "labels": [N] int64}``
 — i.e. exactly what :class:`waivefront.targets.RegionsToDetectionBoxesOp`
@@ -47,14 +47,14 @@ import yaml
 from confluid import configurable
 from loggair import get_logger
 from PIL import Image
-from sampleflux import Label, Record, Regions, item_data
-from sampleflux.storage.base import Storage
+from recordstream import Label, Record, Regions, item_data
+from recordstream.storage.base import Storage
 
 logger = get_logger(__name__)
 
 
 def _to_uint8_hwc(arr_in: Any) -> np.ndarray:
-    """Normalise an image-shaped sample input into ``[H, W, 3] uint8`` for PIL.
+    """Normalise an image-shaped record input into ``[H, W, 3] uint8`` for PIL.
 
     Accepts ``[3,H,W]`` / ``[H,W,3]`` / ``[H,W]`` numpy or torch tensors, float
     in ``[0,1]`` or ``uint8``. Greyscale is broadcast to 3 channels (Ultralytics
@@ -93,7 +93,7 @@ def _record_image(record: Record, input_key: str) -> Any:
 
 
 def _record_target_dict(record: Record, target_key: str) -> Dict[str, Any]:
-    """The ``{boxes, labels}`` detection target under ``target_key`` — a :class:`~sampleflux.Regions`
+    """The ``{boxes, labels}`` detection target under ``target_key`` — a :class:`~recordstream.Regions`
     item (the ``CocoToTorchVisionDetection`` output) unwrapped, a dict-valued ``Label`` / raw dict
     passed through, or ``{}`` when the key is absent."""
     if target_key not in record:
@@ -107,7 +107,7 @@ def _record_target_dict(record: Record, target_key: str) -> Dict[str, Any]:
 
 def _record_metadata(record: Record, input_key: str, target_key: str) -> Dict[str, Any]:
     """Gather a record's remaining keys into a plain metadata dict (a ``Label``'s ``.value``,
-    else the item payload) — the per-sample provenance the YOLO/COCO sidecar records."""
+    else the item payload) — the per-record provenance the YOLO/COCO sidecar records."""
     return {
         key: (item.value if isinstance(item, Label) else item_data(item))
         for key, item in record.items()
@@ -186,7 +186,7 @@ def _jsonable_metadata(metadata: Any, *, max_array_elems: int = _MAX_META_ARRAY_
     """Best-effort JSON-friendly conversion of a record's metadata payload — NEVER raises.
 
     Source metadata can carry values ``json.dumps`` cannot encode: NumPy/torch arrays, **complex**
-    IQ samples, and FluxStudio's internal ``__taidal_stash_*`` snapshots (a stashed complex signal
+    IQ samples, and StreamStudio's internal ``__taidal_stash_*`` snapshots (a stashed complex signal
     from a DAG→sequential fan-out). So this:
       * converts a ``complex`` scalar to a string (JSON has no complex type);
       * summarises a LARGE array (> ``max_array_elems``) as ``<array shape=… dtype=…>`` — a 1.2M-element
@@ -230,12 +230,12 @@ def _jsonable_metadata(metadata: Any, *, max_array_elems: int = _MAX_META_ARRAY_
     return str(metadata)
 
 
-# category="sink": surfaced as a FluxStudio sink node (SAMPLEFLUX_OBJECT:sink → DatasetProcessor.sink).
+# category="sink": surfaced as a StreamStudio sink node (RECORDSTREAM_OBJECT:sink → DatasetProcessor.sink).
 @configurable(category="sink")
 class YoloSink(Storage):
-    """DataSink that materialises one split of a detection Flux to a YOLO dataset dir.
+    """DataSink that materialises one split of a detection Stream to a YOLO dataset dir.
 
-    Wired as the ``sink:`` of a ``sampleflux.processing.DatasetProcessor`` and run
+    Wired as the ``sink:`` of a ``recordstream.processing.DatasetProcessor`` and run
     via ``marainer convert``. Writes ``images/<split>`` + ``labels/<split>``
     (+ optional ``annotations/<split>.json``), appends per-image provenance to
     ``metadata.jsonl``, and merges ``data.yaml`` so repeated runs (one per

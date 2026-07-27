@@ -91,7 +91,7 @@ runnable: !class:raidar.detector.LightningDetector
 Run:
 
 ```bash
-raidar train path/to/config.yaml   # or the generic runner: sampleflux run path/to/config.yaml
+raidar train path/to/config.yaml   # or the generic runner: recordstream run path/to/config.yaml
 ```
 
 ### Dataset-derived `num_classes` (`!lazy:` model)
@@ -132,7 +132,7 @@ source of truth (not the eval dataset, which may be a subset). The read is
 *best-effort*: the default `MeanAveragePrecision` is class-count-agnostic, so a
 detector that doesn't expose its count just leaves `num_classes` unset without
 erroring. `initialize()` also normalizes the wired dataset to a record-yielding `Dataset`
-via marainer's `ensure_sample_dataset`.
+via marainer's `ensure_record_dataset`.
 
 ```yaml
 # task: test — num_classes is read off the trained model (which carries it).
@@ -160,7 +160,7 @@ ultralytics trainer/evaluator (mosaic + albumentations + Ultralytics
 `LOGGER`) — live in
 [raidar-ultralytics](https://github.com/Gearlux/raidar-ultralytics).
 
-### Registered builders (discovery + FluxStudio)
+### Registered builders (discovery + StreamStudio)
 
 Torchvision ships its detectors as builder **functions**, not classes.
 `raidar.configurables` registers the full detection family as `detection_model`
@@ -190,7 +190,7 @@ What registration buys (no behaviour change for raw dotted-path YAML — the
 * **navigaitor** lists each builder in `list_configurable_classes(category="detection_model")`
   (and the visual-editor form-spec), beside `RFDETRModel` — `num_classes` and
   the other knobs are enumerated from the builder's own signature.
-* **FluxStudio** generates a `SAMPLEFLUX_OBJECT:model` **object node** per builder
+* **StreamStudio** generates a `RECORDSTREAM_OBJECT:model` **object node** per builder
   (palette `Taidal/Model/Detection`), with widgets introspected from the
   function signature. Its output wires **straight into a detection trainer's
   `model` slot** — no Retag node. `lazy=True` keeps the model deferred so the
@@ -231,13 +231,13 @@ trainer: !class:raidar.rfdetr_trainer.RFDETRTrainer
 ```
 
 ```yaml
-# Flux mode — a SampleFlux pipeline, fed IN-MEMORY (no disk materialization)
+# Stream mode — a RecordStream pipeline, fed IN-MEMORY (no disk materialization)
 num_classes: 6                     # K foreground classes; labels are 0-indexed 0..K-1
 trainer: !class:raidar.rfdetr_trainer.RFDETRTrainer
   variant: small
   num_classes: !ref:num_classes
   class_names: {0: coverall, 1: face_shield, 2: gloves, 3: goggles, 4: mask, 5: apron}
-  train_set: !ref:train_set        # any sampleflux Flux yielding {boxes xyxy-px, labels}
+  train_set: !ref:train_set        # any recordstream Stream yielding {boxes xyxy-px, labels}
   val_set: !ref:val_set
   epochs: 50
   batch_size: 4
@@ -250,8 +250,8 @@ trainer: !class:raidar.rfdetr_trainer.RFDETRTrainer
 
 `raidar-rfdetr evaluate` runs RF-DETR's native
 validation/test loop over a trained checkpoint (`weights:`). See
-`examples/rfdetr_train_disk.yaml`, `examples/rfdetr_train_flux.yaml`,
-`examples/rfdetr_evaluate_flux.yaml`.
+`examples/rfdetr_train_disk.yaml`, `examples/rfdetr_train_stream.yaml`,
+`examples/rfdetr_evaluate_stream.yaml`.
 
 ## Hugging Face detectors — D-FINE / RT-DETRv2 (Apache-2.0)
 
@@ -274,13 +274,13 @@ model: !lazy:raidar.hf_detection.DFINEModel
   variant: small
   image_size: 640                        # square side, multiple of 32 (these models train at 640)
 detection_ops:
-  - !class:sampleflux.ops.target.CocoToTorchVisionDetectionOp
+  - !class:recordstream.ops.target.CocoToTorchVisionDetectionOp
     bbox_format: xywh
     label_offset: 0                      # ⚠️ HF detectors are 0-indexed — do NOT +1
-  - !class:sampleflux.ops.torch.ToTensorOp
+  - !class:recordstream.ops.torch.ToTensorOp
     mode: RGB
     normalize: true                      # [0,255] → [0,1]; HF processor is do_normalize=False
-train_set: { ... }                       # any sampleflux Flux yielding {boxes xyxy-px, labels}
+train_set: { ... }                       # any recordstream Stream yielding {boxes xyxy-px, labels}
 val_set:   { ... }
 ```
 
@@ -300,8 +300,8 @@ When `num_classes != 80`, the COCO-pretrained class head is re-initialised
 (`ignore_mismatched_sizes=True`) while the backbone / encoder / decoder stay
 pretrained. Evaluate with `LightningDetector` run at `task: test` (model-driven
 `num_classes`; pass the trained `.ckpt` via the model's `checkpoint_path`). See
-`examples/dfine_train_flux.yaml`, `examples/dfine_evaluate_flux.yaml`,
-`examples/rtdetrv2_train_flux.yaml`, `examples/rtdetrv2_evaluate_flux.yaml`.
+`examples/dfine_train_stream.yaml`, `examples/dfine_evaluate_stream.yaml`,
+`examples/rtdetrv2_train_stream.yaml`, `examples/rtdetrv2_evaluate_stream.yaml`.
 
 ## Discovery
 
@@ -337,17 +337,17 @@ End-to-end YAML in `examples/`:
   Faster R-CNN + raw `MeanAveragePrecision`, on a synthetic in-memory dataset.
 - `train_fasterrcnn_cppe5_hf.yaml` — the flat HuggingFace example (the
   classification-side analogue of sonair's `train_efficientvit_b0_sonair.yaml`):
-  `HuggingFaceSource("cppe-5")` → `sampleflux.ops.target.CocoToTorchVisionDetectionOp`
+  `HuggingFaceSource("cppe-5")` → `recordstream.ops.target.CocoToTorchVisionDetectionOp`
   → `ToTensorOp` → `LightningDetector` with a `!lazy:` torchvision
   Faster R-CNN (the fast MobileNet-320 variant) whose `num_classes` is derived.
 - `train_pennfudan_hf.yaml` — the **fast/tiny** example: Penn-Fudan Pedestrian
   (160 train / 10 test, 1 class — the torchvision detection-tutorial dataset).
   Penn-Fudan ships masks not boxes, so it uses
-  `sampleflux.ops.target.MasksToDetectionBoxesOp` (per-instance bbox from the
+  `recordstream.ops.target.MasksToDetectionBoxesOp` (per-instance bbox from the
   `instance_id` mask) → `ToTensorOp(mode="RGB")` → MobileNet-320 Faster R-CNN.
-- `dfine_train_flux.yaml` / `dfine_evaluate_flux.yaml` — D-FINE on cppe-5 through
+- `dfine_train_stream.yaml` / `dfine_evaluate_stream.yaml` — D-FINE on cppe-5 through
   the generic Lightning path (HF transformers, `label_offset: 0`).
-- `rtdetrv2_train_flux.yaml` / `rtdetrv2_evaluate_flux.yaml` — RT-DETRv2 on cppe-5,
+- `rtdetrv2_train_stream.yaml` / `rtdetrv2_evaluate_stream.yaml` — RT-DETRv2 on cppe-5,
   same wiring.
 
 ## License

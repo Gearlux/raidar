@@ -1,9 +1,9 @@
 # mypy: disable-error-code="attr-defined"
 """Tests for the native RF-DETR trainer/evaluator (``raidar.rfdetr_trainer``).
 
-Unit-level: metrics-sidecar helpers, the disk/Flux XOR validation, ``run()``
+Unit-level: metrics-sidecar helpers, the disk/Stream XOR validation, ``run()``
 dispatch, and the evaluator's checkpoint-loading path (all mocked — no model
-build). A heavy end-to-end Flux smoke test is gated behind ``@pytest.mark.slow``
+build). A heavy end-to-end Stream smoke test is gated behind ``@pytest.mark.slow``
 + ``importorskip`` and trains on the best available accelerator
 (``cuda``/``mps``/``cpu``) so it is not CPU-bound on dev machines and GPU CI.
 """
@@ -63,7 +63,7 @@ def test_write_metrics_sidecar_noops_without_path_or_metrics(tmp_path: Any) -> N
 # ---------------------------------------------------------------------------
 
 
-def test_trainer_rejects_both_disk_and_flux() -> None:
+def test_trainer_rejects_both_disk_and_stream() -> None:
     with pytest.raises(ValueError, match="not both"):
         RFDETRTrainer(data="/d", train_set=object())._validate_inputs()
 
@@ -73,14 +73,14 @@ def test_trainer_rejects_neither() -> None:
         RFDETRTrainer()._validate_inputs()
 
 
-def test_trainer_flux_requires_num_classes_and_class_names() -> None:
+def test_trainer_stream_requires_num_classes_and_class_names() -> None:
     with pytest.raises(ValueError, match="num_classes"):
         RFDETRTrainer(train_set=object(), val_set=object())._validate_inputs()
     with pytest.raises(ValueError, match="num_classes"):
         RFDETRTrainer(train_set=object(), val_set=object(), num_classes=2)._validate_inputs()  # no class_names
 
 
-def test_trainer_flux_requires_both_train_and_val() -> None:
+def test_trainer_stream_requires_both_train_and_val() -> None:
     with pytest.raises(ValueError, match="BOTH"):
         RFDETRTrainer(train_set=object(), num_classes=2, class_names={0: "a"})._validate_inputs()
 
@@ -90,15 +90,15 @@ def test_trainer_flux_requires_both_train_and_val() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_run_dispatch_disk_vs_flux() -> None:
+def test_run_dispatch_disk_vs_stream() -> None:
     calls: List[str] = []
     t = RFDETRTrainer(data="/d")
     t._run_disk_mode = lambda: calls.append("disk")  # type: ignore[method-assign]
     t.run()
     f = RFDETRTrainer(train_set=object(), val_set=object(), num_classes=2, class_names={0: "a", 1: "b"})
-    f._run_flux_mode = lambda: calls.append("flux")  # type: ignore[method-assign]
+    f._run_stream_mode = lambda: calls.append("stream")  # type: ignore[method-assign]
     f.run()
-    assert calls == ["disk", "flux"]
+    assert calls == ["disk", "stream"]
 
 
 # ---------------------------------------------------------------------------
@@ -160,9 +160,9 @@ def test_evaluator_loads_checkpoint_via_pretrain_weights_and_validates(monkeypat
     monkeypatch.setattr(rftrain, "build_trainer", lambda cfg, mc, **k: _FakeTrainer())
     monkeypatch.setattr(mod, "_trainer_device_kwargs", lambda device: {})
 
-    import raidar.flux_rfdetr_dataset as frd
+    import raidar.stream_rfdetr_dataset as frd
 
-    monkeypatch.setattr(frd, "FluxRFDETRDataModule", lambda *a, **k: SimpleNamespace())
+    monkeypatch.setattr(frd, "StreamRFDETRDataModule", lambda *a, **k: SimpleNamespace())
 
     ev = RFDETREvaluator(weights="/ckpt/best.pth", val_set=object(), num_classes=2, class_names={0: "a", 1: "b"})
     ev.run()
@@ -172,7 +172,7 @@ def test_evaluator_loads_checkpoint_via_pretrain_weights_and_validates(monkeypat
 
 
 # ---------------------------------------------------------------------------
-# Heavy end-to-end Flux smoke (opt-in)
+# Heavy end-to-end Stream smoke (opt-in)
 # ---------------------------------------------------------------------------
 
 
@@ -192,16 +192,16 @@ def _best_available_device() -> str:
 
 
 @pytest.mark.slow
-def test_flux_train_smoke(tmp_path: Any) -> None:
+def test_stream_train_smoke(tmp_path: Any) -> None:
     pytest.importorskip("rfdetr.training")
-    from sampleflux import Image, Regions
-    from sampleflux.core import Flux
+    from recordstream import Image, Regions
+    from recordstream.core import Stream
 
     def _regions(boxes: Any, labels: Any) -> Regions:
         return Regions(boxes=boxes, labels=labels)
 
-    def _flux(n: int) -> Flux:
-        return Flux(
+    def _stream(n: int) -> Stream:
+        return Stream(
             source=[
                 {
                     "image": Image(torch.rand(3, 256, 256).numpy(), layout="CHW"),
@@ -214,8 +214,8 @@ def test_flux_train_smoke(tmp_path: Any) -> None:
 
     sidecar = tmp_path / "metrics.json"
     trainer = RFDETRTrainer(
-        train_set=_flux(8),
-        val_set=_flux(4),
+        train_set=_stream(8),
+        val_set=_stream(4),
         num_classes=1,
         class_names={0: "obj"},
         variant="nano",
@@ -231,5 +231,5 @@ def test_flux_train_smoke(tmp_path: Any) -> None:
     try:
         trainer.run()
     except Exception as exc:  # pragma: no cover - asset download / env-specific failure
-        pytest.skip(f"RF-DETR flux smoke could not run in this environment: {exc}")
+        pytest.skip(f"RF-DETR stream smoke could not run in this environment: {exc}")
     assert sidecar.exists()

@@ -1,11 +1,11 @@
-"""Bridge a SampleFlux ``Flux`` into RF-DETR's native in-memory dataset contract.
+"""Bridge a RecordStream ``Stream`` into RF-DETR's native in-memory dataset contract.
 
 RF-DETR's :class:`rfdetr.training.module_data.RFDETRDataModule` builds its
 datasets via ``build_dataset(split, ns, resolution)`` — which reads a COCO/YOLO
 directory off disk. This module supplies the *in-memory* counterpart so the
 native ``RFDETRModelModule`` / ``build_trainer`` stack can train/eval straight
-from a :class:`sampleflux.Flux` with **no disk materialization** — the analogue of
-``raidar_ultralytics.flux_yolo_dataset.FluxYOLODataset`` for RF-DETR.
+from a :class:`recordstream.Stream` with **no disk materialization** — the analogue of
+``raidar_ultralytics.stream_yolo_dataset.StreamYOLODataset`` for RF-DETR.
 
 How it stays byte-faithful to the disk path: rfdetr's ``CocoDetection.__getitem__``
 does ``img(PIL), target = ConvertCoco(img, coco_target)`` then
@@ -28,7 +28,7 @@ torchvision-detection convention raidar uses elsewhere,
   Floats in ``[0, 1]`` are rescaled to ``uint8 [0, 255]``; uint8 passes through.
   (No BGR flip — RF-DETR's ``ToImage``/``Normalize`` expect RGB, unlike
   ultralytics.)
-* The ``target_key`` :class:`sampleflux.Regions` value — ``boxes`` ``[N, 4]``
+* The ``target_key`` :class:`recordstream.Regions` value — ``boxes`` ``[N, 4]``
   xyxy-pixel + ``labels`` ``[N]`` int — with labels **0-indexed ``0..K-1``**
   (RF-DETR reserves index ``K`` for the background class internally — the
   OPPOSITE of torchvision's background-at-0, so do NOT ``+1``-shift labels for
@@ -43,16 +43,16 @@ import numpy as np
 import torch
 from loggair import get_logger
 from PIL import Image
+from recordstream import Regions, Stream, item_data, iter_key
 from rfdetr._namespace import build_namespace
 from rfdetr.datasets.coco import ConvertCoco, make_coco_transforms, make_coco_transforms_square_div_64
 from rfdetr.training.module_data import RFDETRDataModule
-from sampleflux import Flux, Regions, item_data, iter_key
 
 logger = get_logger(__name__)
 
 
-def _sample_input_to_rgb_pil(arr_in: Any) -> Image.Image:
-    """Normalize a sample's input-item payload into an RGB :class:`PIL.Image`.
+def _record_input_to_rgb_pil(arr_in: Any) -> Image.Image:
+    """Normalize a record's input-item payload into an RGB :class:`PIL.Image`.
 
     Accepts a PIL image (returned as RGB), or a torch tensor / numpy array in
     ``[C, H, W]`` / ``[H, W, C]`` / ``[H, W]`` layout. Float arrays in ``[0, 1]``
@@ -87,7 +87,7 @@ def _sample_input_to_rgb_pil(arr_in: Any) -> Image.Image:
 
 def _target_boxes_labels(target: Any) -> Any:
     """Extract ``(boxes, labels)`` from a projected detection target — a typed
-    :class:`~sampleflux.Regions` (the ``CocoToTorchVisionDetection`` op output) or a raw
+    :class:`~recordstream.Regions` (the ``CocoToTorchVisionDetection`` op output) or a raw
     ``{"boxes", "labels"}`` dict. Returns ``(None, None)`` when either is absent."""
     if target is None:
         return None, None
@@ -162,11 +162,11 @@ def _build_transforms(image_set: str, resolution: int, ns: Any) -> Any:
     )
 
 
-class FluxRFDETRDataset(torch.utils.data.Dataset):
-    """In-memory ``Dataset`` yielding RF-DETR's ``(normalized-image, target)`` pairs from a Flux.
+class StreamRFDETRDataset(torch.utils.data.Dataset):
+    """In-memory ``Dataset`` yielding RF-DETR's ``(normalized-image, target)`` pairs from a Stream.
 
     Args:
-        flux: The :class:`sampleflux.Flux` of record dicts.
+        stream: The :class:`recordstream.Stream` of record dicts.
         image_set: ``"train"`` (augmented) or ``"val"`` / ``"test"`` (no aug).
         resolution: Model input resolution (``model_config.resolution``).
         ns: The merged ``rfdetr`` namespace (``build_namespace(model_config,
@@ -178,27 +178,27 @@ class FluxRFDETRDataset(torch.utils.data.Dataset):
 
     def __init__(
         self,
-        flux: Flux,
+        stream: Stream,
         image_set: str,
         resolution: int,
         ns: Any,
         input_key: str = "image",
         target_key: str = "target",
     ) -> None:
-        self._flux = flux
+        self._stream = stream
         self._image_set = image_set
         self._input_key = str(input_key)
         self._transforms = _build_transforms(image_set, resolution, ns)
         self._convert = ConvertCoco(include_masks=False, cat2label=None)
-        # Projection-optimized label cache: walk the target key ONLY (sampleflux key
+        # Projection-optimized label cache: walk the target key ONLY (recordstream key
         # projection skips input/image construction) so we never decode images just to
         # index labels. Images decode lazily per __getitem__.
-        self._labels = self._cache_labels(flux, str(target_key))
+        self._labels = self._cache_labels(stream, str(target_key))
 
     @staticmethod
-    def _cache_labels(flux: Flux, target_key: str) -> List[Dict[str, torch.Tensor]]:
+    def _cache_labels(stream: Stream, target_key: str) -> List[Dict[str, torch.Tensor]]:
         cached: List[Dict[str, torch.Tensor]] = []
-        for target in iter_key(flux, target_key):
+        for target in iter_key(stream, target_key):
             boxes, labels = _target_boxes_labels(target)
             if boxes is not None and labels is not None:
                 cached.append({"boxes": _as_f32(boxes).reshape(-1, 4), "labels": _as_i64(labels)})
@@ -209,11 +209,11 @@ class FluxRFDETRDataset(torch.utils.data.Dataset):
         return cached
 
     def __len__(self) -> int:
-        return len(self._flux)
+        return len(self._stream)
 
     def __getitem__(self, i: int) -> Any:
-        record = self._flux[i]
-        pil = _sample_input_to_rgb_pil(_record_input(record, self._input_key))
+        record = self._stream[i]
+        pil = _record_input_to_rgb_pil(_record_input(record, self._input_key))
         cached = self._labels[i]
         coco_target = {
             "image_id": i,
@@ -227,11 +227,11 @@ class FluxRFDETRDataset(torch.utils.data.Dataset):
         return img, target
 
 
-class FluxRFDETRDataModule(RFDETRDataModule):
-    """``RFDETRDataModule`` that injects :class:`FluxRFDETRDataset` instead of ``build_dataset``.
+class StreamRFDETRDataModule(RFDETRDataModule):
+    """``RFDETRDataModule`` that injects :class:`StreamRFDETRDataset` instead of ``build_dataset``.
 
     Overrides :meth:`setup` to assign ``self._dataset_{train,val,test}`` from
-    in-memory Fluxes (bypassing the disk ``build_dataset``) and the
+    in-memory Streams (bypassing the disk ``build_dataset``) and the
     :attr:`class_names` property to return the supplied names (so RF-DETR's
     ``COCOEvalCallback``, which reads ``dm.class_names``, names per-class metrics
     without needing a ``.coco`` annotation object). All DataLoader / ``collate_fn``
@@ -241,7 +241,7 @@ class FluxRFDETRDataModule(RFDETRDataModule):
         model_config / train_config: as the base ``RFDETRDataModule``. ``aug_config``
             and the resize knobs flow through ``train_config`` (the namespace), so
             there is no separate augmentation parameter here.
-        train_flux / val_flux / test_flux: the wired Fluxes (``test`` falls back to
+        train_stream / val_stream / test_stream: the wired Streams (``test`` falls back to
             ``val`` when unset).
         class_names: ordered list of class names (index = class id).
     """
@@ -251,41 +251,41 @@ class FluxRFDETRDataModule(RFDETRDataModule):
         model_config: Any,
         train_config: Any,
         *,
-        train_flux: Optional[Flux] = None,
-        val_flux: Optional[Flux] = None,
-        test_flux: Optional[Flux] = None,
+        train_stream: Optional[Stream] = None,
+        val_stream: Optional[Stream] = None,
+        test_stream: Optional[Stream] = None,
         class_names: Optional[List[str]] = None,
     ) -> None:
         super().__init__(model_config, train_config)
-        self._train_flux = train_flux
-        self._val_flux = val_flux
-        self._test_flux = test_flux
-        self._flux_class_names = list(class_names) if class_names else None
+        self._train_stream = train_stream
+        self._val_stream = val_stream
+        self._test_stream = test_stream
+        self._stream_class_names = list(class_names) if class_names else None
 
-    def _make(self, flux: Flux, image_set: str) -> FluxRFDETRDataset:
+    def _make(self, stream: Stream, image_set: str) -> StreamRFDETRDataset:
         ns = build_namespace(self.model_config, self.train_config)
-        return FluxRFDETRDataset(flux, image_set, self.model_config.resolution, ns)
+        return StreamRFDETRDataset(stream, image_set, self.model_config.resolution, ns)
 
     def setup(self, stage: str) -> None:
         if stage == "fit":
-            if self._dataset_train is None and self._train_flux is not None:
-                self._dataset_train = self._make(self._train_flux, "train")
-            if self._dataset_val is None and self._val_flux is not None:
-                self._dataset_val = self._make(self._val_flux, "val")
+            if self._dataset_train is None and self._train_stream is not None:
+                self._dataset_train = self._make(self._train_stream, "train")
+            if self._dataset_val is None and self._val_stream is not None:
+                self._dataset_val = self._make(self._val_stream, "val")
         elif stage == "validate":
-            if self._dataset_val is None and self._val_flux is not None:
-                self._dataset_val = self._make(self._val_flux, "val")
+            if self._dataset_val is None and self._val_stream is not None:
+                self._dataset_val = self._make(self._val_stream, "val")
         elif stage == "test":
-            src = self._test_flux if self._test_flux is not None else self._val_flux
+            src = self._test_stream if self._test_stream is not None else self._val_stream
             if self._dataset_test is None and src is not None:
                 self._dataset_test = self._make(src, "val")  # val transforms — no augmentation
         elif stage == "predict":
-            if self._dataset_val is None and self._val_flux is not None:
-                self._dataset_val = self._make(self._val_flux, "val")
+            if self._dataset_val is None and self._val_stream is not None:
+                self._dataset_val = self._make(self._val_stream, "val")
 
     @property
     def class_names(self) -> Optional[List[str]]:
-        return self._flux_class_names
+        return self._stream_class_names
 
 
-__all__ = ["FluxRFDETRDataset", "FluxRFDETRDataModule"]
+__all__ = ["StreamRFDETRDataset", "StreamRFDETRDataModule"]

@@ -1,10 +1,10 @@
 # Train RF-DETR on the HuggingFace **cppe-5** detection dataset via its OWN native
-# PyTorch-Lightning loop — fed IN-MEMORY from a SampleFlux pipeline (NO disk
+# PyTorch-Lightning loop — fed IN-MEMORY from a RecordStream pipeline (NO disk
 # materialization). cppe-5 = 1000 medical-PPE images, 5 classes, COCO-format boxes.
 #
 # Run:
-#   raidar-rfdetr train examples/rfdetr_train_flux.yaml
-#   marainer rfdetr-train examples/rfdetr_train_flux.yaml
+#   raidar-rfdetr train examples/rfdetr_train_stream.yaml
+#   marainer rfdetr-train examples/rfdetr_train_stream.yaml
 #
 # This is the RF-DETR analogue of train_fasterrcnn_cppe5_hf.yaml, but it drives
 # RF-DETR's NATIVE trainer (RFDETRModelModule / RFDETRDataModule / build_trainer —
@@ -29,24 +29,24 @@ trainer: !class:raidar.rfdetr_trainer.RFDETRTrainer
   batch_size: 4
   output_dir: ./runs/rfdetr_cppe5
   metrics_output_path: ./runs/rfdetr_cppe5/metrics.json
-  train_set: !class:sampleflux.core.Flux
-    source: !class:sampleflux.sources.HuggingFaceSource
+  train_set: !class:recordstream.core.Stream
+    source: !class:recordstream.sources.HuggingFaceSource
       path: cppe-5
       split: train
       input_feature: image
       target_feature: objects
-      # count: 100           # uncomment to cap samples for a quick smoke run
+      # count: 100           # uncomment to cap records for a quick smoke run
     ops:
-      - !class:sampleflux.ops.target.CocoToTorchVisionDetection
+      - !class:recordstream.ops.target.CocoToTorchVisionDetection
         bbox_format: xywh    # cppe-5 boxes are COCO [x, y, w, h]
         label_offset: 0      # RF-DETR is 0-indexed (background at K) — do NOT +1
-  val_set: !class:sampleflux.core.Flux
-    source: !class:sampleflux.sources.HuggingFaceSource
+  val_set: !class:recordstream.core.Stream
+    source: !class:recordstream.sources.HuggingFaceSource
       path: cppe-5
       split: test            # cppe-5 ships train / test (no validation split)
       input_feature: image
       target_feature: objects
     ops:
-      - !class:sampleflux.ops.target.CocoToTorchVisionDetection
+      - !class:recordstream.ops.target.CocoToTorchVisionDetection
         bbox_format: xywh
         label_offset: 0

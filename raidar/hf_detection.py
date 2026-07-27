@@ -25,7 +25,7 @@ Design notes grounded by an empirical probe of ``transformers`` 5.x:
 * **Input is plain ``[0, 1]`` — NO ImageNet normalisation.** The RT-DETR/D-FINE
   image processors run with ``do_normalize=False`` (only ``do_rescale`` 1/255),
   so the model expects ``[0, 1]`` pixels. raidar's op chain already produces that
-  (``sampleflux.ops.torch.ToTensorOp(normalize=True)``); we feed it through
+  (``recordstream.ops.torch.ToTensorOp(normalize=True)``); we feed it through
   unchanged. Do NOT subtract ImageNet mean/std here — that would double-process.
 * **Images are resized inside the wrapper** (to a square ``image_size``, default
   640 — what these models were trained at), so the SAME op chain as the

@@ -4,7 +4,7 @@ A self-contained ``pytorch_lightning.LightningModule`` for torchvision-native de
 its OWN detection step functions (``forward(images, targets) → loss dict`` in train,
 ``forward(images) → per-image predictions`` in eval), ``configure_optimizers``, and a ``run()``
 that builds the loaders + ``pl.Trainer`` and calls ``fit`` / ``test`` / ``predict`` per the ``task``
-knob. marainer is used ONLY for optional experiment tracking + the small ``ensure_sample_dataset``
+knob. marainer is used ONLY for optional experiment tracking + the small ``ensure_record_dataset``
 utility. Remove marainer and this class still trains.
 
 Detection specifics it owns: the native torchvision model contract (loss dict summed to the
@@ -26,11 +26,11 @@ from confluid.registry import resolve_class
 from loggair import get_logger
 from marainer.lightning import TrackingCallback, activate_for_lightning, attach_lightning_progress, scalar_metrics
 from marainer.run_names import generate_run_name
-from marainer.torch import ensure_sample_dataset
+from marainer.torch import ensure_record_dataset
 from marainer.tracking.base import Tracker
 from pytorch_lightning.loggers import Logger
-from sampleflux import Regions
-from sampleflux.runnable import ProgressReporting, TorchRunner, entrypoint
+from recordstream import Regions
+from recordstream.runnable import ProgressReporting, TorchRunner, entrypoint
 from torch import Tensor
 from torch.utils.data import DataLoader
 from torchmetrics.detection import MeanAveragePrecision
@@ -87,8 +87,8 @@ class LightningDetector(TorchRunner, ProgressReporting, L.LightningModule):
     Args:
         model: Torchvision-native detection model (loss dict in train, per-image predictions in eval).
             Wire ``!lazy:`` to have :meth:`initialize` flow it with the resolved ``num_classes``.
-        train_set: Training dataset / Flux (for ``task="fit"``).
-        test_set: Held-out eval dataset / Flux (for ``task="test"`` / ``"predict"``).
+        train_set: Training dataset / Stream (for ``task="fit"``).
+        test_set: Held-out eval dataset / Stream (for ``task="test"`` / ``"predict"``).
         num_classes: Output class count (torchvision-style incl. background). Omit to resolve from the
             model head or the train targets.
         task: Entry point :meth:`run` dispatches to.
@@ -172,11 +172,11 @@ class LightningDetector(TorchRunner, ProgressReporting, L.LightningModule):
     def initialize(self) -> None:
         """Resolve ``num_classes`` and flow the model (fit: derive + inject; eval: read off the model)."""
         if self.task == "fit":
-            self.train_set = ensure_sample_dataset(flow(self.train_set)) if self.train_set is not None else None
+            self.train_set = ensure_record_dataset(flow(self.train_set)) if self.train_set is not None else None
             if self.val_set is not None:
-                self.val_set = ensure_sample_dataset(flow(self.val_set))
+                self.val_set = ensure_record_dataset(flow(self.val_set))
             if self.test_set is not None:
-                self.test_set = ensure_sample_dataset(flow(self.test_set))
+                self.test_set = ensure_record_dataset(flow(self.test_set))
             nc = self._resolve_num_classes()
             if nc is not None:
                 self.num_classes = int(nc)
@@ -193,7 +193,7 @@ class LightningDetector(TorchRunner, ProgressReporting, L.LightningModule):
                 self.num_classes = int(nc)
             eval_slot = "val_set" if self.task == "evaluate" else "test_set"
             if getattr(self, eval_slot) is not None:
-                setattr(self, eval_slot, ensure_sample_dataset(flow(getattr(self, eval_slot))))
+                setattr(self, eval_slot, ensure_record_dataset(flow(getattr(self, eval_slot))))
 
     def _model_accepts_num_classes(self) -> bool:
         if not isinstance(self.model, Fluid):
@@ -224,7 +224,7 @@ class LightningDetector(TorchRunner, ProgressReporting, L.LightningModule):
         return self._num_classes_from_targets(self.train_set)
 
     def _num_classes_from_targets(self, source: Any) -> Optional[int]:
-        from sampleflux import iter_key
+        from recordstream import iter_key
 
         if source is None:
             return None
@@ -233,7 +233,7 @@ class LightningDetector(TorchRunner, ProgressReporting, L.LightningModule):
         logger.info("raidar: deriving num_classes from detection targets (pin num_classes to skip)")
         highest = -1
         for target in tqdm(
-            iter_key(src, self.target_key), total=total, desc="raidar: deriving num_classes", unit="sample"
+            iter_key(src, self.target_key), total=total, desc="raidar: deriving num_classes", unit="record"
         ):
             labels: Any
             if isinstance(target, Regions):
@@ -320,9 +320,9 @@ class LightningDetector(TorchRunner, ProgressReporting, L.LightningModule):
         logger.info(f"raidar training: {self.experiment_name} ({self.run_name})")
         if self.train_set is None:
             raise ValueError("LightningDetector.fit() requires a 'train_set'.")
-        train_ds = ensure_sample_dataset(flow(self.train_set))
-        val_ds = ensure_sample_dataset(flow(self.val_set)) if self.val_set is not None else None
-        test_ds = ensure_sample_dataset(flow(self.test_set)) if self.test_set is not None else None
+        train_ds = ensure_record_dataset(flow(self.train_set))
+        val_ds = ensure_record_dataset(flow(self.val_set)) if self.val_set is not None else None
+        test_ds = ensure_record_dataset(flow(self.test_set)) if self.test_set is not None else None
         self.val_metrics = flow(self.val_metrics) if self.val_metrics is not None else None
         self.test_metrics = flow(self.test_metrics) if self.test_metrics is not None else None
         t_loader = flow(self.train_loader, dataset=train_ds)
@@ -346,7 +346,7 @@ class LightningDetector(TorchRunner, ProgressReporting, L.LightningModule):
         logger.info(f"raidar predicting: {self.experiment_name} ({self.run_name})")
         if self.test_set is None:
             raise ValueError("LightningDetector.predict() requires a 'test_set'.")
-        dataset = ensure_sample_dataset(flow(self.test_set))
+        dataset = ensure_record_dataset(flow(self.test_set))
         if self.predictions_sink is not None:
             self.predictions_sink = flow(self.predictions_sink)
         loader = flow(self.test_loader, dataset=dataset)
@@ -360,7 +360,7 @@ class LightningDetector(TorchRunner, ProgressReporting, L.LightningModule):
         source = getattr(self, dataset_slot)
         if source is None:
             raise ValueError(f"LightningDetector.{stage}() requires a '{dataset_slot}'.")
-        dataset = ensure_sample_dataset(flow(source))
+        dataset = ensure_record_dataset(flow(source))
         setattr(
             self, metrics_slot, flow(getattr(self, metrics_slot)) if getattr(self, metrics_slot) is not None else None
         )
@@ -394,23 +394,23 @@ class LightningDetector(TorchRunner, ProgressReporting, L.LightningModule):
             return {}
 
     def _write_predictions(self, preds: Any, batch: Any) -> None:
-        per_sample_meta = None
+        per_record_meta = None
         if isinstance(batch, dict):
-            # The detection collate stashes the per-sample metadata dicts under the "metadata" key.
-            per_sample_meta = batch.get("metadata")
+            # The detection collate stashes the per-record metadata dicts under the "metadata" key.
+            per_record_meta = batch.get("metadata")
         else:
             meta = getattr(batch, "metadata", None)
             if isinstance(meta, list):
-                per_sample_meta = meta
+                per_record_meta = meta
             elif isinstance(meta, dict):
-                per_sample_meta = meta.get("per_sample")
+                per_record_meta = meta.get("per_record")
         items = (
             preds["predictions"]
             if isinstance(preds, dict) and "predictions" in preds
             else (preds if isinstance(preds, list) else [preds])
         )
         for i in range(len(items)):
-            m = per_sample_meta[i] if per_sample_meta and i < len(per_sample_meta) else {}
+            m = per_record_meta[i] if per_record_meta and i < len(per_record_meta) else {}
             self.predictions_sink.write(items[i], m)
 
     def _finalize_metrics(self, metrics: Any) -> None:

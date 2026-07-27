@@ -20,10 +20,10 @@ from raidar.rfdetr import RFDETRModel
 # The native RF-DETR trainer/evaluator are imported here so confluid's
 # `confluid.configurables` scan (entry point `raidar = "raidar"`) discovers their
 # `@configurable(task="detection", role=…)` tags. The module is CHEAP to import —
-# its rfdetr/PTL imports are deferred into method bodies. The Flux dataset bridge
-# (`raidar.flux_rfdetr_dataset`) is NOT imported here: it eagerly pulls the heavy
+# its rfdetr/PTL imports are deferred into method bodies. The Stream dataset bridge
+# (`raidar.stream_rfdetr_dataset`) is NOT imported here: it eagerly pulls the heavy
 # `rfdetr.training` stack, so it stays import-on-demand (the trainer imports it
-# lazily in Flux mode) to keep `import raidar` / navigaitor's registry bootstrap light.
+# lazily in Stream mode) to keep `import raidar` / navigaitor's registry bootstrap light.
 from raidar.rfdetr_trainer import RFDETREvaluator, RFDETRTrainer
 from raidar.yolo_sink import YoloSink
 
