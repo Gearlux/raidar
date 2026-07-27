@@ -84,7 +84,7 @@ def _build_criterion_args(model_config: Any, device: Any) -> SimpleNamespace:
         use_position_supervised_loss=False,
         mask_ce_loss_coef=5.0,
         mask_dice_loss_coef=5.0,
-        mask_point_sample_ratio=16,
+        mask_point_record_ratio=16,
     )
 
 

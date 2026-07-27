@@ -3,7 +3,7 @@ can reference them via ``!class:raidar.examples_helpers.X`` without forcing
 users to add their own scaffolding for a smoke run.
 
 These helpers exist ONLY to make the in-tree example YAMLs runnable
-end-to-end. Real training jobs should provide a real Flux pipeline
+end-to-end. Real training jobs should provide a real Stream pipeline
 (typically via waivefront op chains over annotated data).
 """
 
@@ -11,7 +11,7 @@ from typing import Any, List
 
 import torch
 from confluid import configurable
-from sampleflux import Image, Record, Regions
+from recordstream import Image, Record, Regions
 from torch import Tensor
 from torch.utils.data import Dataset
 
@@ -21,11 +21,11 @@ class SyntheticDetectionDataset(Dataset):
     """Synthetic detection dataset producing one box per image at a fixed location.
 
     Useful only for smoke-testing the wiring of LightningDetector +
-    raidar's detector wrappers. Replace with a real Flux pipeline for actual
+    raidar's detector wrappers. Replace with a real Stream pipeline for actual
     training.
 
     Args:
-        n: Number of samples to generate.
+        n: Number of records to generate.
         num_classes: Number of detection classes (label drawn modulo this).
         image_size: Square image side in pixels.
         seed: Optional RNG seed for reproducibility.

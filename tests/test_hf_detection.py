@@ -204,8 +204,8 @@ def test_end_to_end_lightning_fit(cls: Any, variant: str, tmp_path: Any) -> None
     pytest.importorskip("transformers")
     import pytorch_lightning as L
     from confluid import flow
-    from sampleflux import Image, Regions
-    from sampleflux.core import Flux
+    from recordstream import Image, Regions
+    from recordstream.core import Stream
 
     from raidar.detection import detection_collate_fn
     from raidar.detector import LightningDetector
@@ -213,8 +213,8 @@ def test_end_to_end_lightning_fit(cls: Any, variant: str, tmp_path: Any) -> None
     def _regions(boxes: Any, labels: Any) -> Regions:
         return Regions(boxes=boxes, labels=labels)
 
-    def _flux(n: int) -> Flux:
-        samples = [
+    def _stream(n: int) -> Stream:
+        records = [
             {
                 "image": Image(torch.rand(3, 128, 128).numpy(), layout="CHW"),
                 "target": _regions(
@@ -225,14 +225,14 @@ def test_end_to_end_lightning_fit(cls: Any, variant: str, tmp_path: Any) -> None
             }
             for i in range(n)
         ]
-        return Flux(source=samples)
+        return Stream(source=records)
 
     model = cls(num_classes=2, variant=variant, pretrained=False, image_size=_IMG)
-    trainer = LightningDetector(model=model, train_set=_flux(4), num_classes=2)
-    trainer.val_set = _flux(2)
+    trainer = LightningDetector(model=model, train_set=_stream(4), num_classes=2)
+    trainer.val_set = _stream(2)
     trainer.val_metrics = flow(trainer.val_metrics)
-    trainer.train_loader = torch.utils.data.DataLoader(_flux(4), batch_size=2, collate_fn=detection_collate_fn)
-    trainer.val_loader = torch.utils.data.DataLoader(_flux(2), batch_size=2, collate_fn=detection_collate_fn)
+    trainer.train_loader = torch.utils.data.DataLoader(_stream(4), batch_size=2, collate_fn=detection_collate_fn)
+    trainer.val_loader = torch.utils.data.DataLoader(_stream(2), batch_size=2, collate_fn=detection_collate_fn)
 
     lightning_trainer = L.Trainer(
         max_epochs=1,

@@ -7,7 +7,7 @@ at run time and sail through CI green.
 
 This test mirrors what the runners do short of training: it loads each
 ``examples/*.yaml``, resolves + flows the object bound under its root key —
-``runnable:`` (the merged ``LightningDetector`` for ``sampleflux run`` /
+``runnable:`` (the merged ``LightningDetector`` for ``recordstream run`` /
 ``raidar train|evaluate``) or ``trainer:`` / ``evaluator:`` (the framework-native
 ``RFDETRTrainer`` / ``RFDETREvaluator`` for ``raidar-rfdetr``) — importing its
 ``!class:``/``!lazy:`` targets and constructing it (cheap: every configurable is

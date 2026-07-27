@@ -31,8 +31,8 @@ def test_categories_enumerable_via_registry() -> None:
 
 
 def test_yolo_sink_tagged() -> None:
-    """``YoloSink`` carries ``category="sink"`` so FluxStudio surfaces it as a ``DatasetProcessor``
-    sink node (``SAMPLEFLUX_OBJECT:sink``) — ``marainer convert`` streams a detection Flux into it on a
+    """``YoloSink`` carries ``category="sink"`` so StreamStudio surfaces it as a ``DatasetProcessor``
+    sink node (``RECORDSTREAM_OBJECT:sink``) — ``marainer convert`` streams a detection Stream into it on a
     canvas just as the YAML config does."""
     from raidar.yolo_sink import YoloSink
 
@@ -101,7 +101,7 @@ _BUILDER_NAMES = [
 
 def test_torchvision_builders_registered_as_detection_models() -> None:
     """The raw torchvision builder FUNCTIONS register as ``detection_model`` (role="model"),
-    so a FluxStudio object node + every navigaitor model picker offers them beside RFDETRModel."""
+    so a StreamStudio object node + every navigaitor model picker offers them beside RFDETRModel."""
     import raidar.configurables  # noqa: F401 - registration side-effect
 
     registry = get_registry()

@@ -17,7 +17,7 @@
 # (torchvision resizes every image to the detector's min_size). This config uses the
 # **MobileNetV3-320** Faster R-CNN (320×640 px) — far faster than the ResNet50-FPN
 # variant (800×1333 px), which you can swap in below for higher accuracy. Other
-# levers: cap samples with `count:` on the source (commented below), drop
+# levers: cap records with `count:` on the source (commented below), drop
 # `max_epochs`, or use a SMALLER dataset — any Roboflow-universe mirror with the same
 # `objects` schema drops straight into this op chain, e.g. `path: Francesco/animals-ij5d2`.
 
@@ -41,24 +41,24 @@ model: !lazy:torchvision.models.detection.fasterrcnn_mobilenet_v3_large_320_fpn
 
 # -- Shared op chain: HF `objects` annotation → detection target; PIL image → tensor.
 detection_ops:
-  - !class:sampleflux.ops.target.CocoToTorchVisionDetection
+  - !class:recordstream.ops.target.CocoToTorchVisionDetection
     bbox_format: xywh        # cppe-5 boxes are COCO [x, y, w, h]
     label_offset: 1          # 0..4 → 1..5; reserve class 0 for background
-  - !class:sampleflux.ops.torch.ToTensor
+  - !class:recordstream.ops.torch.ToTensor
     mode: RGB                # cppe-5 mixes RGB/RGBA/grayscale — force 3-channel for Faster R-CNN
     normalize: true
 
-train_set: !class:sampleflux.core.Flux
-  source: !class:sampleflux.sources.HuggingFaceSource
+train_set: !class:recordstream.core.Stream
+  source: !class:recordstream.sources.HuggingFaceSource
     path: cppe-5
     split: train
     input_feature: image
     target_feature: objects
-    # count: 100             # uncomment to cap samples for a quick smoke run
+    # count: 100             # uncomment to cap records for a quick smoke run
   ops: !ref:detection_ops
 
-val_set: !class:sampleflux.core.Flux
-  source: !class:sampleflux.sources.HuggingFaceSource
+val_set: !class:recordstream.core.Stream
+  source: !class:recordstream.sources.HuggingFaceSource
     path: cppe-5
     split: test               # cppe-5 ships train / test (no validation split)
     input_feature: image

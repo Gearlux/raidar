@@ -14,8 +14,8 @@ import pytorch_lightning as L
 import torch
 import torch.nn as nn
 from confluid import LazyClass
-from sampleflux import Image, Record, Regions
-from sampleflux.core import Flux
+from recordstream import Image, Record, Regions
+from recordstream.core import Stream
 from torch import Tensor
 from torchmetrics import MetricCollection
 from torchmetrics.detection import MeanAveragePrecision
@@ -69,11 +69,11 @@ def _regions(boxes: Any, labels: Any) -> Regions:
     return Regions(boxes=boxes, labels=labels)
 
 
-def _make_samples(n: int = 4, size: int = 32) -> List[Record]:
-    """Per-sample records shaped like a detection source: Image + Regions target + plain meta key."""
-    samples: List[Record] = []
+def _make_records(n: int = 4, size: int = 32) -> List[Record]:
+    """Per-record records shaped like a detection source: Image + Regions target + plain meta key."""
+    records: List[Record] = []
     for i in range(n):
-        samples.append(
+        records.append(
             {
                 "image": Image(torch.rand(3, size, size).numpy(), layout="CHW"),
                 "target": _regions(
@@ -83,18 +83,18 @@ def _make_samples(n: int = 4, size: int = 32) -> List[Record]:
                 "idx": i,
             }
         )
-    return samples
+    return records
 
 
 def _make_batch(n: int = 2, size: int = 32) -> Record:
-    return detection_collate_fn(_make_samples(n=n, size=size))
+    return detection_collate_fn(_make_records(n=n, size=size))
 
 
-def _make_flux(n: int = 4, size: int = 32) -> Flux:
-    # A Flux (torch Dataset) — the trainer's train_set/val_set/test_set are typed
-    # Dataset[Any] | Fluid; a bare list[Sample] is normalized to a Flux only at run
-    # time (ensure_sample_dataset), so wire datasets as a Flux up front.
-    return Flux(source=_make_samples(n=n, size=size))
+def _make_stream(n: int = 4, size: int = 32) -> Stream:
+    # A Stream (torch Dataset) — the trainer's train_set/val_set/test_set are typed
+    # Dataset[Any] | Fluid; a bare list[Record] is normalized to a Stream only at run
+    # time (ensure_record_dataset), so wire datasets as a Stream up front.
+    return Stream(source=_make_records(n=n, size=size))
 
 
 # ---------------------------------------------------------------------------
@@ -107,7 +107,7 @@ def test_loss_fn_is_none() -> None:
     detection models compute loss inside forward."""
     trainer = LightningDetector(
         model=_NativeDetector(),
-        train_set=_make_flux(4),
+        train_set=_make_stream(4),
         num_classes=2,
     )
     assert trainer.loss_fn is None
@@ -116,7 +116,7 @@ def test_loss_fn_is_none() -> None:
 def test_train_metrics_default_none() -> None:
     trainer = LightningDetector(
         model=_NativeDetector(),
-        train_set=_make_flux(4),
+        train_set=_make_stream(4),
         num_classes=2,
     )
     assert trainer.train_metrics is None
@@ -129,7 +129,7 @@ def test_val_test_metrics_default_to_lazy_map() -> None:
 
     trainer = LightningDetector(
         model=_NativeDetector(),
-        train_set=_make_flux(4),
+        train_set=_make_stream(4),
         num_classes=2,
     )
     assert isinstance(trainer.val_metrics, ConfluidClass)
@@ -142,7 +142,7 @@ def test_val_test_metrics_default_to_lazy_map() -> None:
 def test_user_supplied_instance_metric_passes_through() -> None:
     """An already-instantiated metric is held verbatim — no Lazy wrapping needed."""
     custom = MeanAveragePrecision(iou_type="bbox", class_metrics=True)
-    trainer = LightningDetector(model=_NativeDetector(), train_set=_make_flux(4), num_classes=2)
+    trainer = LightningDetector(model=_NativeDetector(), train_set=_make_stream(4), num_classes=2)
     trainer.val_metrics = custom
     assert trainer.val_metrics is custom
 
@@ -157,7 +157,7 @@ def test_metric_collection_with_native_confusion_matrix_construction() -> None:
             "confusion": DetectionConfusionMatrix(iou_threshold=0.5),
         }
     )
-    trainer = LightningDetector(model=_NativeDetector(), train_set=_make_flux(4), num_classes=2)
+    trainer = LightningDetector(model=_NativeDetector(), train_set=_make_stream(4), num_classes=2)
     trainer.val_metrics = coll
     assert trainer.val_metrics is coll
 
@@ -169,7 +169,7 @@ def test_default_loader_uses_detection_collate_fn() -> None:
 
     trainer = LightningDetector(
         model=_NativeDetector(),
-        train_set=_make_flux(4),
+        train_set=_make_stream(4),
         num_classes=2,
     )
     # The collate is a partial binding the configured record keys onto detection_collate_fn.
@@ -188,7 +188,7 @@ def test_default_loader_uses_detection_collate_fn() -> None:
 def test_training_step_sums_native_loss_dict_with_grad() -> None:
     trainer = LightningDetector(
         model=_NativeDetector(),
-        train_set=_make_flux(4),
+        train_set=_make_stream(4),
         num_classes=2,
     )
     trainer.train()
@@ -205,7 +205,7 @@ def test_training_step_rejects_missing_targets() -> None:
 
     trainer = LightningDetector(
         model=_NativeDetector(),
-        train_set=_make_flux(4),
+        train_set=_make_stream(4),
         num_classes=2,
     )
     trainer.train()
@@ -235,7 +235,7 @@ def test_training_step_rejects_non_dict_model_output() -> None:
 
     trainer = LightningDetector(
         model=_BrokenDetector(),
-        train_set=_make_flux(4),
+        train_set=_make_stream(4),
         num_classes=2,
     )
     trainer.train()
@@ -245,8 +245,8 @@ def test_training_step_rejects_non_dict_model_output() -> None:
 
 
 def test_validation_step_updates_metric_with_predictions() -> None:
-    trainer = LightningDetector(model=_NativeDetector(), train_set=_make_flux(4), num_classes=2)
-    trainer.val_set = _make_flux(2)
+    trainer = LightningDetector(model=_NativeDetector(), train_set=_make_stream(4), num_classes=2)
+    trainer.val_set = _make_stream(2)
     trainer.val_metrics = MeanAveragePrecision(iou_type="bbox")
     trainer.eval()
     batch = _make_batch(n=2)
@@ -257,8 +257,8 @@ def test_validation_step_updates_metric_with_predictions() -> None:
 
 
 def test_test_step_uses_test_metric() -> None:
-    trainer = LightningDetector(model=_NativeDetector(), train_set=_make_flux(4), num_classes=2)
-    trainer.test_set = _make_flux(2)
+    trainer = LightningDetector(model=_NativeDetector(), train_set=_make_stream(4), num_classes=2)
+    trainer.test_set = _make_stream(2)
     trainer.test_metrics = MeanAveragePrecision(iou_type="bbox")
     trainer.eval()
     batch = _make_batch(n=2)
@@ -267,7 +267,7 @@ def test_test_step_uses_test_metric() -> None:
 
 
 # ---------------------------------------------------------------------------
-# End-to-end Lightning fit() against an in-memory Flux — no raidar adapters
+# End-to-end Lightning fit() against an in-memory Stream — no raidar adapters
 # ---------------------------------------------------------------------------
 
 
@@ -276,11 +276,11 @@ def test_end_to_end_native_trainer_fit(tmp_path: Any) -> None:
     pass raw native detector + raw torchmetrics MAP, observe train/loss and
     val/map.
     """
-    train_flux = _make_flux(4)
-    val_flux = _make_flux(2)
+    train_stream = _make_stream(4)
+    val_stream = _make_stream(2)
 
-    trainer = LightningDetector(model=_NativeDetector(), train_set=train_flux, num_classes=2)
-    trainer.val_set = val_flux
+    trainer = LightningDetector(model=_NativeDetector(), train_set=train_stream, num_classes=2)
+    trainer.val_set = val_stream
 
     lightning_trainer = L.Trainer(
         max_epochs=1,
@@ -299,8 +299,8 @@ def test_end_to_end_native_trainer_fit(tmp_path: Any) -> None:
 
     trainer.val_metrics = flow(trainer.val_metrics)
     trainer.test_metrics = flow(trainer.test_metrics)
-    trainer.train_loader = torch.utils.data.DataLoader(train_flux, batch_size=2, collate_fn=detection_collate_fn)
-    trainer.val_loader = torch.utils.data.DataLoader(val_flux, batch_size=2, collate_fn=detection_collate_fn)
+    trainer.train_loader = torch.utils.data.DataLoader(train_stream, batch_size=2, collate_fn=detection_collate_fn)
+    trainer.val_loader = torch.utils.data.DataLoader(val_stream, batch_size=2, collate_fn=detection_collate_fn)
 
     lightning_trainer.fit(
         model=trainer,
@@ -331,9 +331,9 @@ class _NumClassesDetector(nn.Module):
         self.alpha = nn.Parameter(torch.tensor(1.0))
 
 
-def _labelled_flux(label_sets: List[List[int]], size: int = 16) -> Flux:
-    """A detection Flux whose per-image targets carry the given label lists (under "target")."""
-    samples = [
+def _labelled_stream(label_sets: List[List[int]], size: int = 16) -> Stream:
+    """A detection Stream whose per-image targets carry the given label lists (under "target")."""
+    records = [
         {
             "image": Image(torch.rand(3, size, size).numpy(), layout="CHW"),
             "target": _regions(
@@ -343,12 +343,12 @@ def _labelled_flux(label_sets: List[List[int]], size: int = 16) -> Flux:
         }
         for lbls in label_sets
     ]
-    return Flux(source=samples)
+    return Stream(source=records)
 
 
 def test_initialize_derives_num_classes_from_targets_and_flows_lazy_model() -> None:
     # Labels up to 2 → derived num_classes = max + 1 = 3; injected into the lazy model.
-    trainer = LightningDetector(model=LazyClass(_NumClassesDetector), train_set=_labelled_flux([[1, 2], [1]]))
+    trainer = LightningDetector(model=LazyClass(_NumClassesDetector), train_set=_labelled_stream([[1, 2], [1]]))
     trainer.initialize()
     assert trainer.num_classes == 3
     assert isinstance(trainer.model, _NumClassesDetector)
@@ -356,7 +356,7 @@ def test_initialize_derives_num_classes_from_targets_and_flows_lazy_model() -> N
 
 
 def test_initialize_explicit_num_classes_injected_into_lazy_model() -> None:
-    trainer = LightningDetector(model=LazyClass(_NumClassesDetector), train_set=_labelled_flux([[1]]), num_classes=7)
+    trainer = LightningDetector(model=LazyClass(_NumClassesDetector), train_set=_labelled_stream([[1]]), num_classes=7)
     trainer.initialize()
     assert isinstance(trainer.model, _NumClassesDetector)
     assert trainer.num_classes == 7 and trainer.model.num_classes == 7
@@ -364,7 +364,7 @@ def test_initialize_explicit_num_classes_injected_into_lazy_model() -> None:
 
 def test_initialize_lazy_model_pinned_num_classes_used() -> None:
     # num_classes pinned on the lazy model's kwargs is used as-is.
-    trainer = LightningDetector(model=LazyClass(_NumClassesDetector, num_classes=9), train_set=_labelled_flux([[1]]))
+    trainer = LightningDetector(model=LazyClass(_NumClassesDetector, num_classes=9), train_set=_labelled_stream([[1]]))
     trainer.initialize()
     assert isinstance(trainer.model, _NumClassesDetector)
     assert trainer.num_classes == 9 and trainer.model.num_classes == 9
@@ -373,7 +373,7 @@ def test_initialize_lazy_model_pinned_num_classes_used() -> None:
 def test_initialize_concrete_model_num_classes_is_authoritative() -> None:
     # A concrete model's head wins over a (mismatched) explicit trainer arg.
     model = _NumClassesDetector(num_classes=4)
-    trainer = LightningDetector(model=model, train_set=_labelled_flux([[1]]), num_classes=99)
+    trainer = LightningDetector(model=model, train_set=_labelled_stream([[1]]), num_classes=99)
     trainer.initialize()
     assert trainer.num_classes == 4
     assert trainer.model is model
@@ -381,14 +381,14 @@ def test_initialize_concrete_model_num_classes_is_authoritative() -> None:
 
 def test_initialize_model_without_num_classes_param_flowed_plainly() -> None:
     # A lazy model whose builder takes no num_classes is flowed plainly (no kwarg error).
-    trainer = LightningDetector(model=LazyClass(_NativeDetector), train_set=_labelled_flux([[1]]), num_classes=3)
+    trainer = LightningDetector(model=LazyClass(_NativeDetector), train_set=_labelled_stream([[1]]), num_classes=3)
     trainer.initialize()
     assert isinstance(trainer.model, _NativeDetector)
     assert trainer.num_classes == 3
 
 
 def test_trained_model_output_raises_before_run_returns_after_flow() -> None:
-    trainer = LightningDetector(model=LazyClass(_NumClassesDetector), train_set=_labelled_flux([[1]]))
+    trainer = LightningDetector(model=LazyClass(_NumClassesDetector), train_set=_labelled_stream([[1]]))
     with pytest.raises(RuntimeError, match="only available after run"):
         _ = trainer.trained_model
     trainer.initialize()  # flows the model into a live instance

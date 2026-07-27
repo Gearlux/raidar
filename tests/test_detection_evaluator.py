@@ -12,8 +12,8 @@ import torch
 import torch.nn as nn
 from confluid import Class, LazyClass
 from confluid.fluid import Class as ConfluidClass
-from sampleflux import Image, Regions
-from sampleflux.core import Flux
+from recordstream import Image, Regions
+from recordstream.core import Stream
 from torch import Tensor
 from torch.utils.data import DataLoader
 from torchmetrics.detection import MeanAveragePrecision
@@ -57,8 +57,8 @@ def _regions(boxes: Any, labels: Any) -> Regions:
     return Regions(boxes=boxes, labels=labels)
 
 
-def _make_flux(n: int = 4, size: int = 32) -> Flux:
-    samples = [
+def _make_stream(n: int = 4, size: int = 32) -> Stream:
+    records = [
         {
             "image": Image(torch.rand(3, size, size).numpy(), layout="CHW"),
             "target": _regions(
@@ -69,7 +69,7 @@ def _make_flux(n: int = 4, size: int = 32) -> Flux:
         }
         for i in range(n)
     ]
-    return Flux(source=samples)
+    return Stream(source=records)
 
 
 class _RecordingSink:
@@ -85,7 +85,7 @@ class _RecordingSink:
 
 
 def test_metrics_default_to_lazy_map() -> None:
-    ev = _evaluator(model=_NativeDetector(), dataset=_make_flux(4))
+    ev = _evaluator(model=_NativeDetector(), dataset=_make_stream(4))
     assert isinstance(ev.test_metrics, ConfluidClass)
     assert ev.test_metrics.target is MeanAveragePrecision
     assert ev.test_metrics.kwargs.get("iou_type") == "bbox"
@@ -94,7 +94,7 @@ def test_metrics_default_to_lazy_map() -> None:
 def test_default_loader_uses_detection_collate_fn() -> None:
     from functools import partial
 
-    ev = _evaluator(model=_NativeDetector(), dataset=_make_flux(4))
+    ev = _evaluator(model=_NativeDetector(), dataset=_make_stream(4))
     assert isinstance(ev.test_loader, ConfluidClass)
     # The collate is a partial binding the configured record keys onto detection_collate_fn.
     collate = ev.test_loader.kwargs.get("collate_fn")
@@ -106,7 +106,7 @@ def test_evaluator_run_writes_metrics_sidecar(tmp_path: Any) -> None:
     sidecar = tmp_path / "eval_metrics.json"
     ev = _evaluator(
         model=_NativeDetector(),
-        dataset=_make_flux(4),
+        dataset=_make_stream(4),
         test_loader=Class(DataLoader, batch_size=2, collate_fn=detection_collate_fn),
         lightning=Class(
             L.Trainer,
@@ -133,7 +133,7 @@ def test_evaluator_writes_to_predictions_sink(tmp_path: Any) -> None:
     sink = _RecordingSink()
     ev = _evaluator(
         model=_NativeDetector(),
-        dataset=_make_flux(4),
+        dataset=_make_stream(4),
         test_loader=Class(DataLoader, batch_size=2, collate_fn=detection_collate_fn),
         predictions_sink=sink,
         lightning=Class(
@@ -167,7 +167,7 @@ class _NumClassesDetector(nn.Module):
 
 def test_initialize_reads_num_classes_off_trained_model() -> None:
     # On the eval path, initialize() flows the model first, then reads num_classes off the LIVE model.
-    ev = _evaluator(model=LazyClass(_NumClassesDetector, num_classes=5), dataset=_make_flux(4))
+    ev = _evaluator(model=LazyClass(_NumClassesDetector, num_classes=5), dataset=_make_stream(4))
     assert ev.num_classes is None  # not resolved until initialize()
     ev.initialize()
     assert isinstance(ev.model, _NumClassesDetector)
@@ -179,28 +179,28 @@ def test_initialize_reads_num_classes_from_torchvision_head() -> None:
     model.roi_heads = nn.Module()  # type: ignore[assignment]
     model.roi_heads.box_predictor = nn.Module()  # type: ignore[attr-defined]
     model.roi_heads.box_predictor.cls_score = nn.Linear(10, 7)  # type: ignore[attr-defined]
-    ev = _evaluator(model=model, dataset=_make_flux(4))
+    ev = _evaluator(model=model, dataset=_make_stream(4))
     ev.initialize()
     assert ev.num_classes == 7
 
 
 def test_initialize_best_effort_when_model_lacks_num_classes() -> None:
     # The MAP metric is class-agnostic — a detector that exposes no count leaves num_classes None.
-    ev = _evaluator(model=_NativeDetector(), dataset=_make_flux(4))
+    ev = _evaluator(model=_NativeDetector(), dataset=_make_stream(4))
     ev.initialize()
     assert ev.num_classes is None
 
 
-def test_initialize_normalizes_dataset_to_flux() -> None:
-    ev = _evaluator(model=_NativeDetector(), dataset=_make_flux(4))
+def test_initialize_normalizes_dataset_to_stream() -> None:
+    ev = _evaluator(model=_NativeDetector(), dataset=_make_stream(4))
     ev.initialize()
-    assert isinstance(ev.test_set, Flux)
+    assert isinstance(ev.test_set, Stream)
 
 
 def test_run_calls_initialize(tmp_path: Any) -> None:
     ev = _evaluator(
         model=LazyClass(_NumClassesDetector, num_classes=6),
-        dataset=_make_flux(4),
+        dataset=_make_stream(4),
         test_loader=Class(DataLoader, batch_size=2, collate_fn=detection_collate_fn),
         lightning=Class(
             L.Trainer,

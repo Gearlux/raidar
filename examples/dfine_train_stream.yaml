@@ -1,5 +1,5 @@
 # Train D-FINE (Hugging Face transformers, Apache-2.0) on the HuggingFace **cppe-5**
-# detection dataset, fed IN-MEMORY from a SampleFlux pipeline, via raidar's generic
+# detection dataset, fed IN-MEMORY from a RecordStream pipeline, via raidar's generic
 # Lightning detection loop. cppe-5 = 1000 medical-PPE images, 5 classes, COCO boxes.
 #
 # D-FINE is a permissively-licensed, well-maintained real-time DETR — a drop-in
@@ -8,8 +8,8 @@
 # Megvii YOLOX, whose upstream is frozen at py<=3.11 / torch 1.x).
 #
 # Run:
-#   raidar train examples/dfine_train_flux.yaml
-#   raidar train examples/dfine_train_flux.yaml
+#   raidar train examples/dfine_train_stream.yaml
+#   raidar train examples/dfine_train_stream.yaml
 #
 # ⚠️ 0-INDEXED LABELS. HF detectors (like RF-DETR) use class ids 0..K-1 with NO
 # background class — the OPPOSITE of torchvision's background-at-0. So
@@ -38,24 +38,24 @@ model: !lazy:raidar.hf_detection.DFINEModel
 
 # -- Shared op chain: HF `objects` annotation → detection target; PIL image → [0,1] tensor.
 detection_ops:
-  - !class:sampleflux.ops.target.CocoToTorchVisionDetection
+  - !class:recordstream.ops.target.CocoToTorchVisionDetection
     bbox_format: xywh        # cppe-5 boxes are COCO [x, y, w, h]
     label_offset: 0          # HF detectors are 0-indexed (no background) — do NOT +1
-  - !class:sampleflux.ops.torch.ToTensor
+  - !class:recordstream.ops.torch.ToTensor
     mode: RGB                # cppe-5 mixes RGB/RGBA/grayscale — force 3-channel
     normalize: true          # [0,255] → [0,1] (HF processor is do_normalize=False)
 
-train_set: !class:sampleflux.core.Flux
-  source: !class:sampleflux.sources.HuggingFaceSource
+train_set: !class:recordstream.core.Stream
+  source: !class:recordstream.sources.HuggingFaceSource
     path: cppe-5
     split: train
     input_feature: image
     target_feature: objects
-    # count: 100             # uncomment to cap samples for a quick smoke run
+    # count: 100             # uncomment to cap records for a quick smoke run
   ops: !ref:detection_ops
 
-val_set: !class:sampleflux.core.Flux
-  source: !class:sampleflux.sources.HuggingFaceSource
+val_set: !class:recordstream.core.Stream
+  source: !class:recordstream.sources.HuggingFaceSource
     path: cppe-5
     split: test               # cppe-5 ships train / test (no validation split)
     input_feature: image

@@ -12,9 +12,9 @@ Two input modes (XOR), mirroring ``UltralyticsTrainer``:
 
 * **Disk mode** — ``data: str | Path`` points at a COCO/YOLO/Roboflow dataset
   directory; we call RF-DETR's native ``model.train(dataset_dir=...)`` verbatim.
-* **Flux mode** — ``train_set`` / ``val_set`` are :class:`sampleflux.Flux` pipelines
+* **Stream mode** — ``train_set`` / ``val_set`` are :class:`recordstream.Stream` pipelines
   (+ ``num_classes`` + ``class_names``); we reimplement ``RFDETR.train()``'s tail
-  with :class:`raidar.flux_rfdetr_dataset.FluxRFDETRDataModule`, so the Flux feeds
+  with :class:`raidar.stream_rfdetr_dataset.StreamRFDETRDataModule`, so the Stream feeds
   RF-DETR's native loop with NO disk materialization.
 
 Both trainer and evaluator are ``@configurable(task="detection", role=…)`` so
@@ -135,7 +135,7 @@ def _trainer_device_kwargs(device: Optional[str]) -> Dict[str, Any]:
 
 @configurable(task="detection", role="trainer")
 class RFDETRTrainer:
-    """Native RF-DETR trainer (disk + in-memory Flux), driving RF-DETR's own PTL loop.
+    """Native RF-DETR trainer (disk + in-memory Stream), driving RF-DETR's own PTL loop.
 
     Args:
         data: Disk-mode dataset directory (COCO/YOLO/Roboflow). Mutually exclusive
@@ -164,11 +164,11 @@ class RFDETRTrainer:
         checkpoint: Resume / weight-init checkpoint (bypasses ``pretrained``).
         extra_train_kwargs: Escape hatch merged into the RF-DETR train config.
         metrics_output_path: Optional JSON sidecar for the final metrics.
-        train_set / val_set / test_set: Flux-mode datasets (``test`` falls back to
+        train_set / val_set / test_set: Stream-mode datasets (``test`` falls back to
             ``val``).
-        num_classes: Flux-mode foreground class count K (labels are 0-indexed
+        num_classes: Stream-mode foreground class count K (labels are 0-indexed
             ``0..K-1``; head emits K+1 with background at K).
-        class_names: Flux-mode ``{class_id: name}`` (required in Flux mode).
+        class_names: Stream-mode ``{class_id: name}`` (required in Stream mode).
         aug_config: RF-DETR Albumentations augmentation override.
         log_system_metrics: Enable marainer MLflow system metrics when
             ``MLFLOW_TRACKING_URI`` is set.
@@ -238,16 +238,18 @@ class RFDETRTrainer:
         self.log_system_metrics = bool(log_system_metrics)
 
     def _validate_inputs(self) -> None:
-        flux = self.train_set is not None or self.val_set is not None
-        if self.data is not None and flux:
-            raise ValueError("RFDETRTrainer: pass EITHER `data` (disk dir) OR `train_set`+`val_set` (Flux) — not both.")
-        if self.data is None and not flux:
+        stream = self.train_set is not None or self.val_set is not None
+        if self.data is not None and stream:
+            raise ValueError(
+                "RFDETRTrainer: pass EITHER `data` (disk dir) OR `train_set`+`val_set` (Stream) — not both."
+            )
+        if self.data is None and not stream:
             raise ValueError("RFDETRTrainer: must supply EITHER `data` OR `train_set`+`val_set`.")
-        if flux:
+        if stream:
             if self.train_set is None or self.val_set is None:
-                raise ValueError("RFDETRTrainer Flux mode requires BOTH `train_set` and `val_set`.")
+                raise ValueError("RFDETRTrainer Stream mode requires BOTH `train_set` and `val_set`.")
             if self.num_classes is None or not self.class_names:
-                raise ValueError("RFDETRTrainer Flux mode requires `num_classes` and `class_names` (0-indexed).")
+                raise ValueError("RFDETRTrainer Stream mode requires `num_classes` and `class_names` (0-indexed).")
 
     def run(self) -> None:
         self._validate_inputs()
@@ -255,7 +257,7 @@ class RFDETRTrainer:
         if self.data is not None:
             self._run_disk_mode()
         else:
-            self._run_flux_mode()
+            self._run_stream_mode()
 
     def _build_rf(self, num_classes: int) -> Any:
         from raidar.rfdetr import _build_rfdetr
@@ -301,8 +303,8 @@ class RFDETRTrainer:
         rf.train(**kwargs)
         _sidecar_from_output_dir(self.output_dir, self.metrics_output_path)
 
-    def _run_flux_mode(self) -> None:
-        """Reimplement ``RFDETR.train()``'s tail (rfdetr/detr.py) with our FluxRFDETRDataModule.
+    def _run_stream_mode(self) -> None:
+        """Reimplement ``RFDETR.train()``'s tail (rfdetr/detr.py) with our StreamRFDETRDataModule.
 
         NO disk: our datamodule's ``setup()`` bypasses ``build_dataset``. ``dataset_dir="."``
         is a placeholder satisfying ``TrainConfig``'s required field/validator; it is never
@@ -311,7 +313,7 @@ class RFDETRTrainer:
         """
         from rfdetr.training import RFDETRModelModule, build_trainer
 
-        from raidar.flux_rfdetr_dataset import FluxRFDETRDataModule
+        from raidar.stream_rfdetr_dataset import StreamRFDETRDataModule
 
         names = _ordered_class_names(self.class_names)
         assert self.num_classes is not None and names is not None  # _validate_inputs guarantees
@@ -319,7 +321,7 @@ class RFDETRTrainer:
         model_config = rf.model_config
 
         cfg_kwargs: Dict[str, Any] = dict(
-            dataset_dir=".",  # placeholder — bypassed by FluxRFDETRDataModule.setup()
+            dataset_dir=".",  # placeholder — bypassed by StreamRFDETRDataModule.setup()
             dataset_file=self.dataset_file,
             epochs=self.epochs,
             batch_size=self.batch_size,
@@ -344,12 +346,12 @@ class RFDETRTrainer:
         cfg = rf.get_train_config(**cfg_kwargs)
 
         module = RFDETRModelModule(model_config, cfg)
-        datamodule = FluxRFDETRDataModule(
+        datamodule = StreamRFDETRDataModule(
             model_config,
             cfg,
-            train_flux=self.train_set,
-            val_flux=self.val_set,
-            test_flux=self.test_set,
+            train_stream=self.train_set,
+            val_stream=self.val_set,
+            test_stream=self.test_set,
             class_names=names,
         )
         trainer = build_trainer(cfg, model_config, **_trainer_device_kwargs(self.device))
@@ -379,7 +381,7 @@ class RFDETREvaluator:
         dataset_file: Disk-mode dataset layout.
         experiment_name: Run label.
         metrics_output_path: Optional JSON metrics sidecar.
-        val_set: Flux-mode eval dataset.
+        val_set: Stream-mode eval dataset.
         num_classes: Foreground class count K (must match the trained run).
         class_names: ``{class_id: name}``.
         run_test: Run the test loop instead of validate.
@@ -423,13 +425,13 @@ class RFDETREvaluator:
     def _validate_inputs(self) -> None:
         if not self.weights:
             raise ValueError("RFDETREvaluator: `weights` (trained checkpoint path) is required.")
-        flux = self.val_set is not None
-        if self.data is not None and flux:
-            raise ValueError("RFDETREvaluator: pass EITHER `data` (disk dir) OR `val_set` (Flux) — not both.")
-        if self.data is None and not flux:
+        stream = self.val_set is not None
+        if self.data is not None and stream:
+            raise ValueError("RFDETREvaluator: pass EITHER `data` (disk dir) OR `val_set` (Stream) — not both.")
+        if self.data is None and not stream:
             raise ValueError("RFDETREvaluator: must supply EITHER `data` OR `val_set`.")
-        if flux and (self.num_classes is None or not self.class_names):
-            raise ValueError("RFDETREvaluator Flux mode requires `num_classes` and `class_names` (0-indexed).")
+        if stream and (self.num_classes is None or not self.class_names):
+            raise ValueError("RFDETREvaluator Stream mode requires `num_classes` and `class_names` (0-indexed).")
 
     def run(self) -> None:
         self._validate_inputs()
@@ -437,7 +439,7 @@ class RFDETREvaluator:
         if self.data is not None:
             self._run_disk_mode()
         else:
-            self._run_flux_mode()
+            self._run_stream_mode()
 
     def _prepare(self, dataset_dir: str) -> Any:
         """Build the high-level RF-DETR + a checkpoint-loaded model_config + the eval TrainConfig."""
@@ -476,19 +478,19 @@ class RFDETREvaluator:
         datamodule = RFDETRDataModule(rf.model_config, cfg)
         self._evaluate(module, datamodule, rf.model_config, cfg)
 
-    def _run_flux_mode(self) -> None:
+    def _run_stream_mode(self) -> None:
         from rfdetr.training import RFDETRModelModule
 
-        from raidar.flux_rfdetr_dataset import FluxRFDETRDataModule
+        from raidar.stream_rfdetr_dataset import StreamRFDETRDataModule
 
         names = _ordered_class_names(self.class_names)
-        rf, cfg = self._prepare(".")  # placeholder dir — FluxRFDETRDataModule bypasses build_dataset
+        rf, cfg = self._prepare(".")  # placeholder dir — StreamRFDETRDataModule bypasses build_dataset
         module = RFDETRModelModule(rf.model_config, cfg)
-        datamodule = FluxRFDETRDataModule(
+        datamodule = StreamRFDETRDataModule(
             rf.model_config,
             cfg,
-            val_flux=self.val_set,
-            test_flux=self.val_set if self.run_test else None,
+            val_stream=self.val_set,
+            test_stream=self.val_set if self.run_test else None,
             class_names=names,
         )
         self._evaluate(module, datamodule, rf.model_config, cfg)

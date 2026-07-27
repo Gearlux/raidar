@@ -51,7 +51,7 @@ from typing import Any, Dict, List, Optional, Tuple, cast
 import numpy as np
 import torch
 from marainer.torch.outputs import DetectionOutput, DetectionPredictions
-from sampleflux import Label, Record, Regions, item_data
+from recordstream import Label, Record, Regions, item_data
 from torch import Tensor
 from torchmetrics import Metric
 from torchvision.ops import box_iou
@@ -281,11 +281,11 @@ def _as_tensor(value: Any) -> Tensor:
 def _detection_target(record: Record, target_key: str) -> Dict[str, Tensor]:
     """The torchvision ``{boxes, labels}`` target dict under ``target_key`` in a record.
 
-    The typed detection-target op (``sampleflux.ops.target.CocoToTorchVisionDetection`` /
-    ``MasksToDetectionBoxes``) writes the target as a :class:`~sampleflux.Regions` item whose
+    The typed detection-target op (``recordstream.ops.target.CocoToTorchVisionDetection`` /
+    ``MasksToDetectionBoxes``) writes the target as a :class:`~recordstream.Regions` item whose
     ``boxes`` = the ``[N, 4]`` xyxy tensor and ``labels`` = the ``[N]`` class-id tensor; unwrap it
     into the ``{"boxes", "labels"}`` dict the native torchvision model consumes. A value that already
-    carries the dict verbatim (a :class:`~sampleflux.Label` wrapper or a raw dict) is passed through.
+    carries the dict verbatim (a :class:`~recordstream.Label` wrapper or a raw dict) is passed through.
     """
     item = record[target_key]
     if isinstance(item, Regions):
@@ -298,7 +298,7 @@ def _record_metadata(record: Record, input_key: str, target_key: str) -> Dict[st
     """Gather a record's remaining keys (neither input nor target) into a plain metadata dict.
 
     Every key besides the configured input and target becomes ``{name: value}`` (a
-    :class:`~sampleflux.Label`'s ``.value``, else the item payload) so string-valued values survive
+    :class:`~recordstream.Label`'s ``.value``, else the item payload) so string-valued values survive
     collation and predictions sinks can correlate per-image outputs.
     """
     return {
@@ -311,28 +311,28 @@ def _record_metadata(record: Record, input_key: str, target_key: str) -> Dict[st
 def detection_collate_fn(batch: List[Record], input_key: str = "image", target_key: str = "target") -> Record:
     """Collate variable-length detection record dicts into ONE batched record.
 
-    Each per-sample record carries an :class:`~sampleflux.Image` input (``[3, H, W]`` float) under
-    ``input_key`` and a :class:`~sampleflux.Regions` target (boxes + labels) under ``target_key``.
+    Each per-record record carries an :class:`~recordstream.Image` input (``[3, H, W]`` float) under
+    ``input_key`` and a :class:`~recordstream.Regions` target (boxes + labels) under ``target_key``.
     This reads the input image (``item_data(record[input_key])``, coerced to a tensor) and the
     target region set (unwrapped to a torchvision ``{boxes, labels}`` dict by
     :func:`_detection_target`), then returns ONE batched record dict:
 
     * key ``"detection"`` — a :class:`DetectionBatchInput` carried VERBATIM as the value. It is a
       custom container (variable-N images + per-image target dicts), NOT an array item, so it must
-      NOT be forced into an :class:`~sampleflux.Image` (which would ``np.asarray`` it); the
+      NOT be forced into an :class:`~recordstream.Image` (which would ``np.asarray`` it); the
       specialised :class:`~raidar.detector.LightningDetector` recovers it via ``_batch_detection``
       and unwraps ``(images, targets)`` for the native model.
     * key ``"targets"`` — the SAME list of per-image target dicts, so a metric's
       ``update(preds, targets)`` receives per-image ground truth (``batch["targets"] is
       batch_detection.targets``).
-    * key ``"metadata"`` — a ``list`` of the per-sample metadata dicts (the remaining keys),
-      preserved for sinks that write per-sample predictions.
+    * key ``"metadata"`` — a ``list`` of the per-record metadata dicts (the remaining keys),
+      preserved for sinks that write per-record predictions.
 
     Per-image targets are kept as lists — never padded, never dropped (the variable-N detection
     batch convention).
 
     Args:
-        batch: List of per-sample record dicts.
+        batch: List of per-record record dicts.
         input_key: Record key carrying the input image (default ``"image"``).
         target_key: Record key carrying the target ``Regions`` (default ``"target"``).
     """

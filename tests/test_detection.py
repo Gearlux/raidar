@@ -11,7 +11,7 @@ remains here is the batch container + collate the native path uses; the
 from typing import Any, Dict, List
 
 import torch
-from sampleflux import Image, Record, Regions
+from recordstream import Image, Record, Regions
 from torch import Tensor
 
 from raidar.detection import DetectionBatchInput, detection_collate_fn
@@ -40,11 +40,11 @@ def _regions(boxes: Any, labels: Any) -> Regions:
     return Regions(boxes=boxes, labels=labels)
 
 
-def _synthetic_detection_samples(n: int, size: int = 64) -> List[Record]:
-    """Per-sample records shaped like a detection source: Image under "image" + Regions under "target"."""
-    samples: List[Record] = []
+def _synthetic_detection_records(n: int, size: int = 64) -> List[Record]:
+    """Per-record records shaped like a detection source: Image under "image" + Regions under "target"."""
+    records: List[Record] = []
     for _ in range(n):
-        samples.append(
+        records.append(
             {
                 "image": Image(torch.rand(3, size, size).numpy(), layout="CHW"),
                 "target": _regions(
@@ -53,7 +53,7 @@ def _synthetic_detection_samples(n: int, size: int = 64) -> List[Record]:
                 ),
             }
         )
-    return samples
+    return records
 
 
 # --- DetectionBatchInput ---------------------------------------------------
@@ -78,8 +78,8 @@ def test_detection_batch_input_targets_optional() -> None:
 
 
 def test_detection_collate_preserves_lists_and_sets_batch_input() -> None:
-    samples = _synthetic_detection_samples(3, size=32)
-    batch = detection_collate_fn(samples)
+    records = _synthetic_detection_records(3, size=32)
+    batch = detection_collate_fn(records)
     assert isinstance(batch, dict)
     # The DetectionBatchInput rides VERBATIM under the batched record's "detection" key.
     bi = batch["detection"]
@@ -92,5 +92,5 @@ def test_detection_collate_preserves_lists_and_sets_batch_input() -> None:
     assert batch["targets"] is bi.targets
     # Each target was unwrapped from the Regions item into the torchvision {boxes, labels} dict.
     assert set(bi.targets[0].keys()) == {"boxes", "labels"}
-    # Per-sample metadata preserved as a list.
+    # Per-record metadata preserved as a list.
     assert isinstance(batch["metadata"], list) and len(batch["metadata"]) == 3

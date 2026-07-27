@@ -29,23 +29,23 @@ model: !lazy:torchvision.models.detection.fasterrcnn_mobilenet_v3_large_320_fpn
 
 # -- Op chain: instance mask → detection target; PIL image → 3-channel tensor.
 detection_ops:
-  - !class:sampleflux.ops.target.MasksToDetectionBoxes
+  - !class:recordstream.ops.target.MasksToDetectionBoxes
     label: 1                # all objects are pedestrians (class 1; 0 = background)
     # connected: false      # default — instance_id is already a per-instance mask
-  - !class:sampleflux.ops.torch.ToTensor
+  - !class:recordstream.ops.torch.ToTensor
     mode: RGB               # force 3-channel for Faster R-CNN
     normalize: true
 
-train_set: !class:sampleflux.core.Flux
-  source: !class:sampleflux.sources.HuggingFaceSource
+train_set: !class:recordstream.core.Stream
+  source: !class:recordstream.sources.HuggingFaceSource
     path: arakesh/PennFudanPedestrian-1024x512
     split: train            # 160 images
     input_feature: image
     target_feature: instance_id   # the per-instance mask (pixels 1..N per pedestrian)
   ops: !ref:detection_ops
 
-val_set: !class:sampleflux.core.Flux
-  source: !class:sampleflux.sources.HuggingFaceSource
+val_set: !class:recordstream.core.Stream
+  source: !class:recordstream.sources.HuggingFaceSource
     path: arakesh/PennFudanPedestrian-1024x512
     split: test             # 10 images (Penn-Fudan ships train / test)
     input_feature: image

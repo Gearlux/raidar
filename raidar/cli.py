@@ -4,7 +4,7 @@
 :class:`~raidar.detector.LightningDetector` (a standard Lightning module) and run it
 with the matching ``task`` (the verb wins over the YAML's ``task:``). The RF-DETR
 framework-native trainer keeps its own ``raidar-rfdetr`` CLI; the ultralytics escape
-hatch lives in the raidar-ultralytics sibling. A generic ``sampleflux run`` also works.
+hatch lives in the raidar-ultralytics sibling. A generic ``recordstream run`` also works.
 """
 
 from typing import Any
