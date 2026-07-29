@@ -20,7 +20,7 @@ that drives torchvision-native models and raw ``torchmetrics`` metrics directly)
   straight into a ``MetricCollection`` alongside ``MeanAveragePrecision``.
 
 The per-image prediction schema is the task-agnostic
-:class:`marainer.torch.outputs.DetectionOutput`, re-exported here for convenience.
+:class:`recordstream.DetectionOutput`, re-exported here for convenience.
 
 Native model contract (the shape torchvision detectors already speak):
 
@@ -50,8 +50,7 @@ from typing import Any, Dict, List, Optional, Tuple, cast
 
 import numpy as np
 import torch
-from marainer.torch.outputs import DetectionOutput, DetectionPredictions
-from recordstream import Label, Record, Regions, item_data
+from recordstream import DetectionOutput, DetectionPredictions, Label, Record, Regions, item_data
 from torch import Tensor
 from torchmetrics import Metric
 from torchvision.ops import box_iou

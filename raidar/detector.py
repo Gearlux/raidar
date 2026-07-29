@@ -26,11 +26,9 @@ from confluid.registry import resolve_class
 from loggair import get_logger
 from marainer.lightning import TrackingCallback, activate_for_lightning, attach_lightning_progress, scalar_metrics
 from marainer.run_names import generate_run_name
-from marainer.sinks import PredictionsSink
-from marainer.torch import RecordSource, ensure_record_dataset
 from marainer.tracking.base import Tracker
 from pytorch_lightning.loggers import Logger
-from recordstream import Regions
+from recordstream import PredictionsSink, RecordSource, Regions, ensure_record_dataset
 from recordstream.runnable import ProgressReporting, TorchRunner, entrypoint, run_entrypoint
 from torch import Tensor
 from torch.optim import Optimizer
