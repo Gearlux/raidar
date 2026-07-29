@@ -8,7 +8,7 @@ dependencies = [
     # marainer provides OPTIONAL tracking + torch utilities (ensure_record_dataset /
     # load_lightning_checkpoint / DetectionOutput contracts). raidar's LightningDetector is a
     # standard pl.LightningModule and trains without marainer (a couple of tracking lines drop out).
-    "marainer[lightning,mlflow,tensorboard]>=0.2.0",
+    "marainer[lightning,mlflow,tensorboard]>=0.1.0",
     "confluid>=0.1.0",
     "recordstream>=0.1.0",
     "loggair>=0.1.0",
