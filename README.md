@@ -23,7 +23,7 @@ The native model contract is the shape torchvision detectors already speak:
 * `model.train(); model(images, targets) → Dict[str, Tensor]` — loss dict
   (the trainer sums it for the optimisation scalar).
 * `model.eval();  model(images)         → List[Dict[str, Tensor]]` — per-image
-  `{boxes, scores, labels}` (a `marainer.torch.outputs.DetectionOutput` list, fed
+  `{boxes, scores, labels}` (a `recordstream.DetectionOutput` list, fed
   straight to the metric).
 
 `raidar.detection` holds the small native plumbing both paths use:
@@ -33,7 +33,7 @@ The native model contract is the shape torchvision detectors already speak:
 | `DetectionBatchInput` | Carries images + targets through `batch.input` so variable-size per-image tensors survive collation; the trainer/evaluator unwrap `(images, targets)` from it. Exposes `.shape` for Lightning's batch-size logging. |
 | `detection_collate_fn` | DataLoader collate that builds a `DetectionBatchInput` and keeps per-image targets as lists. |
 | `DetectionConfusionMatrix` | Native `torchmetrics.Metric` accumulating TP / FP / FN (+ precision / recall / F1); drops into a `MetricCollection` next to `MeanAveragePrecision`. |
-| `DetectionOutput` / `DetectionPredictions` | Task-agnostic per-image prediction schema, re-exported from `marainer.torch.outputs`. |
+| `DetectionOutput` / `DetectionPredictions` | Task-agnostic per-image prediction schema, re-exported from `recordstream.outputs`. |
 
 ## Installation
 
@@ -132,7 +132,7 @@ source of truth (not the eval dataset, which may be a subset). The read is
 *best-effort*: the default `MeanAveragePrecision` is class-count-agnostic, so a
 detector that doesn't expose its count just leaves `num_classes` unset without
 erroring. `initialize()` also normalizes the wired dataset to a record-yielding `Dataset`
-via marainer's `ensure_record_dataset`.
+via recordstream's `ensure_record_dataset`.
 
 ```yaml
 # task: test — num_classes is read off the trained model (which carries it).

@@ -28,7 +28,7 @@ import torch.nn as nn
 from confluid import configurable
 from loggair import get_logger
 from marainer.torch import load_lightning_checkpoint
-from marainer.torch.outputs import DetectionOutput
+from recordstream import DetectionOutput
 from torch import Tensor
 
 logger = get_logger(__name__)
@@ -117,7 +117,7 @@ def _decode_rfdetr_predictions(
     score_threshold: float,
 ) -> List[DetectionOutput]:
     """Convert RF-DETR's ``PostProcess`` output into per-image
-    :class:`~marainer.torch.outputs.DetectionOutput` dicts. Drops the no-object
+    :class:`~recordstream.DetectionOutput` dicts. Drops the no-object
     slot at index ``num_classes`` and filters by ``score_threshold``.
     """
     predictions: List[DetectionOutput] = []
