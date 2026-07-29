@@ -7,7 +7,7 @@ list``) and torchmetrics detection metrics directly, with no
 ``TorchvisionDetectionLoss`` / ``DetectionMetricAdapter`` layer involved.
 """
 
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Union, cast, get_args
 
 import pytest
 import pytorch_lightning as L
@@ -16,12 +16,13 @@ import torch.nn as nn
 from confluid import LazyClass
 from recordstream import Image, Record, Regions
 from recordstream.core import Stream
+from recordstream.runnable import runnable_entrypoints
 from torch import Tensor
 from torchmetrics import MetricCollection
 from torchmetrics.detection import MeanAveragePrecision
 
 from raidar.detection import DetectionConfusionMatrix, detection_collate_fn
-from raidar.detector import LightningDetector, _model_num_classes
+from raidar.detector import DetectorTask, LightningDetector, _model_num_classes
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -406,3 +407,25 @@ def test_model_num_classes_reads_attr_and_torchvision_head() -> None:
     assert _model_num_classes(m) == 5
     # Neither present → None.
     assert _model_num_classes(nn.Linear(3, 3)) is None
+
+
+# ---------------------------------------------------------------------------
+# run() dispatch — the @entrypoint markers ARE the table (recordstream run_entrypoint)
+# ---------------------------------------------------------------------------
+
+
+def test_entrypoint_markers_cover_every_task_literal_value() -> None:
+    """`run()` dispatches through the markers, so a task the Literal offers must be declared."""
+    declared = {str(meta["task"]) for meta in runnable_entrypoints(LightningDetector).values()}
+    assert declared == set(get_args(DetectorTask))
+
+
+@pytest.mark.parametrize("task", get_args(DetectorTask))
+def test_run_dispatches_to_the_entry_point_declaring_the_task(task: str) -> None:
+    calls: List[str] = []
+    trainer = LightningDetector(model=cast(Any, None), task=cast(Any, task))
+    trainer.initialize = lambda: None  # type: ignore[method-assign]
+    for name in get_args(DetectorTask):  # instance attrs win over the class's bound methods
+        setattr(trainer, name, lambda n=name: calls.append(n))
+    trainer.run()
+    assert calls == [task]
