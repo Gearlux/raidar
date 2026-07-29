@@ -35,7 +35,7 @@ from recordstream.runnable import ProgressReporting, TorchRunner, entrypoint, ru
 from torch import Tensor
 from torch.optim import Optimizer
 from torch.utils.data import DataLoader
-from torchmetrics import Metric
+from torchmetrics import Metric, MetricCollection
 from torchmetrics.detection import MeanAveragePrecision
 from tqdm import tqdm
 
@@ -146,9 +146,13 @@ class LightningDetector(TorchRunner, ProgressReporting, L.LightningModule):
         self.test_loader: Lazy[DataLoader[Any]] = LazyClass(DataLoader, shuffle=False, **loader_kw)
         self.lightning: Lazy[L.Trainer] = LazyClass(L.Trainer, max_epochs=max_epochs, logger=logger)
         # Predictions are unavailable in training_step (model returns a loss dict); val/test get MAP.
-        self.train_metrics: Optional[Lazy[Metric]] = None
-        self.val_metrics: Optional[Lazy[Metric]] = LazyClass(MeanAveragePrecision, iou_type="bbox")
-        self.test_metrics: Optional[Lazy[Metric]] = LazyClass(MeanAveragePrecision, iou_type="bbox")
+        self.train_metrics: Optional[Lazy[Union[Metric, MetricCollection]]] = None
+        self.val_metrics: Optional[Lazy[Union[Metric, MetricCollection]]] = LazyClass(
+            MeanAveragePrecision, iou_type="bbox"
+        )
+        self.test_metrics: Optional[Lazy[Union[Metric, MetricCollection]]] = LazyClass(
+            MeanAveragePrecision, iou_type="bbox"
+        )
         self.predictions_sink: Optional[Lazy[PredictionsSink]] = None
         self.metrics_sidecar_path: Optional[str] = None
         self.trackers: Optional[List[Tracker]] = None
@@ -282,7 +286,7 @@ class LightningDetector(TorchRunner, ProgressReporting, L.LightningModule):
         targets: Optional[List[Dict[str, Tensor]]] = batch_input.targets
         predictions = cast(nn.Module, self.model)(images)
         if self.val_metrics is not None and targets is not None:
-            self.val_metrics.update(predictions, targets)
+            cast(Union[Metric, MetricCollection], self.val_metrics).update(predictions, targets)
 
     def test_step(self, batch: Any, batch_idx: int) -> Any:
         batch_input = _batch_detection(batch)
@@ -290,7 +294,7 @@ class LightningDetector(TorchRunner, ProgressReporting, L.LightningModule):
         targets: Optional[List[Dict[str, Tensor]]] = batch_input.targets
         predictions = cast(nn.Module, self.model)(images)
         if self.test_metrics is not None and targets is not None:
-            self.test_metrics.update(predictions, targets)
+            cast(Union[Metric, MetricCollection], self.test_metrics).update(predictions, targets)
         if self.predictions_sink is not None:
             self._write_predictions(predictions, batch)
         return predictions
@@ -305,7 +309,7 @@ class LightningDetector(TorchRunner, ProgressReporting, L.LightningModule):
     def on_validation_epoch_end(self) -> None:
         if self.val_metrics is not None:
             _log_scalar_dict(self, self.val_metrics, prefix="val/")
-            self.val_metrics.reset()
+            cast(Union[Metric, MetricCollection], self.val_metrics).reset()
 
     def on_test_epoch_end(self) -> None:
         # Log but DON'T reset — _finalize_metrics reads compute() for the sidecar after the loop.
@@ -417,7 +421,7 @@ class LightningDetector(TorchRunner, ProgressReporting, L.LightningModule):
         )
         for i in range(len(items)):
             m = per_record_meta[i] if per_record_meta and i < len(per_record_meta) else {}
-            self.predictions_sink.write(items[i], m)
+            cast(PredictionsSink, self.predictions_sink).write(items[i], m)
 
     def _finalize_metrics(self, metrics: Any) -> None:
         if metrics is None or self.metrics_sidecar_path is None:
