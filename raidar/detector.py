@@ -30,7 +30,7 @@ from marainer.torch import ensure_record_dataset
 from marainer.tracking.base import Tracker
 from pytorch_lightning.loggers import Logger
 from recordstream import Regions
-from recordstream.runnable import ProgressReporting, TorchRunner, entrypoint
+from recordstream.runnable import ProgressReporting, TorchRunner, entrypoint, run_entrypoint
 from torch import Tensor
 from torch.utils.data import DataLoader
 from torchmetrics.detection import MeanAveragePrecision
@@ -160,11 +160,9 @@ class LightningDetector(TorchRunner, ProgressReporting, L.LightningModule):
     # ---- run dispatch ------------------------------------------------------- #
     def run(self) -> None:
         self.initialize()
-        dispatch = {"fit": self.fit, "evaluate": self.evaluate, "test": self.test, "predict": self.predict}
-        entry = dispatch.get(self.task)
-        if entry is None:
-            raise ValueError(f"Unknown task {self.task!r}; expected one of {list(dispatch)}.")
-        entry()
+        # The `@entrypoint` markers below ARE the dispatch table — a hand-written
+        # {task: method} dict restates them and drifts (recordstream `docs/runnable.md`).
+        run_entrypoint(self, self.task)
 
     def forward(self, images: List[Tensor]) -> List[Dict[str, Tensor]]:  # type: ignore[override]
         return cast(List[Dict[str, Tensor]], cast(nn.Module, self.model)(images))
