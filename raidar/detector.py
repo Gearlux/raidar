@@ -21,18 +21,21 @@ from typing import Any, Dict, Iterable, List, Literal, Optional, Union, cast
 import pytorch_lightning as L
 import torch
 import torch.nn as nn
-from confluid import Fluid, LazyClass, Mandatory, configurable, flow, get_hierarchy_from_instance, output
+from confluid import Fluid, Lazy, LazyClass, Mandatory, configurable, flow, get_hierarchy_from_instance, output
 from confluid.registry import resolve_class
 from loggair import get_logger
 from marainer.lightning import TrackingCallback, activate_for_lightning, attach_lightning_progress, scalar_metrics
 from marainer.run_names import generate_run_name
-from marainer.torch import ensure_record_dataset
+from marainer.sinks import PredictionsSink
+from marainer.torch import RecordSource, ensure_record_dataset
 from marainer.tracking.base import Tracker
 from pytorch_lightning.loggers import Logger
 from recordstream import Regions
 from recordstream.runnable import ProgressReporting, TorchRunner, entrypoint, run_entrypoint
 from torch import Tensor
+from torch.optim import Optimizer
 from torch.utils.data import DataLoader
+from torchmetrics import Metric
 from torchmetrics.detection import MeanAveragePrecision
 from tqdm import tqdm
 
@@ -104,9 +107,9 @@ class LightningDetector(TorchRunner, ProgressReporting, L.LightningModule):
 
     def __init__(
         self,
-        model: Mandatory[nn.Module],
-        train_set: Any = None,
-        test_set: Any = None,
+        model: Mandatory[Lazy[nn.Module]],
+        train_set: Optional[Lazy[RecordSource]] = None,
+        test_set: Optional[Lazy[RecordSource]] = None,
         num_classes: Optional[int] = None,
         task: DetectorTask = "fit",
         max_epochs: int = 10,
@@ -119,10 +122,10 @@ class LightningDetector(TorchRunner, ProgressReporting, L.LightningModule):
         target_key: str = "target",
     ) -> None:
         super().__init__()
-        self.model: Any = model
-        self.train_set: Any = train_set
-        self.val_set: Any = None
-        self.test_set: Any = test_set
+        self.model: Lazy[nn.Module] = model
+        self.train_set: Optional[Lazy[RecordSource]] = train_set
+        self.val_set: Optional[Lazy[RecordSource]] = None
+        self.test_set: Optional[Lazy[RecordSource]] = test_set
         self.num_classes = int(num_classes) if num_classes is not None else None
         self.task: DetectorTask = task
         self.experiment_name = experiment_name
@@ -131,29 +134,29 @@ class LightningDetector(TorchRunner, ProgressReporting, L.LightningModule):
         self.target_key = str(target_key)
         # Native detection models compute loss inside forward — no separate loss_fn callable.
         self.loss_fn = None
-        self.optimizer: Any = LazyClass(torch.optim.AdamW, lr=1e-4, weight_decay=0.05)
+        self.optimizer: Lazy[Optimizer] = LazyClass(torch.optim.AdamW, lr=1e-4, weight_decay=0.05)
         loader_kw = dict(
             collate_fn=partial(detection_collate_fn, input_key=self.input_key, target_key=self.target_key),
             batch_size=batch_size,
             num_workers=num_workers,
             persistent_workers=num_workers != 0,
         )
-        self.train_loader: Any = LazyClass(DataLoader, shuffle=True, **loader_kw)
-        self.val_loader: Any = LazyClass(DataLoader, shuffle=False, **loader_kw)
-        self.test_loader: Any = LazyClass(DataLoader, shuffle=False, **loader_kw)
-        self.lightning: Any = LazyClass(L.Trainer, max_epochs=max_epochs, logger=logger)
+        self.train_loader: Lazy[DataLoader[Any]] = LazyClass(DataLoader, shuffle=True, **loader_kw)
+        self.val_loader: Lazy[DataLoader[Any]] = LazyClass(DataLoader, shuffle=False, **loader_kw)
+        self.test_loader: Lazy[DataLoader[Any]] = LazyClass(DataLoader, shuffle=False, **loader_kw)
+        self.lightning: Lazy[L.Trainer] = LazyClass(L.Trainer, max_epochs=max_epochs, logger=logger)
         # Predictions are unavailable in training_step (model returns a loss dict); val/test get MAP.
-        self.train_metrics: Any = None
-        self.val_metrics: Any = LazyClass(MeanAveragePrecision, iou_type="bbox")
-        self.test_metrics: Any = LazyClass(MeanAveragePrecision, iou_type="bbox")
-        self.predictions_sink: Any = None
+        self.train_metrics: Optional[Lazy[Metric]] = None
+        self.val_metrics: Optional[Lazy[Metric]] = LazyClass(MeanAveragePrecision, iou_type="bbox")
+        self.test_metrics: Optional[Lazy[Metric]] = LazyClass(MeanAveragePrecision, iou_type="bbox")
+        self.predictions_sink: Optional[Lazy[PredictionsSink]] = None
         self.metrics_sidecar_path: Optional[str] = None
         self.trackers: Optional[List[Tracker]] = None
         self.log_system_metrics: bool = True
         self._trackers: List[Tracker] = []
 
     @property
-    def __torch_runner__(self) -> bool:  # type: ignore[override]  # dynamic per-task override of the marker
+    def __needs_autograd__(self) -> bool:  # type: ignore[override]  # dynamic per-task override of the marker
         """Only ``fit`` needs autograd; evaluate / test / predict are inference-only."""
         return self.task == "fit"
 
