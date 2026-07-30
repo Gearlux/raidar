@@ -300,8 +300,16 @@ def test_end_to_end_native_trainer_fit(tmp_path: Any) -> None:
 
     trainer.val_metrics = flow(trainer.val_metrics)
     trainer.test_metrics = flow(trainer.test_metrics)
-    trainer.train_loader = torch.utils.data.DataLoader(train_stream, batch_size=2, collate_fn=detection_collate_fn)
-    trainer.val_loader = torch.utils.data.DataLoader(val_stream, batch_size=2, collate_fn=detection_collate_fn)
+    # `cast`: a Stream is map-style (`__len__`/`__getitem__`) and DataLoader duck-types its
+    # argument at runtime, but torch's STUB declares `Dataset[T]`. Stream deliberately no
+    # longer inherits that base — it made torch a hard dependency of a numpy engine — so the
+    # stub's stricter view is bridged here rather than by re-coupling the engine.
+    trainer.train_loader = torch.utils.data.DataLoader(
+        cast(Any, train_stream), batch_size=2, collate_fn=detection_collate_fn
+    )
+    trainer.val_loader = torch.utils.data.DataLoader(
+        cast(Any, val_stream), batch_size=2, collate_fn=detection_collate_fn
+    )
 
     lightning_trainer.fit(
         model=trainer,

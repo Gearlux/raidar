@@ -10,7 +10,7 @@ end-to-end tests build the SMALLEST checkpoints with ``pretrained=False`` (rando
 weights from config — no weight download); the train-loop smoke is ``slow``.
 """
 
-from typing import Any, Dict, List, get_args
+from typing import Any, Dict, List, cast, get_args
 
 import pytest
 import torch
@@ -231,8 +231,15 @@ def test_end_to_end_lightning_fit(cls: Any, variant: str, tmp_path: Any) -> None
     trainer = LightningDetector(model=model, train_set=_stream(4), num_classes=2)
     trainer.val_set = _stream(2)
     trainer.val_metrics = flow(trainer.val_metrics)
-    trainer.train_loader = torch.utils.data.DataLoader(_stream(4), batch_size=2, collate_fn=detection_collate_fn)
-    trainer.val_loader = torch.utils.data.DataLoader(_stream(2), batch_size=2, collate_fn=detection_collate_fn)
+    # `cast`: a Stream is map-style and DataLoader duck-types its argument at runtime, but
+    # torch's STUB declares `Dataset[T]`. Stream deliberately no longer inherits that base — it
+    # made torch a hard dependency of a numpy engine — so the stub is bridged here.
+    trainer.train_loader = torch.utils.data.DataLoader(
+        cast(Any, _stream(4)), batch_size=2, collate_fn=detection_collate_fn
+    )
+    trainer.val_loader = torch.utils.data.DataLoader(
+        cast(Any, _stream(2)), batch_size=2, collate_fn=detection_collate_fn
+    )
 
     lightning_trainer = L.Trainer(
         max_epochs=1,
