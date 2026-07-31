@@ -64,7 +64,12 @@ def _build_criterion_args(model_config: Any, device: Any) -> SimpleNamespace:
     """Build a minimal namespace for :func:`build_criterion_and_postprocessors`."""
     return SimpleNamespace(
         num_classes=model_config.num_classes,
-        cls_loss_coef=model_config.cls_loss_coef,
+        # A LITERAL, like the other loss coefficients below, because rfdetr 1.9.0 moved this off
+        # ModelConfig — `rfdetr/_namespace.py` now calls TrainConfig "its sole owner" (default 1.0).
+        # Reading it from `model_config` raised `AttributeError: 'RFDETRNanoConfig' object has no
+        # attribute 'cls_loss_coef'` at criterion-build time; this function is handed only a model
+        # config, so the default belongs here beside `bbox_loss_coef` / `giou_loss_coef`.
+        cls_loss_coef=1.0,
         dec_layers=model_config.dec_layers,
         two_stage=model_config.two_stage,
         group_detr=model_config.group_detr,
@@ -84,7 +89,10 @@ def _build_criterion_args(model_config: Any, device: Any) -> SimpleNamespace:
         use_position_supervised_loss=False,
         mask_ce_loss_coef=5.0,
         mask_dice_loss_coef=5.0,
-        mask_point_record_ratio=16,
+        # `build_criterion_and_postprocessors` reads `args.mask_point_sample_ratio`; the old spelling
+        # here matched nothing and survived only because it is reached solely on a segmentation head,
+        # which this detection path never sets.
+        mask_point_sample_ratio=16,
     )
 
 
