@@ -41,7 +41,7 @@ def _stream(n: int = 4, *, h: int = 40, w: int = 60, empty: bool = False) -> Str
 
 
 def _val_dataset(stream: Stream, resolution: int = 256) -> StreamRFDETRDataset:
-    # square_resize_div_64 path (RF-DETR's default); a plain namespace stands in for build_namespace.
+    # square_resize_div_64 path (RF-DETR's default); a plain namespace stands in for _namespace_from_configs.
     from types import SimpleNamespace
 
     ns = SimpleNamespace(

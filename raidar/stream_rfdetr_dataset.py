@@ -44,7 +44,13 @@ import torch
 from loggair import get_logger
 from PIL import Image
 from recordstream import Regions, Stream, item_data, iter_key
-from rfdetr._namespace import build_namespace
+
+# PRIVATE rfdetr module, and it moves: `build_namespace` was renamed
+# `_namespace_from_configs` in rfdetr 1.9.0, which broke this import outright. rfdetr exposes
+# no public way to build the merged namespace its transforms need, so the private path is the
+# only one available — pinned by tests/test_stream_rfdetr_dataset.py, which fails loudly on the
+# next rename rather than at training time.
+from rfdetr._namespace import _namespace_from_configs
 from rfdetr.datasets.coco import ConvertCoco, make_coco_transforms, make_coco_transforms_square_div_64
 from rfdetr.training.module_data import RFDETRDataModule
 
@@ -169,7 +175,7 @@ class StreamRFDETRDataset(torch.utils.data.Dataset):
         stream: The :class:`recordstream.Stream` of record dicts.
         image_set: ``"train"`` (augmented) or ``"val"`` / ``"test"`` (no aug).
         resolution: Model input resolution (``model_config.resolution``).
-        ns: The merged ``rfdetr`` namespace (``build_namespace(model_config,
+        ns: The merged ``rfdetr`` namespace (``_namespace_from_configs(model_config,
             train_config)``) — carries ``square_resize_div_64`` / ``multi_scale`` /
             ``patch_size`` / ``num_windows`` / ``aug_config`` that drive the transform.
         input_key: Record key carrying the input image (default ``"image"``).
@@ -263,7 +269,7 @@ class StreamRFDETRDataModule(RFDETRDataModule):
         self._stream_class_names = list(class_names) if class_names else None
 
     def _make(self, stream: Stream, image_set: str) -> StreamRFDETRDataset:
-        ns = build_namespace(self.model_config, self.train_config)
+        ns = _namespace_from_configs(self.model_config, self.train_config)
         return StreamRFDETRDataset(stream, image_set, self.model_config.resolution, ns)
 
     def setup(self, stage: str) -> None:
