@@ -22,8 +22,8 @@ runnable: !class:raidar.detector.LightningDetector
   dataset: !ref:val_set
   metrics_sidecar_path: ./runs/dfine_cppe5/eval_metrics.json
 
-val_set: !class:recordstream.core.Stream
-  source: !class:recordstream.sources.HuggingFaceSource
+val_set: !class:recordstream.core.stream.Stream
+  source: !class:recordstream.sources.huggingface.HuggingFaceSource
     path: cppe-5
     split: test
     input_feature: image
