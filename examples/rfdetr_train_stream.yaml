@@ -29,8 +29,8 @@ trainer: !class:raidar.rfdetr_trainer.RFDETRTrainer
   batch_size: 4
   output_dir: ./runs/rfdetr_cppe5
   metrics_output_path: ./runs/rfdetr_cppe5/metrics.json
-  train_set: !class:recordstream.core.Stream
-    source: !class:recordstream.sources.HuggingFaceSource
+  train_set: !class:recordstream.core.stream.Stream
+    source: !class:recordstream.sources.huggingface.HuggingFaceSource
       path: cppe-5
       split: train
       input_feature: image
@@ -40,8 +40,8 @@ trainer: !class:raidar.rfdetr_trainer.RFDETRTrainer
       - !class:recordstream.ops.target.CocoToTorchVisionDetection
         bbox_format: xywh    # cppe-5 boxes are COCO [x, y, w, h]
         label_offset: 0      # RF-DETR is 0-indexed (background at K) — do NOT +1
-  val_set: !class:recordstream.core.Stream
-    source: !class:recordstream.sources.HuggingFaceSource
+  val_set: !class:recordstream.core.stream.Stream
+    source: !class:recordstream.sources.huggingface.HuggingFaceSource
       path: cppe-5
       split: test            # cppe-5 ships train / test (no validation split)
       input_feature: image

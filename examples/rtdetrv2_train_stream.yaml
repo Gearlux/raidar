@@ -39,8 +39,8 @@ detection_ops:
     mode: RGB                # cppe-5 mixes RGB/RGBA/grayscale — force 3-channel
     normalize: true          # [0,255] → [0,1] (HF processor is do_normalize=False)
 
-train_set: !class:recordstream.core.Stream
-  source: !class:recordstream.sources.HuggingFaceSource
+train_set: !class:recordstream.core.stream.Stream
+  source: !class:recordstream.sources.huggingface.HuggingFaceSource
     path: cppe-5
     split: train
     input_feature: image
@@ -48,8 +48,8 @@ train_set: !class:recordstream.core.Stream
     # count: 100             # uncomment to cap records for a quick smoke run
   ops: !ref:detection_ops
 
-val_set: !class:recordstream.core.Stream
-  source: !class:recordstream.sources.HuggingFaceSource
+val_set: !class:recordstream.core.stream.Stream
+  source: !class:recordstream.sources.huggingface.HuggingFaceSource
     path: cppe-5
     split: test               # cppe-5 ships train / test (no validation split)
     input_feature: image
