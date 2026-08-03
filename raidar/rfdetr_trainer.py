@@ -1,7 +1,7 @@
 """Native RF-DETR trainer/evaluator — wraps RF-DETR's OWN PyTorch-Lightning stack.
 
 Companion to :class:`raidar.detector.LightningDetector`. Where
-that trainer drives the bare ``LWDETR`` module through marainer's generic loop,
+that trainer drives the bare ``LWDETR`` module through matrainer's generic loop,
 this one hands off to RF-DETR's **own** training recipe — ``RFDETRModelModule`` +
 ``RFDETRDataModule`` + ``build_trainer`` (COCO-mAP eval via torchmetrics, EMA,
 best-checkpoint saving, LR schedule). It is the RF-DETR analogue of
@@ -71,7 +71,7 @@ def _metrics_to_payload(metrics: Optional[Mapping[str, Any]]) -> Dict[str, float
 
 
 def _write_metrics_sidecar(metrics: Optional[Mapping[str, Any]], out_path: Optional[str]) -> None:
-    """Dump a metrics dict to ``out_path`` as JSON (marainer's sidecar convention).
+    """Dump a metrics dict to ``out_path`` as JSON (matrainer's sidecar convention).
 
     Logger-agnostic stable schema downstream tooling (navigaitor's
     ``read_run_metrics``) can rely on regardless of which trainer produced the run.
@@ -108,7 +108,7 @@ def _sidecar_from_output_dir(output_dir: str, out_path: Optional[str]) -> None:
 
 def _enable_mlflow_system_metrics_if_tracking(enabled: bool) -> None:
     if enabled and os.environ.get("MLFLOW_TRACKING_URI"):
-        from marainer.tracking.system import enable_mlflow_system_metrics
+        from matrainer.tracking.system import enable_mlflow_system_metrics
 
         enable_mlflow_system_metrics()
 
@@ -170,7 +170,7 @@ class RFDETRTrainer:
             ``0..K-1``; head emits K+1 with background at K).
         class_names: Stream-mode ``{class_id: name}`` (required in Stream mode).
         aug_config: RF-DETR Albumentations augmentation override.
-        log_system_metrics: Enable marainer MLflow system metrics when
+        log_system_metrics: Enable matrainer MLflow system metrics when
             ``MLFLOW_TRACKING_URI`` is set.
     """
 
@@ -385,7 +385,7 @@ class RFDETREvaluator:
         num_classes: Foreground class count K (must match the trained run).
         class_names: ``{class_id: name}``.
         run_test: Run the test loop instead of validate.
-        log_system_metrics: Enable marainer MLflow system metrics when tracking.
+        log_system_metrics: Enable matrainer MLflow system metrics when tracking.
     """
 
     def __init__(

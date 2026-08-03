@@ -10,8 +10,8 @@ Roboflow's RF-DETR, and the Hugging Face transformers real-time detectors
 talks to native detection models and raw `torchmetrics` metrics directly, with a
 `task` knob (`fit`/`evaluate`/`test`/`predict`) its `run()` dispatches on. There
 is **no** adapter layer between trainer and loss/metric. It uses
-[Marainer](https://github.com/Gearlux/marainer) only for optional experiment
-tracking + `marainer.torch` utilities.
+[Matrainer](https://github.com/Gearlux/matrainer) only for optional experiment
+tracking + `matrainer.torch` utilities.
 
 The ultralytics-backed detectors (YOLO26, RT-DETR) plus the native
 ultralytics trainer/evaluator live in the
@@ -325,9 +325,9 @@ so checkpointing and logging are plain Lightning concerns. Wire stock
 `pytorch_lightning.loggers.*` classes via the `logger:` flat knob (or under the
 `lightning:` `L.Trainer` block), and add a `pytorch_lightning.callbacks.ModelCheckpoint`
 to the trainer's callbacks for best/last saving. For optional experiment tracking,
-wire `marainer.tracking` backends under `trackers:` — a `TrackingCallback` is
+wire `matrainer.tracking` backends under `trackers:` — a `TrackingCallback` is
 attached automatically, and system-metric + progress callbacks come for free. See
-marainer's README for the tracking backends.
+matrainer's README for the tracking backends.
 
 ## Examples
 
@@ -373,4 +373,4 @@ already in the manifest's `params`.
 
 Reading the identity is free and never builds the model: the properties consult stored
 configuration only. Adding one to your own wrapper is a single `model_refs` property — see
-[marainer's `uri` module](https://github.com/Gearlux/marainer).
+[matrainer's `uri` module](https://github.com/Gearlux/matrainer).

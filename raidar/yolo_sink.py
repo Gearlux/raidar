@@ -1,7 +1,7 @@
 """YoloSink — write a detection Stream to a native Ultralytics dataset dir.
 
 A RecordStream ``DataSink`` (``open`` / ``write(record)`` / ``flush`` / ``close``):
-``marainer convert`` streams a detection Stream into it via
+``matrainer convert`` streams a detection Stream into it via
 ``DatasetProcessor(stream=…, sink=YoloSink(…))``, exactly like any other
 source → ops → sink pipeline — there is no bespoke processor. Each
 record dict is materialised to the layout
@@ -17,7 +17,7 @@ record dict is materialised to the layout
       labels/<split>/<idx>.txt         # one line per box: class cx cy w h
 
 **One sink writes ONE split.** To build a train+val(+test) dataset, run
-``marainer convert`` once per split into the SAME ``output_dir`` (vary ``split``
+``matrainer convert`` once per split into the SAME ``output_dir`` (vary ``split``
 and the source); each run rewrites only its own ``images/<split>`` /
 ``labels/<split>`` / ``annotations/<split>.json`` and **merges** ``data.yaml``
 (and appends to ``metadata.jsonl``), so the splits accumulate without clobbering
@@ -236,7 +236,7 @@ class YoloSink(Storage):
     """DataSink that materialises one split of a detection Stream to a YOLO dataset dir.
 
     Wired as the ``sink:`` of a ``recordstream.processing.DatasetProcessor`` and run
-    via ``marainer convert``. Writes ``images/<split>`` + ``labels/<split>``
+    via ``matrainer convert``. Writes ``images/<split>`` + ``labels/<split>``
     (+ optional ``annotations/<split>.json``), appends per-image provenance to
     ``metadata.jsonl``, and merges ``data.yaml`` so repeated runs (one per
     split, same ``output_dir``) accumulate. Does no work in ``__init__``;

@@ -1,7 +1,7 @@
 """Tests for :class:`raidar.rfdetr.RFDETRModel` (torchvision-native).
 
 The native model returns a loss dict in train mode and a per-image
-predictions list in eval mode — the only detection path (the marainer-generic
+predictions list in eval mode — the only detection path (the matrainer-generic
 adapter wrappers were removed).
 """
 

@@ -4,8 +4,8 @@ A self-contained ``pytorch_lightning.LightningModule`` for torchvision-native de
 its OWN detection step functions (``forward(images, targets) → loss dict`` in train,
 ``forward(images) → per-image predictions`` in eval), ``configure_optimizers``, and a ``run()``
 that builds the loaders + ``pl.Trainer`` and calls ``fit`` / ``test`` / ``predict`` per the ``task``
-knob. marainer is used ONLY for optional experiment tracking + the small ``ensure_record_dataset``
-utility. Remove marainer and this class still trains.
+knob. matrainer is used ONLY for optional experiment tracking + the small ``ensure_record_dataset``
+utility. Remove matrainer and this class still trains.
 
 Detection specifics it owns: the native torchvision model contract (loss dict summed to the
 optimisation scalar; per-image ``{boxes, scores, labels}`` fed to ``MeanAveragePrecision``), and
@@ -24,9 +24,9 @@ import torch.nn as nn
 from confluid import Fluid, Lazy, LazyClass, Mandatory, configurable, flow, output
 from confluid.registry import resolve_class
 from loggair import get_logger
-from marainer.lightning import TrackingCallback, activate_for_lightning, attach_lightning_progress, scalar_metrics
-from marainer.run_names import generate_run_name
-from marainer.tracking.base import Tracker
+from matrainer.lightning import TrackingCallback, activate_for_lightning, attach_lightning_progress, scalar_metrics
+from matrainer.run_names import generate_run_name
+from matrainer.tracking.base import Tracker
 from pytorch_lightning.loggers import Logger
 from recordstream import PredictionsSink, RecordSource, Regions, ensure_record_dataset
 from recordstream.runnable import ProgressReporting, TorchRunner, entrypoint, run_entrypoint
@@ -411,7 +411,7 @@ class LightningDetector(TorchRunner, ProgressReporting, L.LightningModule):
     def _finalize_metrics(self, metrics: Any) -> None:
         if metrics is None or self.metrics_sidecar_path is None:
             return
-        from marainer.lightning import coerce_metric_value
+        from matrainer.lightning import coerce_metric_value
 
         try:
             payload = coerce_metric_value(metrics.compute())

@@ -2,7 +2,7 @@
 :class:`~raidar.detector.LightningDetector`.
 
 This module holds the small, detector-agnostic pieces the **native** detection
-path needs — there is no adapter / indirection layer (the marainer-generic
+path needs — there is no adapter / indirection layer (the matrainer-generic
 ``DetectionStepOutput`` + ``TorchvisionDetectionLoss`` + ``DetectionMetricAdapter``
 path was removed; detection now runs exclusively through the specialised trainer
 that drives torchvision-native models and raw ``torchmetrics`` metrics directly):

@@ -2,7 +2,7 @@
 
 The sink is a RecordStream DataSink (open/write/flush/close) written one split at a
 time; repeated runs into the same output_dir merge data.yaml + metadata.jsonl.
-``marainer convert`` drives it via DatasetProcessor(stream, sink); the tests
+``matrainer convert`` drives it via DatasetProcessor(stream, sink); the tests
 exercise it directly (and through a Stream) since that's the same write path.
 """
 
