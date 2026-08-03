@@ -21,7 +21,7 @@ from typing import Any, Dict, Iterable, List, Literal, Optional, Union, cast
 import pytorch_lightning as L
 import torch
 import torch.nn as nn
-from confluid import Fluid, Lazy, LazyClass, Mandatory, configurable, flow, get_hierarchy_from_instance, output
+from confluid import Fluid, Lazy, LazyClass, Mandatory, configurable, flow, output
 from confluid.registry import resolve_class
 from loggair import get_logger
 from marainer.lightning import TrackingCallback, activate_for_lightning, attach_lightning_progress, scalar_metrics
@@ -381,25 +381,12 @@ class LightningDetector(TorchRunner, ProgressReporting, L.LightningModule):
         trainer = cast(L.Trainer, flow(self.lightning))
         if self.trackers:
             self._trackers = list(self.trackers)
-            cb = TrackingCallback(self._trackers, params=self._config_params())
+            cb = TrackingCallback(self._trackers, runnable=self)
             trainer.callbacks.append(cb)  # type: ignore[attr-defined]
         attach_lightning_progress(trainer, self)
         if self.log_system_metrics:
             activate_for_lightning(trainer)
         return trainer
-
-    def _config_params(self) -> Dict[str, Any]:
-        """Flat ``{dotted-path: live value}`` of this runnable's configuration, for tracker params.
-
-        Walks the FLOWED object graph (not the static signature), so it sees defaults the user
-        never wrote into YAML plus post-construction keys. ``log_run_context`` keeps only the
-        JSON-scalar values, so nested objects here are harmless. Best-effort by design: a
-        tracking detail must never take down a training run.
-        """
-        try:
-            return {path: value for path, (_, value, _) in get_hierarchy_from_instance(self).items()}
-        except Exception:  # pragma: no cover - best effort
-            return {}
 
     def _write_predictions(self, preds: Any, batch: Any) -> None:
         per_record_meta = None
