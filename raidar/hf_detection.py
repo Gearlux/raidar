@@ -48,8 +48,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 from confluid import configurable
 from loggair import get_logger
-from marainer.torch import load_lightning_checkpoint
-from marainer.uri import ModelRef, file_model_ref, hf_model_ref
+from matrainer.torch import load_lightning_checkpoint
+from matrainer.uri import ModelRef, file_model_ref, hf_model_ref
 from recordstream import DetectionOutput
 from torch import Tensor
 
@@ -219,7 +219,7 @@ class HFDetectionModel(nn.Module):
 
     @property
     def model_refs(self) -> List[ModelRef]:
-        """The weight artifacts this detector loads — see :mod:`marainer.uri`.
+        """The weight artifacts this detector loads — see :mod:`matrainer.uri`.
 
         ``model_id`` IS a Hub repository id, so nothing has to be resolved. Inherited by every
         subclass here, because they differ only in which id they default to.

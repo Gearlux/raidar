@@ -1,4 +1,4 @@
-"""Raidar: object-detection models and trainers for the Marainer workflow."""
+"""Raidar: object-detection models and trainers for the Matrainer workflow."""
 
 from raidar.detection import (
     DetectionBatchInput,

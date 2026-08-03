@@ -1,4 +1,4 @@
-"""Each detector names the weight artifacts it loads (``marainer.uri``).
+"""Each detector names the weight artifacts it loads (``matrainer.uri``).
 
 These wrappers build their detector in ``__init__`` — constructing one downloads COCO-pretrained
 weights — so the property is exercised against a stand-in carrying the attributes it reads. That
@@ -10,7 +10,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, List
 
-from marainer.uri import ModelRef
+from matrainer.uri import ModelRef
 
 from raidar.hf_detection import HFDetectionModel
 from raidar.rfdetr import RFDETR_URI_PREFIX, RFDETRModel

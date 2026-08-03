@@ -1,6 +1,6 @@
 """Tests for the native detection plumbing in :mod:`raidar.detection`.
 
-The marainer-generic adapter layer (``DetectionStepOutput`` /
+The matrainer-generic adapter layer (``DetectionStepOutput`` /
 ``TorchvisionDetectionLoss`` / ``DetectionMetricAdapter``) was removed —
 detection runs exclusively through the specialised trainer/evaluator. What
 remains here is the batch container + collate the native path uses; the

@@ -3,7 +3,7 @@
 #
 # Run:
 #   raidar-rfdetr evaluate examples/rfdetr_evaluate_stream.yaml
-#   marainer rfdetr-evaluate examples/rfdetr_evaluate_stream.yaml
+#   matrainer rfdetr-evaluate examples/rfdetr_evaluate_stream.yaml
 #
 # The evaluator loads the checkpoint via RF-DETR's own weight loader, so `variant`
 # and `num_classes` MUST match the trained run. Labels are 0-indexed (see the train

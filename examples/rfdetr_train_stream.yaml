@@ -4,11 +4,11 @@
 #
 # Run:
 #   raidar-rfdetr train examples/rfdetr_train_stream.yaml
-#   marainer rfdetr-train examples/rfdetr_train_stream.yaml
+#   matrainer rfdetr-train examples/rfdetr_train_stream.yaml
 #
 # This is the RF-DETR analogue of train_fasterrcnn_cppe5_hf.yaml, but it drives
 # RF-DETR's NATIVE trainer (RFDETRModelModule / RFDETRDataModule / build_trainer —
-# COCO-mAP eval, EMA, best-checkpoint saving) instead of marainer's generic loop.
+# COCO-mAP eval, EMA, best-checkpoint saving) instead of matrainer's generic loop.
 # Hard deps: `pip install 'rfdetr[train,loggers]' faster-coco-eval`.
 #
 # ⚠️ 0-INDEXED LABELS. RF-DETR reserves the background class at index K (= num_classes),

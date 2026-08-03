@@ -19,7 +19,7 @@ the same bucket as ``RFDETRModel``) + ``lazy=True`` so:
   ``LazyClass(builder, …)``) wires STRAIGHT into a detection trainer's ``model`` slot — no Retag.
 
 Registered with a presentation-only ``group="detection"`` for palette nesting (mirroring how
-``marainer.lightning.configurables`` groups the torch optimizers). The ``role="model"`` is what lets these raw
+``matrainer.lightning.configurables`` groups the torch optimizers). The ``role="model"`` is what lets these raw
 builders sit beside the raidar wrapper class (``RFDETRModel``) in every model picker.
 
 Mask R-CNN / Keypoint R-CNN are intentionally excluded — they need instance masks / keypoints in the

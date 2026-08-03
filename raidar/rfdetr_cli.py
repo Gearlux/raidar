@@ -2,8 +2,8 @@
 
 Provides ``raidar-rfdetr train`` / ``raidar-rfdetr evaluate`` (the native RF-DETR
 escape hatch, parallel to ``raidar train`` which drives the generic Lightning
-detection path). The same verbs mount under ``marainer rfdetr-train`` /
-``marainer rfdetr-evaluate`` via :mod:`raidar.rfdetr_plugin`.
+detection path). The same verbs mount under ``matrainer rfdetr-train`` /
+``matrainer rfdetr-evaluate`` via :mod:`raidar.rfdetr_plugin`.
 """
 
 from liquifai import LiquifyApp

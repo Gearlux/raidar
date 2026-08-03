@@ -4,7 +4,7 @@
 #
 # Run:
 #   raidar-rfdetr train examples/rfdetr_train_disk.yaml
-#   marainer rfdetr-train examples/rfdetr_train_disk.yaml
+#   matrainer rfdetr-train examples/rfdetr_train_disk.yaml
 #
 # Hard deps: `pip install 'rfdetr[train,loggers]' faster-coco-eval`.
 #
