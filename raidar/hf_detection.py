@@ -49,6 +49,7 @@ import torch.nn.functional as F
 from confluid import configurable
 from loggair import get_logger
 from marainer.torch import load_lightning_checkpoint
+from marainer.uri import ModelRef, file_model_ref, hf_model_ref
 from recordstream import DetectionOutput
 from torch import Tensor
 
@@ -178,6 +179,10 @@ class HFDetectionModel(nn.Module):
             raise ValueError(f"image_size must be a multiple of 32, got {image_size}.")
         self.model_id = model_id
         self.num_classes = int(num_classes)
+        # Kept so the model can name its own weight artifacts (`model_refs`) — a value the
+        # run record needs cannot be one the constructor consumes and forgets.
+        self.pretrained = bool(pretrained)
+        self.checkpoint_path = checkpoint_path
         self.image_size = int(image_size)
         self.score_threshold = float(score_threshold)
 
@@ -211,6 +216,20 @@ class HFDetectionModel(nn.Module):
                 img = F.interpolate(img.unsqueeze(0), size=(s, s), mode="bilinear", align_corners=False).squeeze(0)
             resized.append(img)
         return torch.stack(resized), sizes
+
+    @property
+    def model_refs(self) -> List[ModelRef]:
+        """The weight artifacts this detector loads — see :mod:`marainer.uri`.
+
+        ``model_id`` IS a Hub repository id, so nothing has to be resolved. Inherited by every
+        subclass here, because they differ only in which id they default to.
+        """
+        refs: List[ModelRef] = []
+        if self.pretrained and self.model_id:
+            refs.append(hf_model_ref(self.model_id))
+        if self.checkpoint_path:
+            refs.append(file_model_ref(self.checkpoint_path))
+        return refs
 
     def forward(
         self,

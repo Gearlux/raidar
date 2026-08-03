@@ -28,10 +28,16 @@ import torch.nn as nn
 from confluid import configurable
 from loggair import get_logger
 from marainer.torch import load_lightning_checkpoint
+from marainer.uri import ModelRef, file_model_ref
 from recordstream import DetectionOutput
 from torch import Tensor
 
 logger = get_logger(__name__)
+
+#: Scheme naming the RF-DETR zoo in a model reference. The library downloads a variant's
+#: COCO-pretrained checkpoint from its own release assets, so the variant IS the identifier and
+#: there is no repository page to link — see :attr:`RFDETRModel.model_refs`.
+RFDETR_URI_PREFIX = "rfdetr://"
 
 _VARIANT_CLASSES: Dict[str, str] = {
     "nano": "RFDETRNano",
@@ -186,6 +192,10 @@ class RFDETRModel(nn.Module):
         self.num_classes = int(num_classes)
         self.variant = variant
         self.score_threshold = float(score_threshold)
+        # Kept so the model can name its own weight artifacts (`model_refs`) — a value the
+        # run record needs cannot be one the constructor consumes and forgets.
+        self.pretrained_detector = bool(pretrained_detector)
+        self.checkpoint_path = checkpoint_path
 
         rfdetr = _build_rfdetr(
             variant=variant,
@@ -228,6 +238,20 @@ class RFDETRModel(nn.Module):
             zero,
         )
         return total
+
+    @property
+    def model_refs(self) -> List[ModelRef]:
+        """The weight artifacts this detector loads — see :mod:`marainer.uri`.
+
+        A variant names one COCO-pretrained checkpoint the library fetches from its own release
+        assets; there is no repository URL to open, so none is invented.
+        """
+        refs: List[ModelRef] = []
+        if self.pretrained_detector and self.variant:
+            refs.append(ModelRef(uri=f"{RFDETR_URI_PREFIX}{self.variant}"))
+        if self.checkpoint_path:
+            refs.append(file_model_ref(self.checkpoint_path))
+        return refs
 
     def forward(
         self,

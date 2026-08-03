@@ -353,3 +353,24 @@ End-to-end YAML in `examples/`:
 ## License
 
 MIT.
+
+## What the run record says about the model
+
+Every model wrapper here names the weight artifacts it loads, so a run's manifest points at them
+instead of leaving a reader to work out which registry resolves a bare architecture name. Nothing
+has to be called for it — the tracking layer walks the configured graph and records what it finds:
+
+```yaml
+models:
+- {kind: hf, name: ustc-community/dfine-small-coco, role: pretrained, slot: model,
+   url: 'https://huggingface.co/ustc-community/dfine-small-coco'}
+```
+
+**One wrapper may report several**, each with the `role` it played: `pretrained` for weights that
+came from outside the run, `checkpoint` for weights a previous run wrote. A model trained from
+scratch loaded no artifact and records nothing — the architecture it used is configuration, and is
+already in the manifest's `params`.
+
+Reading the identity is free and never builds the model: the properties consult stored
+configuration only. Adding one to your own wrapper is a single `model_refs` property — see
+[marainer's `uri` module](https://github.com/Gearlux/marainer).
