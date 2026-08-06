@@ -1,4 +1,4 @@
-"""Tests for :class:`raidar.detection.DetectionConfusionMatrix`.
+"""Tests for :class:`raidar.torch_detection.DetectionConfusionMatrix`.
 
 Synthetic-box scenarios drive every TP / FP / FN branch of the greedy
 class-aware matcher. ``DetectionConfusionMatrix`` is a native
@@ -12,7 +12,7 @@ import pytest
 import torch
 from torch import Tensor
 
-from raidar.detection import DetectionConfusionMatrix, DetectionOutput
+from raidar.torch_detection import DetectionConfusionMatrix, DetectionOutput
 
 
 def _pred(boxes: List[List[float]], scores: List[float], labels: List[int]) -> DetectionOutput:

@@ -1,4 +1,4 @@
-"""Tests for the specialised :class:`raidar.detector.LightningDetector`.
+"""Tests for the specialised :class:`raidar.lightning_detector.LightningDetector`.
 
 These tests cover the **native** path — overridden ``training_step`` /
 ``validation_step`` / ``test_step`` consume torchvision-native models
@@ -14,15 +14,15 @@ import pytorch_lightning as L
 import torch
 import torch.nn as nn
 from confluid import LazyClass
-from recordstream import Image, Record, Regions
+from recordstream import Image, Record, Regions, collate_list
 from recordstream.core import Stream
 from recordstream.runnable import runnable_entrypoints
 from torch import Tensor
 from torchmetrics import MetricCollection
 from torchmetrics.detection import MeanAveragePrecision
 
-from raidar.detection import DetectionConfusionMatrix, detection_collate_fn
-from raidar.detector import DetectorTask, LightningDetector, _model_num_classes
+from raidar.lightning_detector import DetectorTask, LightningDetector, _model_num_classes
+from raidar.torch_detection import DetectionConfusionMatrix
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -88,7 +88,7 @@ def _make_records(n: int = 4, size: int = 32) -> List[Record]:
 
 
 def _make_batch(n: int = 2, size: int = 32) -> Record:
-    return detection_collate_fn(_make_records(n=n, size=size))
+    return cast(Dict[str, Any], collate_list(_make_records(n=n, size=size)))
 
 
 def _make_stream(n: int = 4, size: int = 32) -> Stream:
@@ -114,30 +114,85 @@ def test_loss_fn_is_none() -> None:
     assert trainer.loss_fn is None
 
 
-def test_train_metrics_default_none() -> None:
+def test_there_is_deliberately_no_train_metrics_slot() -> None:
+    """A torchvision-native model in train mode returns ONLY the loss dict — there are no
+    train-split predictions to score, so a `train_metrics` slot would accept a wired set and
+    silently never call it (the deltaid huggingface-backend precedent)."""
+    import inspect
+
+    assert "train_metrics" not in inspect.signature(LightningDetector.__init__).parameters
+    trainer = LightningDetector(model=_NativeDetector(), train_set=_make_stream(4), num_classes=2)
+    assert not hasattr(trainer, "train_metrics")
+
+
+def test_metric_slots_default_to_sentinels_resolved_at_initialize() -> None:
+    """`None` means "not chosen", never "no metric" — the COCO-mAP default arrives in
+    `initialize()`, built per split and prefixed, so an explicitly wired metric is never
+    silently replaced."""
     trainer = LightningDetector(
         model=_NativeDetector(),
         train_set=_make_stream(4),
         num_classes=2,
     )
-    assert trainer.train_metrics is None
-
-
-def test_val_test_metrics_default_to_lazy_map() -> None:
-    """Default ``val_metrics`` / ``test_metrics`` are ``Class(MeanAveragePrecision, ...)``
-    so they're independent and materialise through the base trainer's ``flow()`` step."""
-    from confluid.fluid import Class as ConfluidClass
-
-    trainer = LightningDetector(
-        model=_NativeDetector(),
-        train_set=_make_stream(4),
-        num_classes=2,
-    )
-    assert isinstance(trainer.val_metrics, ConfluidClass)
-    assert isinstance(trainer.test_metrics, ConfluidClass)
+    assert trainer.metrics is None and trainer.val_metrics is None and trainer.test_metrics is None
+    trainer.initialize()
+    assert isinstance(trainer.val_metrics, MetricCollection)
+    assert isinstance(trainer.test_metrics, MetricCollection)
     assert trainer.val_metrics is not trainer.test_metrics
-    assert trainer.val_metrics.target is MeanAveragePrecision
-    assert trainer.val_metrics.kwargs.get("iou_type") == "bbox"
+    assert any(str(k).startswith("val/") for k in trainer.val_metrics.keys())
+    assert any(isinstance(m, MeanAveragePrecision) for m in trainer.val_metrics.values())
+
+
+def test_a_split_slot_adds_to_the_shared_set_for_that_split_only() -> None:
+    """`metrics:` is what every eval split measures; `val_metrics:` is what validation measures on
+    top — merged by name through `matrainer.metric_slots.merge_metric_specs`, never replaced."""
+    trainer = LightningDetector(
+        model=_NativeDetector(),
+        train_set=_make_stream(4),
+        num_classes=2,
+        val_metrics={"confusion": DetectionConfusionMatrix(iou_threshold=0.5)},
+    )
+    trainer.initialize()
+    val_keys = set(cast(MetricCollection, trainer.val_metrics).keys())
+    test_keys = set(cast(MetricCollection, trainer.test_metrics).keys())
+    assert "val/confusion" in val_keys, val_keys
+    assert any(str(k).startswith("val/map") for k in val_keys), "the shared default must survive the merge"
+    assert "test/confusion" not in test_keys, "a val-only metric must not widen to the test split"
+
+
+def test_a_second_initialize_does_not_reprefix(caplog: Any) -> None:
+    """`run()` calls `initialize()` every time; `_metrics_built` is what stops a second pass
+    re-prefixing `val/` into `val/val/`."""
+    trainer = LightningDetector(model=_NativeDetector(), train_set=_make_stream(4), num_classes=2)
+    trainer.initialize()
+    first = list(cast(MetricCollection, trainer.val_metrics).keys())
+    trainer.initialize()
+    assert list(cast(MetricCollection, trainer.val_metrics).keys()) == first
+
+
+def test_there_is_no_logger_knob_and_trackers_is_a_ctor_param() -> None:
+    """The `logger:` slot is DELETED — `trackers:` is the whole of a run's output wiring, and it
+    MUST be a constructor param: confluid gates LIST broadcast on the receiving slot's
+    annotation, so a post-construction attribute would make `trackers: [...]` in YAML silently
+    do nothing."""
+    import inspect
+
+    params = inspect.signature(LightningDetector.__init__).parameters
+    assert "logger" not in params
+    assert "trackers" in params and "metric_names" in params
+    # Stored VERBATIM (lazy-init): the ctor must not iterate or normalize the value.
+    marker = object()
+    trainer = LightningDetector(model=_NativeDetector(), trackers=cast(Any, marker))
+    assert trainer.trackers is marker
+
+
+def test_reportable_metrics_filters_the_classes_bookkeeping_key() -> None:
+    """MAP's `classes` entry is the OBSERVED class ids, not a metric — left in, it is logged as a
+    bogus scalar (one class seen) or rendered as a bogus per-class table (several seen)."""
+    values = {"val/map": torch.tensor(0.5), "val/classes": torch.tensor([1, 2]), "val/map_50": torch.tensor(0.6)}
+    from raidar.torch_detection import reportable_metrics
+
+    assert set(reportable_metrics(values)) == {"val/map", "val/map_50"}
 
 
 def test_user_supplied_instance_metric_passes_through() -> None:
@@ -163,8 +218,7 @@ def test_metric_collection_with_native_confusion_matrix_construction() -> None:
     assert trainer.val_metrics is coll
 
 
-def test_default_loader_uses_detection_collate_fn() -> None:
-    from functools import partial
+def test_default_loader_DECLARES_the_list_collate() -> None:
 
     from confluid.fluid import Class as ConfluidClass
 
@@ -173,12 +227,13 @@ def test_default_loader_uses_detection_collate_fn() -> None:
         train_set=_make_stream(4),
         num_classes=2,
     )
-    # The collate is a partial binding the configured record keys onto detection_collate_fn.
     for loader in (trainer.train_loader, trainer.val_loader):
         assert isinstance(loader, ConfluidClass)
         collate = loader.kwargs.get("collate_fn")
-        assert isinstance(collate, partial) and collate.func is detection_collate_fn
-        assert collate.keywords == {"input_key": "image", "target_key": "target"}
+        # DECLARED, not inherited: the native forward takes List[Tensor], so the loaders ask
+        # recordstream for the unstacked batch rather than relying on ToTensor's plain
+        # tensors happening to skip stacking.
+        assert collate is collate_list
 
 
 # ---------------------------------------------------------------------------
@@ -202,8 +257,6 @@ def test_training_step_sums_native_loss_dict_with_grad() -> None:
 
 
 def test_training_step_rejects_missing_targets() -> None:
-    from raidar.detection import DetectionBatchInput
-
     trainer = LightningDetector(
         model=_NativeDetector(),
         train_set=_make_stream(4),
@@ -211,7 +264,7 @@ def test_training_step_rejects_missing_targets() -> None:
     )
     trainer.train()
     batch: Record = {
-        "detection": DetectionBatchInput(images=[torch.rand(3, 32, 32)], targets=None),
+        "image": [torch.rand(3, 32, 32)],
         "targets": [],
         "metadata": [{}],
     }
@@ -294,22 +347,15 @@ def test_end_to_end_native_trainer_fit(tmp_path: Any) -> None:
         default_root_dir=str(tmp_path),
         accelerator="cpu",
     )
-    # The base trainer's run() flow()s val_metrics from the Class wrapper. Mirror
-    # that here so the metric materialises before fit().
-    from confluid import flow
-
-    trainer.val_metrics = flow(trainer.val_metrics)
-    trainer.test_metrics = flow(trainer.test_metrics)
+    # run() resolves the metric sentinels + builds the per-split collections in initialize().
+    # Mirror that here so the metrics materialise before fit().
+    trainer.initialize()
     # `cast`: a Stream is map-style (`__len__`/`__getitem__`) and DataLoader duck-types its
     # argument at runtime, but torch's STUB declares `Dataset[T]`. Stream deliberately no
     # longer inherits that base — it made torch a hard dependency of a numpy engine — so the
     # stub's stricter view is bridged here rather than by re-coupling the engine.
-    trainer.train_loader = torch.utils.data.DataLoader(
-        cast(Any, train_stream), batch_size=2, collate_fn=detection_collate_fn
-    )
-    trainer.val_loader = torch.utils.data.DataLoader(
-        cast(Any, val_stream), batch_size=2, collate_fn=detection_collate_fn
-    )
+    trainer.train_loader = torch.utils.data.DataLoader(cast(Any, train_stream), batch_size=2, collate_fn=collate_list)
+    trainer.val_loader = torch.utils.data.DataLoader(cast(Any, val_stream), batch_size=2, collate_fn=collate_list)
 
     lightning_trainer.fit(
         model=trainer,

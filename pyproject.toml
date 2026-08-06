@@ -1,57 +1,116 @@
 [project]
 name = "raidar"
 version = "0.1.0"
-description = "Object-detection models and a standard-Lightning detector (Faster R-CNN, RF-DETR, D-FINE, RT-DETRv2)."
+description = "Object detection across training backends, driven by one config (torchvision, RF-DETR, HF detectors)."
 authors = [{name = "Taidal"}]
 license = {text = "MIT"}
+# The CORE is backend-free: `pip install raidar` gives the CLI and the config surface only, so a
+# machine that has not chosen a training framework never installs one. Every ML framework lives in
+# the extra of the backend that needs it (see `[project.optional-dependencies]`), and every
+# backend-owned name in `raidar/__init__.py` resolves lazily to match.
 dependencies = [
-    # matrainer provides OPTIONAL tracking + torch utilities (ensure_record_dataset /
-    # load_lightning_checkpoint / DetectionOutput contracts). raidar's LightningDetector is a
-    # standard pl.LightningModule and trains without matrainer (a couple of tracking lines drop out).
-    "matrainer[lightning,mlflow,tensorboard]>=0.1.0",
-    "confluid>=0.1.0",
+    "confluid>=0.3.0",
     "recordstream>=0.1.0",
+    "liquifai>=0.1.0",
     "loggair>=0.1.0",
-    "torch",
-    "torchvision",
-    "torchmetrics[detection]",
-    "pycocotools",
-    "pytorch-lightning",
-    # rfdetr[train,loggers]: the [train] extra pulls PTL + RF-DETR's native training
-    # stack (RFDETRModelModule / RFDETRDataModule / build_trainer) the native
-    # RFDETRTrainer drives; [loggers] pulls its TensorBoard/MLflow integrations.
-    "rfdetr[train,loggers]>=1.6.0",
-    # RF-DETR's COCOEvalCallback computes mAP via torchmetrics' faster_coco_eval
-    # backend; it is NOT pulled by rfdetr[train], so eval needs it explicitly.
-    "faster-coco-eval",
-    # Hugging Face transformers detectors (D-FINE / RT-DETRv2 — raidar.hf_detection),
-    # both Apache-2.0. transformers>=4.49 has DFineForObjectDetection (v4.48) +
-    # RTDetrV2ForObjectDetection (v4.49); timm backs the detection backbones; scipy
-    # provides the Hungarian matcher used in the DETR-family training loss.
-    "transformers>=4.49",
-    "timm",
-    "scipy",
+    # matrainer is the TRACKING library (and the metric-slot rule + artifact writers). Its own
+    # core install is light — no torch — so it belongs here rather than in a backend extra.
+    "matrainer>=0.1.0",
 ]
 requires-python = ">=3.12"
 
-[project.entry-points."confluid.configurables"]
-raidar = "raidar"
-# torchvision detection builder FUNCTIONS (lazy, role-less) — see raidar/configurables.py.
-raidar-configurables = "raidar.configurables"
-
-[project.scripts]
-raidar = "raidar.cli:main"
-raidar-rfdetr = "raidar.rfdetr_cli:main"
-
-# Liquifai app registration: lets `liquifai-install-completions` discover this
-# CLI via an instant entry-point metadata read instead of executing the binary
-# (subprocess probe, 15 s timeout each). Name = the app/binary name; value =
-# the LiquifyApp instance. Entry-point changes need an editable reinstall.
-[project.entry-points."liquifai.apps"]
-raidar = "raidar.cli:app"
-raidar-rfdetr = "raidar.rfdetr_cli:app"
-
 [project.optional-dependencies]
+# One extra per training backend. `aisland framework set lightning …` installs the ones the
+# workspace has selected across every project that declares them (see [tool.aisland] below).
+#
+# `torch` is the BASE of the torch-family backends (lightning / torch / fastai): it carries the
+# native model contract's stack — torchvision detectors, the torchmetrics detection metric set,
+# the batch plumbing — so each of those declares `raidar[torch]` rather than restating the list.
+torch = [
+    "matrainer[torch]>=0.1.0",
+    "recordstream[torch]>=0.1.0",
+    "torch",
+    "torchvision",
+    # [detection] pulls pycocotools' torchmetrics glue; pycocotools restated because the
+    # detection target ops and the COCO-format examples read it directly.
+    "torchmetrics[detection]",
+    "pycocotools",
+]
+lightning = [
+    "raidar[torch]",
+    "matrainer[lightning]>=0.1.0",
+    "pytorch-lightning",
+]
+# TWO upper bounds, both upstream breaks measured in this workspace (2026-07-30, fastai 2.8.7)
+# and both removable when upstream fixes them — do NOT delete them as "hardcoded versions":
+# `fastcore<2` (fastai's own `Optimizer.set_hypers` still calls `L.starmap`, removed in fastcore
+# 2.x, so every `fit_one_cycle` dies at the first `create_opt()`) and `fastprogress<1.1` (1.1
+# added a `python-fasthtml` dependency that drags `starlette` past other workspace pins, and it
+# requires the fastcore major the first bound excludes).
+fastai = [
+    "raidar[torch]",
+    "fastai>=2.7",
+    "fastcore<2",
+    "fastprogress<1.1",
+]
+# `transformers` runs its detectors on torch, and the DETR-family loss needs scipy's Hungarian
+# matcher; timm backs several detection backbones. transformers>=4.49: DFineForObjectDetection
+# landed in v4.48, RTDetrV2ForObjectDetection in v4.49 — both reachable as plain `model_name`
+# strings through the ONE generic wrapper.
+huggingface = [
+    "raidar[torch]",
+    "transformers>=4.49",
+    "accelerate>=0.30",
+    "timm",
+    "scipy",
+]
+# Keras 3 is an API, not an engine — it needs ONE compute backend underneath (torch / TF /
+# jax), and `recordstream.keras` (which `raidar/_keras.py` imports through) selects whichever is
+# installed. This extra names bare `torch` TWICE over: as the engine Keras runs on here, and
+# because the detection target chain is torch-shaped (`CocoToTorchVisionDetection` emits torch
+# boxes; the shared `ToTensor` carries the RGB coercion). NOT raidar[torch]: the torchvision zoo,
+# torchmetrics and pycocotools belong to the torch backends — a Keras config wires the shared
+# FCOS spec and scores with the spec's own numpy AP.
+keras = [
+    "keras>=3.0",
+    "torch",
+    "recordstream[keras,torch]>=0.1.0",
+    "matrainer[keras]>=0.1.0",
+]
+tensorflow = [
+    "keras>=3.0",           # Keras 3 IS tf.keras in TF >= 2.16
+    "tensorflow>=2.16",     # ...this extra's engine
+    "torch",                # the detection target chain is torch-shaped (see the keras extra)
+    "recordstream[keras,torch]>=0.1.0",
+    "matrainer[keras]>=0.1.0",
+]
+# JAX brings NO detection zoo to wrap (`transformers` dropped Flax in v5), so this extra
+# installs only its framework and trains the shared FCOS spec. `torch` for the same target-chain
+# reason as the keras extra; recordstream[keras] for RecordSequence, reused verbatim.
+jax = [
+    "jax>=0.4",
+    "flax>=0.8",            # NNX is the current Flax module API
+    "optax>=0.2",           # the optimizers and the stable BCE the spec loss uses
+    "torch",
+    "recordstream[keras,torch]>=0.1.0",
+    "matrainer>=0.1.0",
+]
+# MLX is Apple-silicon ONLY — a property of the framework. The platform marker keeps
+# `pip install raidar[mlx]` succeeding (and empty) elsewhere.
+mlx = [
+    "mlx>=0.20; sys_platform == 'darwin' and platform_machine == 'arm64'",
+    "torch",
+    "recordstream[keras,torch]>=0.1.0",
+    "matrainer>=0.1.0",
+]
+# RF-DETR's own training stack (Apache-2.0). rfdetr[train] pulls PTL + the native training loop
+# (`RFDETRModelModule` / `RFDETRDataModule` / `build_trainer`) that `RFDETRDetector` drives;
+# [loggers] pulls its TensorBoard/MLflow integrations. `faster-coco-eval` is the torchmetrics
+# backend RF-DETR's `COCOEvalCallback` needs for mAP — NOT pulled by rfdetr[train].
+rfdetr = [
+    "rfdetr[train,loggers]>=1.6.0",
+    "faster-coco-eval",
+]
 dev = [
     "black>=24.0.0,<25.0.0",
     "isort>=5.13.0,<6.0.0",
@@ -60,6 +119,61 @@ dev = [
     "pytest>=7.0.0,<9.0.0",
     "pytest-cov>=4.0.0,<7.0.0",
 ]
+
+# Which training backends this project OFFERS. `aisland framework list` reads it; what actually
+# installs is the workspace-wide selection in the committed `config.toml`, so a machine that has
+# not selected a backend builds raidar without it. `ultralytics` is NOT here: that backend is the
+# raidar-ultralytics SIBLING package (AGPL isolation), not an extra of this one.
+[tool.aisland]
+frameworks = ["torch", "lightning", "fastai", "huggingface", "rfdetr", "keras", "tensorflow", "jax", "mlx"]
+trackers = ["mlflow", "tensorboard"]
+
+[project.scripts]
+raidar = "raidar.cli:main"
+
+# Liquifai app registration: lets `liquifai-install-completions` discover this
+# CLI via an instant entry-point metadata read instead of executing the binary
+# (subprocess probe, 15 s timeout each). Name = the app/binary name; value =
+# the LiquifyApp instance. Entry-point changes need an editable reinstall.
+[project.entry-points."liquifai.apps"]
+raidar = "raidar.cli:app"
+
+# ONE entry point per REGISTERING module — never the package. `import raidar` registers nothing
+# (every backend-owned name is lazy, so a machine without torch never imports it), so discovery
+# runs entirely off this table: a scanner imports each module named here, and the import is what
+# executes the `@configurable` decorators / `register(...)` calls. A module missing from this list
+# registers NOTHING, and the failure is silent in every way a developer would notice — a dotted
+# path in YAML still imports the module itself, and the CLI imports its own backend, so only
+# navigaitor's pickers, the form-specs and the StreamStudio palette go blind, by offering FEWER
+# options.
+#
+# Naming: `raidar-<backend>` for a runnable, `raidar-<backend>-model` for a zoo wrapper. After
+# changing this table, reinstall the editable (`uv pip install -e ./raidar --no-deps`) for the
+# metadata to take effect. `tests/test_entry_points.py` DERIVES the expectation from the tree.
+[project.entry-points."confluid.configurables"]
+raidar-lightning = "raidar.lightning_detector"
+raidar-torch = "raidar.torch_detector"
+raidar-huggingface = "raidar.huggingface_detector"
+raidar-fastai = "raidar.fastai_detector"
+raidar-rfdetr = "raidar.rfdetr_detector"
+raidar-rfdetr-model = "raidar.rfdetr"
+raidar-huggingface-model = "raidar.huggingface_model"
+# The torch engine's module: the native batch plumbing + the registered metric set.
+raidar-torch-detection = "raidar.torch_detection"
+# The shared FCOS spec's implementations + its dense-target op (raidar/fcos/).
+raidar-torch-fcos = "raidar.fcos.torch_fcos"
+raidar-keras-fcos = "raidar.fcos.keras_fcos"
+raidar-fcos-targets = "raidar.fcos.targets"
+raidar-keras = "raidar.keras_detector"
+raidar-tensorflow-fcos = "raidar.fcos.tensorflow_fcos"
+raidar-tensorflow = "raidar.tensorflow_detector"
+raidar-flax-fcos = "raidar.fcos.flax_fcos"
+raidar-jax = "raidar.jax_detector"
+raidar-mlx-fcos = "raidar.fcos.mlx_fcos"
+raidar-mlx = "raidar.mlx_detector"
+# torchvision detection builder FUNCTIONS (lazy, `register`-ed).
+raidar-torchvision-detection = "raidar.torchvision_detection"
+raidar-yolo-sink = "raidar.yolo_sink"
 
 [tool.setuptools.packages.find]
 where = ["."]
