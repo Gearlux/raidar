@@ -15,30 +15,43 @@ import inspect
 import re
 from typing import Set
 
+import pytest
 from confluid import lazy_param_names
 
-from raidar.detector import LightningDetector
+from raidar.fastai_detector import FastaiDetector  # noqa: E402
+from raidar.huggingface_detector import HuggingFaceDetector  # noqa: E402
+from raidar.lightning_detector import LightningDetector
+from raidar.rfdetr_detector import RFDETRDetector
+from raidar.torch_detector import TorchDetector  # noqa: E402
+
+RUNNABLES = [LightningDetector, TorchDetector, FastaiDetector, HuggingFaceDetector, RFDETRDetector]
 
 
-def _slots_flowed_at_runtime() -> Set[str]:
+def _slots_flowed_at_runtime(cls: type) -> Set[str]:
     """``self.<name>`` passed to ``flow(...)`` anywhere in the runnable's module."""
-    module = inspect.getmodule(LightningDetector)
+    module = inspect.getmodule(cls)
     assert module is not None
     source = inspect.getsource(module)
     return set(re.findall(r"flow\(self\.([a-z_]+)", source))
 
 
-def test_every_flowed_slot_is_declared_lazy() -> None:
-    flowed = _slots_flowed_at_runtime()
-    assert flowed, "found no flow(self.<slot>) calls — has the dispatch changed?"
+@pytest.mark.parametrize("cls", RUNNABLES, ids=lambda c: c.__name__)
+def test_every_flowed_slot_is_declared_lazy(cls: type) -> None:
+    flowed = _slots_flowed_at_runtime(cls)
 
-    undeclared = sorted(flowed - lazy_param_names(LightningDetector))
+    undeclared = sorted(flowed - lazy_param_names(cls))
 
     assert not undeclared, (
-        f"{undeclared} are flowed at run time but not annotated Lazy[T]. "
+        f"{cls.__name__}: {undeclared} are flowed at run time but not annotated Lazy[T]. "
         "An auto-flow walker would build them eagerly — for a slot needing a runtime "
         "kwarg, that raises; for the rest it silently discards the deferral."
     )
+
+
+def test_the_flow_scan_is_not_vacuous() -> None:
+    """The lightning module flows its slots by name; if the scan stops matching, every class
+    above passes for free."""
+    assert _slots_flowed_at_runtime(LightningDetector), "found no flow(self.<slot>) calls — has the dispatch changed?"
 
 
 def test_the_lazy_scan_sees_this_class_at_all() -> None:

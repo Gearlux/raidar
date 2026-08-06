@@ -12,7 +12,7 @@ from typing import Any, List
 
 from matrainer.uri import ModelRef
 
-from raidar.hf_detection import HFDetectionModel
+from raidar.huggingface_model import HuggingFaceDetectionModel
 from raidar.rfdetr import RFDETR_URI_PREFIX, RFDETRModel
 
 
@@ -22,29 +22,14 @@ def refs_of(cls: Any, **attributes: Any) -> List[ModelRef]:
 
 
 def test_a_hub_detector_names_its_repository() -> None:
-    refs = refs_of(HFDetectionModel, model_id="ustc-community/dfine-small-coco", pretrained=True, checkpoint_path=None)
+    refs = refs_of(HuggingFaceDetectionModel, model_name="ustc-community/dfine-small-coco", pretrained=True)
     assert [r.uri for r in refs] == ["hf://models/ustc-community/dfine-small-coco"]
     assert refs[0].url == "https://huggingface.co/ustc-community/dfine-small-coco"
     assert refs[0].role == "pretrained"
 
 
 def test_a_hub_detector_built_from_config_reports_nothing() -> None:
-    assert refs_of(HFDetectionModel, model_id="org/net", pretrained=False, checkpoint_path=None) == []
-
-
-def test_a_checkpoint_is_a_second_entry_with_its_own_role(tmp_path: Path) -> None:
-    checkpoint = tmp_path / "last.ckpt"
-    refs = refs_of(HFDetectionModel, model_id="org/net", pretrained=True, checkpoint_path=str(checkpoint))
-    assert [r.role for r in refs] == ["pretrained", "checkpoint"]
-    assert refs[1].uri == checkpoint.resolve().as_uri()
-
-
-def test_the_subclasses_inherit_the_property() -> None:
-    """They differ only in which Hub id they default to, so there is one implementation."""
-    from raidar.hf_detection import DFINEModel, RTDETRv2Model
-
-    for cls in (DFINEModel, RTDETRv2Model):
-        assert cls.model_refs is HFDetectionModel.model_refs
+    assert refs_of(HuggingFaceDetectionModel, model_name="org/net", pretrained=False) == []
 
 
 def test_an_rfdetr_variant_names_the_zoo_entry() -> None:

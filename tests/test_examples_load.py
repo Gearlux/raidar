@@ -6,14 +6,12 @@ test a stale example (a renamed class, a bad ``!class:`` path) would fail only
 at run time and sail through CI green.
 
 This test mirrors what the runners do short of training: it loads each
-``examples/*.yaml``, resolves + flows the object bound under its root key —
-``runnable:`` (the merged ``LightningDetector`` for ``recordstream run`` /
-``raidar train|evaluate``) or ``trainer:`` / ``evaluator:`` (the framework-native
-``RFDETRTrainer`` / ``RFDETREvaluator`` for ``raidar-rfdetr``) — importing its
-``!class:``/``!lazy:`` targets and constructing it (cheap: every configurable is
-zero-arg / lazy, so no dataset download or training runs), and asserts a callable
-``run()``. A dangling class path raises ``confluid.UnknownClassError`` at flow
-time, failing the test.
+``examples/*.yaml`` (with no scope — the DEFAULT backend; the per-framework scope
+resolution is ``test_cli_frameworks.py``'s job), resolves + flows the object bound
+under its ``runnable:`` root key — importing its ``!class:``/``!lazy:`` targets and
+constructing it (cheap: every configurable is zero-arg / lazy, so no dataset
+download or training runs), and asserts a callable ``run()``. A dangling class
+path raises ``confluid.UnknownClassError`` at flow time, failing the test.
 """
 
 from pathlib import Path

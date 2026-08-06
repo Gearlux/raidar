@@ -153,7 +153,7 @@ def _decode_rfdetr_predictions(
 @configurable(task="detection", role="model")
 class RFDETRModel(nn.Module):
     """Torchvision-native RF-DETR wrapper for
-    :class:`~raidar.detector.LightningDetector`.
+    :class:`~raidar.lightning_detector.LightningDetector`.
 
     Forward contract:
 

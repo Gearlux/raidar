@@ -1,4 +1,4 @@
-"""Tests for :class:`raidar.detector.LightningDetector` in the evaluation path (task='test').
+"""Tests for :class:`raidar.lightning_detector.LightningDetector` in the evaluation path (task='test').
 
 The detector's overridden ``test_step`` drives a torchvision-native detector
 (``model(images) → List[Dict]``) and a raw ``MeanAveragePrecision`` directly — no adapter layer.
@@ -12,14 +12,15 @@ import torch
 import torch.nn as nn
 from confluid import Class, LazyClass
 from confluid.fluid import Class as ConfluidClass
-from recordstream import Image, Regions
+from recordstream import Image, Regions, collate_list
 from recordstream.core import Stream
 from torch import Tensor
 from torch.utils.data import DataLoader
+from torchmetrics import MetricCollection
 from torchmetrics.detection import MeanAveragePrecision
 
-from raidar.detection import DetectionOutput, detection_collate_fn
-from raidar.detector import LightningDetector
+from raidar.lightning_detector import LightningDetector
+from raidar.torch_detection import DetectionOutput
 
 
 def _evaluator(**overrides: Any) -> LightningDetector:
@@ -84,22 +85,26 @@ class _RecordingSink:
         self.closed = True
 
 
-def test_metrics_default_to_lazy_map() -> None:
+def test_metrics_default_is_a_sentinel_resolved_at_initialize() -> None:
+    """`None` means "not chosen" — the COCO-mAP default arrives in `initialize()`, prefixed for
+    the split, so an explicitly wired metric is never silently replaced."""
     ev = _evaluator(model=_NativeDetector(), dataset=_make_stream(4))
-    assert isinstance(ev.test_metrics, ConfluidClass)
-    assert ev.test_metrics.target is MeanAveragePrecision
-    assert ev.test_metrics.kwargs.get("iou_type") == "bbox"
+    assert ev.metrics is None and ev.test_metrics is None
+    ev.initialize()
+    assert isinstance(ev.test_metrics, MetricCollection)
+    assert any(str(k).startswith("test/") for k in ev.test_metrics.keys())
+    assert any(isinstance(m, MeanAveragePrecision) for m in ev.test_metrics.values())
 
 
-def test_default_loader_uses_detection_collate_fn() -> None:
-    from functools import partial
+def test_default_loader_DECLARES_the_list_collate() -> None:
 
     ev = _evaluator(model=_NativeDetector(), dataset=_make_stream(4))
     assert isinstance(ev.test_loader, ConfluidClass)
-    # The collate is a partial binding the configured record keys onto detection_collate_fn.
     collate = ev.test_loader.kwargs.get("collate_fn")
-    assert isinstance(collate, partial) and collate.func is detection_collate_fn
-    assert collate.keywords == {"input_key": "image", "target_key": "target"}
+    # DECLARED, not inherited: the native forward takes List[Tensor], so the loaders ask
+    # recordstream for the unstacked batch rather than relying on ToTensor's plain tensors
+    # happening to skip stacking.
+    assert collate is collate_list
 
 
 def test_evaluator_run_writes_metrics_sidecar(tmp_path: Any) -> None:
@@ -107,7 +112,7 @@ def test_evaluator_run_writes_metrics_sidecar(tmp_path: Any) -> None:
     ev = _evaluator(
         model=_NativeDetector(),
         dataset=_make_stream(4),
-        test_loader=Class(DataLoader, batch_size=2, collate_fn=detection_collate_fn),
+        test_loader=Class(DataLoader, batch_size=2, collate_fn=collate_list),
         lightning=Class(
             L.Trainer,
             accelerator="cpu",
@@ -125,8 +130,12 @@ def test_evaluator_run_writes_metrics_sidecar(tmp_path: Any) -> None:
     payload = json.loads(sidecar.read_text())
     assert payload["experiment_name"] == "det_test_exp"
     metric_values = payload["metrics"]
+    # The split's collection is prefixed, so the sidecar records `test/map` etc. — the same
+    # canonical `<split>/<name>` every backend writes.
     assert any(str(k).endswith("map") for k in metric_values)
-    assert isinstance(metric_values["map"], (int, float))
+    assert isinstance(metric_values["test/map"], (int, float))
+    # MAP's `classes` bookkeeping entry (observed ids, not a metric) is filtered out.
+    assert "test/classes" not in metric_values
 
 
 def test_evaluator_writes_to_predictions_sink(tmp_path: Any) -> None:
@@ -134,7 +143,7 @@ def test_evaluator_writes_to_predictions_sink(tmp_path: Any) -> None:
     ev = _evaluator(
         model=_NativeDetector(),
         dataset=_make_stream(4),
-        test_loader=Class(DataLoader, batch_size=2, collate_fn=detection_collate_fn),
+        test_loader=Class(DataLoader, batch_size=2, collate_fn=collate_list),
         predictions_sink=sink,
         lightning=Class(
             L.Trainer,
@@ -201,7 +210,7 @@ def test_run_calls_initialize(tmp_path: Any) -> None:
     ev = _evaluator(
         model=LazyClass(_NumClassesDetector, num_classes=6),
         dataset=_make_stream(4),
-        test_loader=Class(DataLoader, batch_size=2, collate_fn=detection_collate_fn),
+        test_loader=Class(DataLoader, batch_size=2, collate_fn=collate_list),
         lightning=Class(
             L.Trainer,
             accelerator="cpu",

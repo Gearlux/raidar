@@ -33,6 +33,9 @@ logs/
 mlruns/
 mlflow.db
 lightning_logs/
+# Run output: the example config's `output_dir: ./runs/...` (RF-DETR checkpoints, the
+# SavedModel export). Measured 935 MB after one example sweep — build output, not source.
+runs/
 models/*.pt
 models/*.onnx
 # Ultralytics auto-downloads YOLO weights into the cwd on first use;

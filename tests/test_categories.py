@@ -13,21 +13,19 @@ from raidar.rfdetr import RFDETRModel
 
 
 def test_detection_models_tagged() -> None:
-    from raidar.hf_detection import DFINEModel, HFDetectionModel, RTDETRv2Model
+    from raidar.huggingface_model import HuggingFaceDetectionModel
 
     assert RFDETRModel.__confluid_category__ == "detection_model"
-    # The Hugging Face transformers wrappers (D-FINE / RT-DETRv2 — Apache-2.0, core)
-    # share the same detection_model tag so navigaitor's picker offers them.
-    assert HFDetectionModel.__confluid_category__ == "detection_model"
-    assert DFINEModel.__confluid_category__ == "detection_model"
-    assert RTDETRv2Model.__confluid_category__ == "detection_model"
+    # The ONE Hub zoo wrapper shares the detection_model tag so the model picker offers it —
+    # a checkpoint is a `model_name` STRING, not a preset class.
+    assert HuggingFaceDetectionModel.__confluid_category__ == "detection_model"
 
 
 def test_categories_enumerable_via_registry() -> None:
     registry = get_registry()
     listed = registry.list_classes(category="detection_model")
     assert "RFDETRModel" in listed
-    assert {"HFDetectionModel", "DFINEModel", "RTDETRv2Model"} <= set(listed)
+    assert "HuggingFaceDetectionModel" in listed
 
 
 def test_yolo_sink_tagged() -> None:
@@ -40,52 +38,83 @@ def test_yolo_sink_tagged() -> None:
     assert "YoloSink" in get_registry().list_classes(category="sink")
 
 
-def test_hf_detection_models_task_role_tagged() -> None:
-    """D-FINE / RT-DETRv2 are task='detection', role='model' so they appear in
-    navigaitor's model picker beside RFDETRModel and the torchvision builders."""
-    from raidar.hf_detection import DFINEModel, HFDetectionModel, RTDETRv2Model
+#: The METRIC half of `torch_detection.__all__` — the rest of that list is the batch plumbing
+#: (`native_batch` / the prediction contracts), which is library
+#: surface rather than registered classes. Stated here so the assertion below reads as "every
+#: metric this module advertises is registered" and cannot silently pass by shrinking.
+_TORCH_METRIC_NAMES = {
+    "CompleteIntersectionOverUnion",
+    "DetectionConfusionMatrix",
+    "DistanceIntersectionOverUnion",
+    "GeneralizedIntersectionOverUnion",
+    "IntersectionOverUnion",
+    "MeanAveragePrecision",
+}
 
-    assert HFDetectionModel.__confluid_task__ == "detection"
-    assert HFDetectionModel.__confluid_role__ == "model"
-    assert DFINEModel.__confluid_task__ == "detection" and DFINEModel.__confluid_role__ == "model"
-    assert RTDETRv2Model.__confluid_task__ == "detection" and RTDETRv2Model.__confluid_role__ == "model"
+
+def test_the_torch_engine_metric_set_is_registered() -> None:
+    """The engine's metrics live in its OWN module (`torch_detection.py`) with a literal
+    ``__all__`` — the deltaid one-module-per-engine rule. The torchmetrics detection family is
+    registered upstream-class-as-is; ``DetectionConfusionMatrix`` is the one metric raidar owns."""
+    import raidar.torch_detection as td
+
     registry = get_registry()
-    models = registry.list_classes(task="detection", role="model")
-    assert {"DFINEModel", "RTDETRv2Model"} <= set(models)
+    metrics = set(registry.list_classes(task="detection", role="metric"))
+    assert _TORCH_METRIC_NAMES <= set(td.__all__), "a metric vanished from the module's palette list"
+    assert _TORCH_METRIC_NAMES <= metrics, metrics
+    assert td.DetectionConfusionMatrix.__confluid_framework__ == "torch"
+
+
+def test_the_batch_plumbing_shares_the_engine_module_and_is_not_registered() -> None:
+    """The collate + its container are LIBRARY surface, not configurables: they are wired in code
+    by every torch-family backend, never named in a config, so tagging them would put plumbing in
+    a model/metric picker."""
+    import raidar.torch_detection as td
+
+    plumbing = {"native_batch"}
+    assert plumbing <= set(td.__all__)
+    listed = set(get_registry().list_classes(task="detection"))
+    assert not (plumbing & listed), "batch plumbing must not be registered"
 
 
 def test_task_role_tags() -> None:
     """task/role drive navigaitor's scan-and-generate task surfaces."""
-    from raidar.detector import LightningDetector
+    from raidar.lightning_detector import LightningDetector
 
     assert RFDETRModel.__confluid_task__ == "detection"
     assert RFDETRModel.__confluid_role__ == "model"
-    # The merged LightningDetector (train + eval in one standard class) is tagged role="trainer".
+    # The merged LightningDetector (train + eval in one standard class) is tagged role="trainer";
+    # `framework` is the third discovery axis (what a class can be WIRED TO).
     assert LightningDetector.__confluid_task__ == "detection"
     assert LightningDetector.__confluid_role__ == "trainer"
+    assert LightningDetector.__confluid_framework__ == "torch"
     registry = get_registry()
     assert "RFDETRModel" in registry.list_classes(task="detection", role="model")
     assert "LightningDetector" in registry.list_classes(task="detection", role="trainer")
 
 
 def test_detection_is_a_multi_trainer_task() -> None:
-    """The native RF-DETR trainer/evaluator are tagged for detection ALONGSIDE the
-    Lightning detector, so navigaitor can navigate multiple trainers per task."""
-    from raidar.rfdetr_trainer import RFDETREvaluator, RFDETRTrainer
+    """The merged RF-DETR runnable is tagged for detection ALONGSIDE the Lightning detector, so
+    navigaitor can navigate multiple trainers per task. Each class's evaluator capability is
+    declared by its ``@entrypoint`` markers, not by a second class — there is no separate
+    evaluator class on either side."""
+    from recordstream.runnable import entrypoint_tasks
 
-    assert RFDETRTrainer.__confluid_task__ == "detection" and RFDETRTrainer.__confluid_role__ == "trainer"
-    assert RFDETREvaluator.__confluid_task__ == "detection" and RFDETREvaluator.__confluid_role__ == "evaluator"
+    from raidar.lightning_detector import LightningDetector
+    from raidar.rfdetr_detector import RFDETRDetector
+
+    assert RFDETRDetector.__confluid_task__ == "detection" and RFDETRDetector.__confluid_role__ == "trainer"
+    assert RFDETRDetector.__confluid_framework__ == "rfdetr"
 
     registry = get_registry()
     trainers = registry.list_classes(task="detection", role="trainer")
-    evaluators = registry.list_classes(task="detection", role="evaluator")
-    # The Lightning side is now ONE class (LightningDetector, role="trainer", also evaluates);
-    # RF-DETR keeps its separate framework-native trainer + evaluator.
-    assert {"LightningDetector", "RFDETRTrainer"} <= set(trainers)
-    assert "RFDETREvaluator" in set(evaluators)
+    assert {"LightningDetector", "RFDETRDetector"} <= set(trainers)
+    # The evaluator capability comes from the markers on both classes.
+    assert entrypoint_tasks(LightningDetector, "evaluator")
+    assert entrypoint_tasks(RFDETRDetector, "evaluator")
 
 
-# torchvision detection BUILDER FUNCTIONS registered by raidar.configurables.
+# torchvision detection BUILDER FUNCTIONS registered by raidar.torchvision_detection.
 _BUILDER_NAMES = [
     "fasterrcnn_resnet50_fpn",
     "fasterrcnn_resnet50_fpn_v2",
@@ -102,14 +131,14 @@ _BUILDER_NAMES = [
 def test_torchvision_builders_registered_as_detection_models() -> None:
     """The raw torchvision builder FUNCTIONS register as ``detection_model`` (role="model"),
     so a StreamStudio object node + every navigaitor model picker offers them beside RFDETRModel."""
-    import raidar.configurables  # noqa: F401 - registration side-effect
+    import raidar.torchvision_detection  # noqa: F401 - registration side-effect
 
     registry = get_registry()
     listed = registry.list_classes(category="detection_model")
     for builder in _BUILDER_NAMES:
         assert builder in listed, f"{builder} not registered as detection_model"
     # Marked lazy (a deferred runtime-injection slot — the trainer flows num_classes at run()).
-    fn = raidar.configurables.fasterrcnn_mobilenet_v3_large_320_fpn
+    fn = raidar.torchvision_detection.fasterrcnn_mobilenet_v3_large_320_fpn
     assert fn.__confluid_lazy__ is True  # type: ignore[attr-defined]
     assert fn.__confluid_role__ == "model"  # type: ignore[attr-defined]
     assert fn.__confluid_group__ == "detection"  # type: ignore[attr-defined]
@@ -125,8 +154,8 @@ def test_torchvision_builder_generates_config_schema() -> None:
     default at runtime, so this is informational-only and filtered here.)"""
     from confluid import to_pydantic
 
-    import raidar.configurables
+    import raidar.torchvision_detection
 
-    model = to_pydantic(raidar.configurables.fasterrcnn_resnet50_fpn)
+    model = to_pydantic(raidar.torchvision_detection.fasterrcnn_resnet50_fpn)
     assert "num_classes" in model.model_fields
     model.model_json_schema()  # must not raise (Weights enum / Callable params coerced to Any)
