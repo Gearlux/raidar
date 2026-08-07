@@ -49,9 +49,17 @@ def test_every_flowed_slot_is_declared_lazy(cls: type) -> None:
 
 
 def test_the_flow_scan_is_not_vacuous() -> None:
-    """The lightning module flows its slots by name; if the scan stops matching, every class
-    above passes for free."""
-    assert _slots_flowed_at_runtime(LightningDetector), "found no flow(self.<slot>) calls — has the dispatch changed?"
+    """The flows live in the shared bases since 2026-08-06; the scan walks the MRO's
+    workspace-owned modules, so an empty result still means the dispatch changed."""
+    import inspect
+
+    chunks = []
+    for klass in LightningDetector.__mro__:
+        module = inspect.getmodule(klass)
+        if module is not None and module.__name__.split(".")[0] in {"raidar", "matrainer"}:
+            chunks.append(inspect.getsource(module))
+    flowed = set(re.findall(r"flow\(\s*self\.([a-z_]+)", "\n".join(chunks)))
+    assert flowed, "found no flow(self.<slot>) calls anywhere in the MRO — has the dispatch changed?"
 
 
 def test_the_lazy_scan_sees_this_class_at_all() -> None:

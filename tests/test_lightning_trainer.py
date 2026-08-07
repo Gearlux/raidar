@@ -122,7 +122,12 @@ def test_there_is_deliberately_no_train_metrics_slot() -> None:
 
     assert "train_metrics" not in inspect.signature(LightningDetector.__init__).parameters
     trainer = LightningDetector(model=_NativeDetector(), train_set=_make_stream(4), num_classes=2)
-    assert not hasattr(trainer, "train_metrics")
+    # Since the 2026-08-06 consolidation the shared base CARRIES the slot for the tasks that
+    # have one; here it is pinned to None and wiring one is a LOUD error — stronger than the
+    # old silent absence, where a top-level `train_metrics:` key simply never landed.
+    assert trainer.train_metrics is None
+    with pytest.raises(ValueError, match="no train_metrics slot"):
+        trainer.train_metrics = {"map": None}
 
 
 def test_metric_slots_default_to_sentinels_resolved_at_initialize() -> None:
