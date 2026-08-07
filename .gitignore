@@ -62,4 +62,8 @@ tb_logs/
 checkpoints/
 *.pth
 *.pt
+
+# Everything a sweep (`matrainer sweep`) writes: per-run logs and the file-backed trackers
+# land under one tree on purpose; the RESULTS live in whichever tracker the sweep wrote into.
+sweep_logs/
 /pyrightconfig.json
