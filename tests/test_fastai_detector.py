@@ -113,12 +113,15 @@ def test_tags_and_entrypoints() -> None:
 
 
 def test_the_schedule_import_is_load_bearing() -> None:
-    """`fit_one_cycle` is a @patch installed as `fastai.callback.schedule`'s import side effect."""
+    """`fit_one_cycle` is a @patch installed as `fastai.callback.schedule`'s import side effect.
+
+    The load-bearing import lives ONCE, in the shared machinery base — pinned there.
+    """
     import inspect
 
-    import raidar.fastai_detector as mod
+    import matrainer.fastai.learner as base_mod
 
-    assert "from fastai.callback import schedule" in inspect.getsource(mod)
+    assert "from fastai.callback import schedule" in inspect.getsource(base_mod)
 
 
 # --------------------------------------------------------------------------- #
