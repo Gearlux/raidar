@@ -218,8 +218,8 @@ plus its own full flat constructor (the confluid introspection surface, signatur
 the fleet drift tests now check "inherits the shared base and does not shadow its wiring"
 instead of per-module source patterns; matrainer is load-bearing for training (the old
 "removing it keeps the class training" claim is dead by design). The other engine backends
-still carry their private copies until their family's migration phase lands (root workspace
-backlog).
+joined family by family through 2026-08-08, when the migration COMPLETED — every backend
+now composes its task hooks with a shared machinery base (see the closing amendment below).
 
 **Example.**
 
@@ -234,6 +234,21 @@ class LightningDetector(DetectionTorchHooks, LightningRunnable):
 **Amendment (2026-08-07).** The bare-torch backend joined the same shape: ``TorchDetector`` is `(DetectionTorchHooks, matrainer.torch.TorchLoopRunnable)` — the same task hooks, a different machinery base, plus the three BATCH-hook overrides (`_train_batch_loss` summing the forward's loss dict, `_eval_batch` returning `None` because eval mode yields predictions rather than losses, `_predict_batch`) around `native_batch`, with `collate_fn=collate_list` declared at the base ctor — the loop-base analogue of the Lightning concrete's four step-function overrides.
 
 **Amendment (2026-08-07, second).** The fastai backend joined: ``FastaiDetector`` is `(DetectionTorchHooks, matrainer.fastai.FastaiRunnable)` — the no-op-loss bridge now rides the base's Learner seams (`_learner_model` wraps the adapter, `_learner_loss` returns the pass-through, `_learner_callbacks` prepends the metrics callback, `_place` pins the device) and the family's torchmetrics builders are RESTORED over the fastai base's no-ops — the loss-inside-forward analogue of the loop base's three batch-hook overrides.
+
+**Amendment (2026-08-07/08, closing — P5 + P6, the migration completes).** The remaining five
+in-core backends joined and the fleet is DONE. P5 (keras family): ``KerasDetector`` and
+``TensorFlowDetector`` compose `detection_keras.py`'s hooks (the dense-map collate, the spec's
+positional loss list, the numpy AP path behind ONE `_batch_predictor` seam) with the two
+keras-family machinery siblings. P6: ``HuggingFaceDetector`` is ``(DetectionBase,
+matrainer.huggingface.HuggingFaceRunnable)`` — the processor collate, the seed-before-build
+ordering, the RESTORED family torchmetrics builders and the decode+torchmetrics scoring behind
+the machinery's eval seams — and ``JaxDetector`` / ``MlxDetector`` are ``(DetectionBase,
+matrainer.jax.JaxLoopRunnable)`` / ``(…, matrainer.mlx.MlxLoopRunnable)``, their 4-arity
+bare-loss spec steps driving the machinery's splat-tolerant epoch drivers and the numpy AP
+riding `_fit_scores`/`_evaluate_split`. The seeded spec cells reproduced their canonical losses
+BIT-EXACTLY through every new base (keras 2.30023455619812, tensorflow 2.3113211567203202,
+jax 2.1331496040026345, mlx 1.953120619058609) — the strongest refactor evidence the fleet
+records.
 
 **What you may change.** Hook implementations and task state freely; the concrete signature
 (it is the config surface). What you may not do: shadow the inherited machinery
