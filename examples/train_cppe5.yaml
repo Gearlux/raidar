@@ -38,9 +38,13 @@ run_name: cppe5
 # epochs) to train on all 1000 rows. Both splits reach the op chain through
 # `ops: !ref:detection_ops`, and `!ref:` resolves against the MERGED document — so a backend that
 # overrides `detection_ops` moves train and validation together and they cannot drift.
+#
+# The id is the NAMESPACED form (`rishitdagli/cppe-5`): current huggingface_hub rejects the
+# legacy bare `cppe-5` (`HfUriError: Repository id must be 'namespace/name'`, measured
+# 2026-08-06) — a bare id only "works" by silently falling back to a stale local cache.
 train_set: !class:recordstream.core.stream.Stream
   source: !class:recordstream.sources.huggingface.HuggingFaceSource()
-    path: cppe-5
+    path: rishitdagli/cppe-5
     split: train
     input_feature: image
     target_feature: objects
@@ -49,7 +53,7 @@ train_set: !class:recordstream.core.stream.Stream
 
 val_set: !class:recordstream.core.stream.Stream
   source: !class:recordstream.sources.huggingface.HuggingFaceSource()
-    path: cppe-5
+    path: rishitdagli/cppe-5
     split: test               # only 29 rows — small enough to use whole, no cap needed
     input_feature: image
     target_feature: objects
@@ -62,7 +66,7 @@ val_set: !class:recordstream.core.stream.Stream
 # model, which is the wiring check rather than a score.
 test_set: !class:recordstream.core.stream.Stream
   source: !class:recordstream.sources.huggingface.HuggingFaceSource()
-    path: cppe-5
+    path: rishitdagli/cppe-5
     split: test
     input_feature: image
     target_feature: objects
