@@ -77,7 +77,7 @@ def test_the_floor_is_derived_and_a_pinned_key_wins(monkeypatch: Any, tmp_path: 
         captured.update(kwargs)
         return slot
 
-    monkeypatch.setattr("raidar.huggingface_detector.flow", _fake_flow)
+    monkeypatch.setattr("matrainer.huggingface.trainer.flow", _fake_flow)
     cast(Any, detector.training_arguments).kwargs.update({"num_train_epochs": 99})  # the config pinned a key
     detector._training_arguments()
     assert "num_train_epochs" not in captured, "a pinned key must WIN — the floor may not restate it"
@@ -134,7 +134,7 @@ def test_num_classes_is_derived_from_0_indexed_targets() -> None:
 
 def test_a_live_models_head_is_authoritative() -> None:
     detector = HuggingFaceDetector(model=_StubModel(), num_classes=99)
-    assert detector._num_classes_without_data() == 5
+    assert detector._resolve_num_classes() == 5
 
 
 class TestTheRunIsSeeded:
@@ -162,10 +162,12 @@ class TestTheRunIsSeeded:
         )
         lines = ast.dump(initialize)
         seed_at = _index_of_call(initialize, "set_seed")
-        model_at = _index_of_call(initialize, "flow")
+        # The model flow lives in the task base since P6 — `super().initialize()` is where the
+        # build happens, so the pinned order is: seed strictly before that call.
+        build_at = _index_of_call(initialize, "initialize")
         assert seed_at is not None, f"initialize() must seed before building the model: {lines[:80]}"
-        assert model_at is not None
-        assert seed_at < model_at, "the seed is applied AFTER the model is built — the head init is uncovered"
+        assert build_at is not None
+        assert seed_at < build_at, "the seed is applied AFTER the model is built — the head init is uncovered"
 
     def test_the_same_seed_reaches_training_arguments(self, monkeypatch: Any) -> None:
         """ONE value, so the head's init and the Trainer's data order cannot disagree."""
@@ -177,7 +179,7 @@ class TestTheRunIsSeeded:
             captured.update(kwargs)
             return slot
 
-        monkeypatch.setattr("raidar.huggingface_detector.flow", _fake_flow)
+        monkeypatch.setattr("matrainer.huggingface.trainer.flow", _fake_flow)
         detector._training_arguments()
         assert captured["seed"] == 1234
 

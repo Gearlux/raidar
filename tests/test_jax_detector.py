@@ -63,8 +63,13 @@ def test_tags_and_entrypoints() -> None:
 
 def test_the_steps_are_jitted_once_and_reused() -> None:
     """A fresh ``nnx.jit`` per epoch retraces the whole graph every time — `fit` must call
-    `_make_steps` OUTSIDE its epoch loop (read from the source, as the deltaid pin does)."""
-    source = SOURCE.read_text()
+    `_make_steps` OUTSIDE its epoch loop (read from the MACHINERY's source since P6 — the fit
+    lives in matrainer, and `_make_steps` itself is this module's override)."""
+    import inspect
+
+    from matrainer.jax.loop import JaxLoopRunnable
+
+    source = inspect.getsource(JaxLoopRunnable)
     fit = next(node for node in ast.walk(ast.parse(source)) if isinstance(node, ast.FunctionDef) and node.name == "fit")
     calls_in_loops = [
         ast.unparse(call)
@@ -75,10 +80,11 @@ def test_the_steps_are_jitted_once_and_reused() -> None:
     ]
     assert not calls_in_loops, f"_make_steps must be called once, outside the epoch loop: {calls_in_loops}"
     assert "_make_steps" in source
+    assert "def _make_steps" in SOURCE.read_text(), "the spec steps are this module's override"
 
 
 def test_an_unknown_optimizer_name_raises() -> None:
-    from raidar.jax_detector import _as_optimizer
+    from matrainer.jax.loop import as_optax_optimizer as _as_optimizer
 
     with pytest.raises(ValueError, match="optax"):
         _as_optimizer("definitely_not_an_optimizer", 1e-3)
