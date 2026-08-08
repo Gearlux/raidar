@@ -31,7 +31,20 @@ test): `lightning` ~42 it/s, `torch` 12.31 → 2.11, `fastai` → 3.09, `keras` 
 epochs, every engine now seeded — supersede the pre-seed draws above): final `train/loss` /
 `val/map_50` = keras **2.30023455619812** / 0.005357, tensorflow **2.3113211567203202** /
 0.001234, jax **2.1331496040026345** / 0.001068, mlx **1.953120619058609** / 0.002274 (still the
-best of the fleet). Those are BIT-COMPARABLE across a refactor, and three of them are byte-for-byte
+best of the fleet). **The keras canonical MOVED on 2026-08-08 — `train/loss`
+2.285114049911499 / `val/map_50` 0.00020625352105024217, byte-identical under csv AND mlflow
+and across reruns:** the first full-fleet MLflow sweep caught the seeded keras cell landing
+2.2993 under a live MlflowTracker while csv/direct runs reproduced 2.30023455619812 — both arms
+deterministic, so it read as a seed leak. The bisect proved initial weights, row order, the
+first batch's bytes and all four RNG streams identical at `model.fit` entry, then python's
+global `random` alone diverging inside `on_train_begin` and the tensors entering step 0
+differing: Keras's PyDataset adapter permutes BATCH order via the global `random.shuffle`, and
+mlflow's telemetry client draws one `random.randint` at run creation — after the seed, before
+the first shuffle draw. The fix is matrainer's (`KerasRunnable`'s `model.fit` now passes
+`shuffle=False` — the RecordSequence already owns row order with a private seeded RNG,
+reshuffled per epoch; matrainer `docs/architecture.md` record 9 amendment 6), so pre-fix keras
+digits are NOT bit-comparable across it. The other engines never read ambient RNG for order and
+kept their canonicals. Those are BIT-COMPARABLE across a refactor, and three of them are byte-for-byte
 what the same engines produced before the collate rework AND before the frame-guard work — which
 is what proves both perturbed nothing. `keras` was the one engine that could NOT prove that: it
 alone had no `seed` knob, and three runs of the identical config gave 2.27 / 2.18 / 2.12, so the
