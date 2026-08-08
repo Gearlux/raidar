@@ -72,7 +72,13 @@ def test_it_is_a_sibling_of_the_keras_backend_not_a_subclass() -> None:
     tree = ast.parse(SOURCE.read_text())
     cls = next(n for n in ast.walk(tree) if isinstance(n, ast.ClassDef) and n.name == "TensorFlowDetector")
     assert "KerasDetector" not in [ast.unparse(b) for b in cls.bases]
-    assert "_require_tensorflow_backend" in SOURCE.read_text()
+    # The narrowed precondition (the engine guard) lives on the machinery base since P5.
+    import inspect
+
+    from matrainer.tensorflow.loop import TensorFlowRunnable
+
+    assert "TensorFlowRunnable" in SOURCE.read_text()
+    assert "_require_tensorflow_backend" in inspect.getsource(TensorFlowRunnable.run)
 
 
 def test_the_raw_tf_model_reaches_no_keras_initializer() -> None:

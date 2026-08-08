@@ -4,6 +4,11 @@ The framework is a property of the CONFIG, not of the CLI, so it is a flag the C
 rather than a subcommand. The checks here are deliberately CONFIG-level — they load the example
 YAML once per declared scope — so a block that drops a slot fails on the machine that introduces
 the mistake, rather than only where that backend's framework happens to be installed.
+
+The MACHINERY (the rewrite, the dispatch — including the taskless-fit guard that started here —
+the pre-step ORDER) is `matrainer.cli`'s since 2026-08-07 and is pinned in matrainer's own
+`tests/test_cli.py`; what stays here is raidar's half of each seam — the guard against the
+ultralytics sibling's trainer shape, the flag against THIS project's spellings, and the table.
 """
 
 import inspect
@@ -12,8 +17,15 @@ from typing import List, Optional
 
 import confluid
 import pytest
+from matrainer.cli import (
+    VERB_TASKS,
+    default_dispatch,
+    normalize_framework_flag,
+    registration_modules,
+    requested_framework,
+)
 
-from raidar.cli import FRAMEWORKS, VERB_TASKS, _dispatch, _normalize_framework_flag, _requested_framework, app
+from raidar.cli import FRAMEWORKS, app
 
 EXAMPLE = Path(__file__).resolve().parent.parent / "examples" / "train_cppe5.yaml"
 
@@ -51,11 +63,11 @@ def test_the_verbs_build_through_materialize_runnable_not_a_bare_flow() -> None:
     failure to derive num_classes) and `max_epochs: 10` as the constructor default (never
     surfacing at all).
     """
-    import raidar.cli as cli
+    import matrainer.cli
 
-    source = inspect.getsource(cli)
-    assert "materialize_runnable" in source
-    assert 'flow_mode="manual"' in source
+    for verb in VERB_TASKS:
+        assert getattr(app._commands[verb], "__liquifai_flow_mode__", None) == "manual"
+    assert "materialize_runnable" in inspect.getsource(matrainer.cli.default_dispatch)
 
 
 # --------------------------------------------------------------------------- #
@@ -74,7 +86,7 @@ class _TaskLess:
 
 def test_a_taskless_runnable_still_trains() -> None:
     runnable = _TaskLess()
-    _dispatch(runnable, "fit")
+    default_dispatch(runnable, "fit")
     assert runnable.ran
 
 
@@ -84,7 +96,7 @@ def test_a_taskless_runnable_raises_on_any_other_verb(task: str) -> None:
     behaviour under the wrong verb is the failure a silent `hasattr` guard would hide."""
     runnable = _TaskLess()
     with pytest.raises(ValueError, match="task"):
-        _dispatch(runnable, task)
+        default_dispatch(runnable, task)
     assert not runnable.ran
 
 
@@ -104,7 +116,7 @@ def test_a_taskless_runnable_raises_on_any_other_verb(task: str) -> None:
 def test_the_requested_framework_is_read_from_argv_in_every_spelling(argv: List[str], expected: Optional[str]) -> None:
     """Read from argv rather than liquifai because the registrations must be imported BEFORE the
     config loads — the eager `!class:Foo()` form is built during load, earlier than any handler."""
-    assert _requested_framework(argv) == expected
+    assert requested_framework(argv) == expected
 
 
 def test_the_flag_is_rewritten_to_a_scope_never_appended() -> None:
@@ -116,13 +128,13 @@ def test_the_flag_is_rewritten_to_a_scope_never_appended() -> None:
     config grow into a backend it does not have yet.
     """
     argv = ["raidar", "train", "c.yaml", "--framework", "rfdetr"]
-    _normalize_framework_flag(argv)
+    normalize_framework_flag(argv)
     assert argv == ["raidar", "train", "c.yaml", "--scope", "framework=rfdetr"]
 
 
 def test_an_explicit_scope_spelling_is_left_alone() -> None:
     argv = ["raidar", "train", "c.yaml", "--scope", "framework=rfdetr"]
-    _normalize_framework_flag(argv)
+    normalize_framework_flag(argv)
     assert argv == ["raidar", "train", "c.yaml", "--scope", "framework=rfdetr"]
 
 
@@ -184,7 +196,7 @@ def test_every_framework_names_registrations_that_import() -> None:
     import importlib.util
 
     for name, spec in FRAMEWORKS.items():
-        for module in spec.registrations:
+        for module in registration_modules(spec):
             if importlib.util.find_spec(module.split(".")[0]) is None:
                 assert name == "ultralytics", f"{name}: registrations module {module!r} is not installed"
                 continue

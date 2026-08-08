@@ -43,7 +43,10 @@ def test_every_backend_hands_matrainer_the_runnable() -> None:
     answer "what were the hyperparameters?" differently."""
     for name, entry in BACKENDS.items():
         source = _source(name)
-        if "LightningRunnable" in source or "TorchLoopRunnable" in source or "FastaiRunnable" in source:
+        if any(
+            m in source
+            for m in ("LightningRunnable", "TorchLoopRunnable", "FastaiRunnable", "KerasRunnable", "TensorFlowRunnable")
+        ):
             # Built on a shared machinery base (2026-08-06): the lightning base's
             # `_build_trainer` wires `TrackingCallback(trackers, runnable=self)`, the owned
             # loop's `_log_run_context` passes `runnable=self` — pinned in matrainer's own
@@ -99,7 +102,10 @@ def test_every_backend_puts_its_METRICS_on_the_trackers() -> None:
     comparison, every tracker UI and every sweep."""
     for name, marker in METRIC_BRIDGES.items():
         source = (SOURCE_DIR / name).read_text()
-        if "LightningRunnable" in source or "TorchLoopRunnable" in source or "FastaiRunnable" in source:
+        if any(
+            m in source
+            for m in ("LightningRunnable", "TorchLoopRunnable", "FastaiRunnable", "KerasRunnable", "TensorFlowRunnable")
+        ):
             # The bridge lives in the shared machinery base (the `TrackerLogger` adapters in
             # `_build_trainer` / the `tracker.log_metrics` calls in the loop's `fit` and
             # `_score`) — pinned in matrainer's own suite; the module must not shadow it.
