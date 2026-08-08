@@ -248,7 +248,9 @@ bare-loss spec steps driving the machinery's splat-tolerant epoch drivers and th
 riding `_fit_scores`/`_evaluate_split`. The seeded spec cells reproduced their canonical losses
 BIT-EXACTLY through every new base (keras 2.30023455619812, tensorflow 2.3113211567203202,
 jax 2.1331496040026345, mlx 1.953120619058609) — the strongest refactor evidence the fleet
-records.
+records. (The keras canonical later moved to 2.285114049911499 — matrainer's `shuffle=False`
+fix of 2026-08-08, which made the cell tracker-neutral; see the AGENTS canonical-numbers
+mandate and matrainer `docs/architecture.md` record 9 amendment 6.)
 
 **What you may change.** Hook implementations and task state freely; the concrete signature
 (it is the config surface). What you may not do: shadow the inherited machinery
