@@ -1,61 +1,58 @@
 """``HuggingFaceDetector`` — the detection run with ``transformers.Trainer`` driving it.
 
-The backend that writes least while swapping most: ``Trainer`` owns the epoch, the optimizer, the
-scheduler, gradient accumulation, mixed precision and distribution (via Accelerate). What raidar
-supplies is the data, the run identity and the artifacts.
-
-**What it owns is three things, and each exists because detection is not classification:**
+Since P6 (2026-08-08) this is ``(DetectionBase, matrainer.huggingface.HuggingFaceRunnable)``:
+the machinery — the deferred ``TrainingArguments`` / ``Trainer`` slots, the run-time argument
+FLOOR, the entry points with the plain-function tracking hookup, the ``log_history`` replay —
+lives in :class:`matrainer.huggingface.trainer.HuggingFaceRunnable`; the ``num_classes``
+resolution (model head → explicit → lazy kwarg → the announced ``Regions`` walk) in
+:class:`~raidar.detection_base.DetectionBase`. What stays HERE is detection's huggingface
+vocabulary, and each piece exists because detection is not classification:
 
 1. ``_to_hf_batch`` — a list of RECORDS to the mapping ``Trainer`` feeds the model, through the
    checkpoint's OWN image processor: raidar hands over raw images + COCO-style annotations, and
    the processor does the resize / pad / normalize AND the box conversion to the normalized
    cxcywh the DETR-family loss consumes. Shaping belongs to the checkpoint, not to raidar.
-2. **Evaluation is OUR loop, with the SAME torchmetrics the torch-family backends use.** A
+2. **Evaluation is OUR pass, with the SAME torchmetrics the torch-family backends use.** A
    ``Trainer``'s ``compute_metrics`` hook receives per-batch stacked logits, but detection mAP
    needs decoded boxes in the ORIGINAL pixel space — the processor's
    ``post_process_object_detection`` does that decode, and the scores then flow through the same
    ``MeanAveragePrecision`` / ``DetectionConfusionMatrix`` templates as every other backend, so
-   the ``metrics:`` slots keep ONE vocabulary across the fleet. The Trainer still reports its own
-   per-epoch ``eval_loss`` when a val split is wired.
+   the ``metrics:`` slots keep ONE vocabulary across the fleet. The machinery's metric BUILDERS
+   are therefore RESTORED to the family's torchmetrics ones (the machinery no-ops them for the
+   name-list tasks), its ``_metrics_hook`` stays ``None`` (no Trainer hook — the Trainer still
+   reports its own per-epoch ``eval_loss`` when a val split is wired), and both eval seams
+   (``_fit_val_scores`` / ``_evaluate_split``) route to :meth:`_decoded_scores`.
 3. **The model computes its own loss** (the DETR-family Hungarian matcher, from ``labels=``), so
-   there is NO loss slot and NOTHING to register — ``FRAMEWORKS["huggingface"].registrations`` is
-   ``None``.
+   there is NO loss slot and NOTHING to register — ``FRAMEWORKS["huggingface"].registrations``
+   is ``None``.
+4. **The seed applies BEFORE the model is built** — ``TrainingArguments.seed`` alone comes too
+   late to cover the randomly initialized detection head (measured: a 3.4x val/map_50 spread).
 
 Labels are 0-indexed ``0..K-1`` with no background slot (wire
 ``CocoToTorchVisionDetection(label_offset=0)``); images stay RAW (no ToTensor) — the processor
 normalizes.
 
-``report_to`` defaults to ``"none"`` ON PURPOSE: Trainer auto-enables every tracker it can
-import, and this workspace has wandb AND mlflow installed. Tracking goes through ``trackers:``.
-
 Run it with ``raidar train cfg.yaml --framework huggingface``.
 """
 
-from pathlib import Path
-from typing import TYPE_CHECKING, Any, Dict, Iterable, List, Literal, Optional, Sequence, Tuple, Union, cast
+from typing import Any, Dict, Iterable, List, Literal, Optional, Sequence, Tuple, Union, cast
 
 import numpy as np
 import torch
-from confluid import Fluid, Lazy, LazyClass, Mandatory, configurable, flow, output
+from confluid import Lazy, LazyClass, Mandatory, configurable, flow
 from loggair import get_logger
-from matrainer.artifacts import write_metrics_sidecar
-from matrainer.metric_names import MetricNames, as_metric_names
-from matrainer.metric_slots import merge_metric_specs
-from matrainer.run_names import generate_run_name, run_prefix
-from matrainer.torch import build_metric_collection, scalar_metrics
-from matrainer.tracking.base import Tracker, as_tracker_list
-from matrainer.tracking.provenance import capture_log_file, log_run_context
+from matrainer.huggingface.trainer import HuggingFaceRunnable
+from matrainer.metric_names import MetricNames
+from matrainer.torch import scalar_metrics
+from matrainer.torch.runnable import TorchTrainerRunnable
+from matrainer.tracking.base import Tracker
 from matrainer.tracking.render import per_class_vectors, render_vector_as_figure, render_vector_as_table
-from recordstream import PredictionsSink, RecordSource, Regions, ensure_materialized, ensure_record_dataset, item_data
-from recordstream.runnable import ProgressReporting, TorchRunner, entrypoint, run_entrypoint
+from recordstream import PredictionsSink, RecordSource, Regions, item_data
 from torchmetrics import Metric, MetricCollection
 from torchmetrics.detection import MeanAveragePrecision
-from tqdm import tqdm
 
+from raidar.detection_base import DetectionBase
 from raidar.torch_detection import reportable_metrics
-
-if TYPE_CHECKING:  # pragma: no cover - typing only; the module imports transformers lazily
-    from transformers import Trainer, TrainingArguments
 
 logger = get_logger(__name__)
 
@@ -121,7 +118,7 @@ def _coco_annotations(index: int, boxes: np.ndarray, labels: np.ndarray) -> Dict
 
 
 @configurable(task="detection", role="trainer", framework="huggingface")
-class HuggingFaceDetector(TorchRunner, ProgressReporting):
+class HuggingFaceDetector(DetectionBase, HuggingFaceRunnable):
     """Train, evaluate or predict an object detector with ``transformers.Trainer``.
 
     Args:
@@ -188,159 +185,79 @@ class HuggingFaceDetector(TorchRunner, ProgressReporting):
         plot_metrics: bool = False,
         metric_names: Optional[Lazy[MetricNames]] = None,
     ) -> None:
-        super().__init__()
-        self.model: HuggingFaceNetwork = cast(HuggingFaceNetwork, model)
-        self.train_set: Optional[Lazy[RecordSource]] = train_set
-        self.val_set: Optional[Lazy[RecordSource]] = None
-        self.test_set: Optional[Lazy[RecordSource]] = test_set
-        self.task: DetectorTask = task
+        super().__init__(
+            model=model,
+            train_set=train_set,
+            test_set=test_set,
+            task=task,
+            max_epochs=max_epochs,
+            batch_size=batch_size,
+            num_workers=num_workers,
+            learning_rate=learning_rate,
+            weight_decay=weight_decay,
+            report_to=report_to,
+            output_dir=output_dir,
+            trackers=trackers,
+            callbacks=callbacks,
+            experiment_name=experiment_name,
+            run_name=run_name,
+            input_key=input_key,
+            target_key=target_key,
+            metrics=metrics,
+            val_metrics=val_metrics,
+            test_metrics=test_metrics,
+            metric_names=metric_names,
+        )
         self.num_classes = int(num_classes) if num_classes is not None else None
-        self.max_epochs = max_epochs
-        self.batch_size = batch_size
-        # Stored rather than closed over, because `_training_arguments()` reads them at RUN time.
-        self.num_workers = int(num_workers)
-        self.learning_rate = float(learning_rate)
-        self.weight_decay = float(weight_decay)
         self.score_threshold = float(score_threshold)
-        self.report_to = report_to
         self.seed = int(seed)
-        self.output_dir = output_dir
-        self.experiment_name = experiment_name
-        self.run_name = run_name if run_name is not None else generate_run_name(prefix=run_prefix(task))
-        self.input_key = str(input_key)
-        self.target_key = str(target_key)
-        # Sentinels, resolved in `initialize()` — the same COCO-mAP default as every backend.
-        self.metrics: Any = metrics
-        self.val_metrics: Any = val_metrics
-        self.test_metrics: Any = test_metrics
-        self._metrics_built: bool = False
-        # Both transformers objects are DEFERRED SLOTS with STRING dotted targets: this module has
-        # no top-level `import transformers`, and confluid resolves a dotted target at flow time.
-        # `training_arguments` is EMPTY on purpose — every derived knob is applied in
-        # `_training_arguments()` as a FLOOR, so a config overriding the slot ADDS to them
-        # instead of silently dropping `remove_unused_columns=False` and the epoch count.
-        self.training_arguments: Lazy["TrainingArguments"] = LazyClass("transformers.TrainingArguments")
-        self.trainer: Lazy["Trainer"] = LazyClass("transformers.Trainer")
-        self.callbacks: Optional[List[Lazy[Any]]] = callbacks
-        self.trackers: Optional[Union[Lazy[Tracker], Iterable[Lazy[Tracker]]]] = trackers
-        self.metric_names: Optional[Lazy[MetricNames]] = metric_names
         self.class_names: Optional[List[str]] = list(class_names) if class_names else None
         self.plot_metrics = plot_metrics
-        self.predictions_sink: Optional[Lazy[PredictionsSink]] = None
-        self.metrics_sidecar_path: Optional[str] = None
-        self._computed_metrics: Dict[str, float] = {}
 
-    @property
-    def __needs_autograd__(self) -> bool:  # type: ignore[override]  # dynamic per-task override
-        """Only ``fit`` optimizes — an evaluate/predict run is happy under inference mode."""
-        return self.task == "fit"
-
-    # ---- run dispatch ------------------------------------------------------- #
-    def run(self) -> None:
-        self.initialize()
-        run_entrypoint(self, self.task)
-
-    # ---- setup -------------------------------------------------------------- #
+    # ---- setup: num_classes is the task base's; the seed and the processor warm are ours ---- #
     def initialize(self) -> None:
-        """Resolve ``num_classes``, then build the model and the metric collections."""
-        if self.task == "fit":
-            self._initialize_fit()
-        else:
-            self._initialize_eval()
-        # Seed BEFORE the model is built, which is the whole point of the knob.
-        # `transformers.Trainer` applies `TrainingArguments.seed` (42 by default) when the
-        # TRAINING starts — by which time this wrapper has already constructed the network and
-        # randomly initialized the detection head for `num_classes`, so that init was never
-        # covered. Measured 2026-08-06: two runs of one config gave eval_loss 8.001 / 6.277 with
-        # val/map_50 0.0685 / 0.1302, a 3.4x spread that made the backend uncomparable to itself.
+        """Seed, resolve ``num_classes`` + build the model (task base), then warm the processor.
+
+        The seed goes FIRST, which is the whole point of the knob: ``transformers.Trainer``
+        applies ``TrainingArguments.seed`` (42 by default) when the TRAINING starts — by which
+        time the wrapper has already constructed the network and randomly initialized the
+        detection head for ``num_classes``, so that init was never covered. Measured
+        2026-08-06: two runs of one config gave eval_loss 8.001 / 6.277 with val/map_50
+        0.0685 / 0.1302, a 3.4x spread that made the backend uncomparable to itself.
+        """
         from transformers import set_seed
 
         set_seed(self.seed)
-        self.model = flow(self.model, num_classes=self.num_classes)
+        super().initialize()
         # Warm the image processor IN THE PARENT — the collate runs inside DataLoader workers,
         # and with `num_workers > 0` a lazily-built processor's first Hub fetch would happen in a
         # FORKED child, through `_scproxy` on macOS: a SIGSEGV with no Python traceback, surfacing
         # only as "DataLoader worker exited unexpectedly" (hit for real on the first cppe-5 run).
         # The same reasoning as `_prepare`'s `ensure_materialized`, applied to the processor.
         self._processor()
-        self._resolve_task_defaults()
-        if not self._metrics_built:
-            self.val_metrics = self._build_split_metrics(self.val_metrics, "val/")
-            self.test_metrics = self._build_split_metrics(self.test_metrics, "test/")
-            self._metrics_built = True
 
-    def _initialize_fit(self) -> None:
-        self.train_set = self._prepare(self.train_set)
-        self.val_set = self._prepare(self.val_set)
-        self.test_set = self._prepare(self.test_set)
-        nc = self._num_classes_without_data()
+    def _resolve_num_classes(self) -> Optional[int]:
+        """The task base's ladder, made LOUD: a fit cannot proceed without a resolved count —
+        the wrapper builds its head at that width, and failing here names the fix where the
+        wrapper's own build error would not."""
+        nc = super()._resolve_num_classes()
         if nc is None:
-            if self.train_set is None:
-                raise RuntimeError(
-                    "could not determine num_classes — set it on the detector or the model, or wire a train_set."
-                )
-            nc = self._num_classes_from_targets(self.train_set)
-        if nc is None:
-            raise RuntimeError("could not determine num_classes from the train targets.")
-        self.num_classes = int(nc)
+            raise RuntimeError(
+                "could not determine num_classes — set it on the detector or the model, or wire a train_set."
+            )
+        return nc
 
-    def _initialize_eval(self) -> None:
-        """Model-driven setup: the trained head's width is authoritative, not the eval split's."""
-        nc = self._num_classes_without_data()
-        if not nc:
-            raise RuntimeError("could not determine num_classes — set it, or wire a model that exposes it.")
-        self.num_classes = int(nc)
-        self.test_set = self._prepare(self.test_set)
-        self.val_set = self._prepare(self.val_set)
+    def _default_metrics(self) -> Any:
+        """COCO mAP, identical to every other backend's choice — the FAMILY's torchmetrics hook."""
+        return {"map": LazyClass[Metric](MeanAveragePrecision, iou_type="bbox")}
 
-    def _prepare(self, source: Optional[Lazy[RecordSource]]) -> Optional[Any]:
-        """Normalize a wired source's TYPE and its STATE, in THIS process (the fork guard)."""
-        if source is None:
-            return None
-        return ensure_materialized(ensure_record_dataset(source))
+    # The machinery no-ops the metric builders for the name-list tasks; detection scores with
+    # the fleet's torchmetrics, so the FAMILY builders are restored (the fastai-base precedent).
+    def _build_fit_metrics(self, include_train: bool = True) -> None:
+        TorchTrainerRunnable._build_fit_metrics(self, include_train=False)
 
-    def _num_classes_without_data(self) -> Optional[int]:
-        """The class count from the model or the config — everything short of walking the targets."""
-        if not isinstance(self.model, Fluid):
-            model_nc = getattr(self.model, "num_classes", None)
-            if model_nc:
-                return int(model_nc)
-        if self.num_classes is not None:
-            return int(self.num_classes)
-        if isinstance(self.model, Fluid):
-            pinned = self.model.kwargs.get("num_classes")
-            if pinned:
-                return int(pinned)
-        return None
-
-    def _num_classes_from_targets(self, source: Any) -> Optional[int]:
-        """0-indexed labels → K = max(label) + 1, walked once with progress."""
-        from recordstream import iter_key
-
-        src = flow(source)
-        total = len(src) if hasattr(src, "__len__") else None
-        logger.info("raidar: deriving num_classes from detection targets (pin num_classes to skip)")
-        highest = -1
-        for target in tqdm(iter_key(src, self.target_key), total=total, desc="deriving num_classes", unit="record"):
-            labels = target.labels if isinstance(target, Regions) else target.get("labels")
-            if labels is None:
-                continue
-            for value in np.asarray(labels.detach().cpu() if isinstance(labels, torch.Tensor) else labels).reshape(-1):
-                highest = max(highest, int(value))
-        return highest + 1 if highest >= 0 else None
-
-    def _resolve_task_defaults(self) -> None:
-        """Fill the ``metrics`` sentinel — COCO mAP, identical to every other backend's choice."""
-        if self.metrics is None:
-            self.metrics = {"map": LazyClass[Metric](MeanAveragePrecision, iou_type="bbox")}
-
-    def _build_split_metrics(self, spec: Any, prefix: str) -> MetricCollection:
-        """One split's live, prefixed collection — merged by the fleet-shared rule."""
-        return build_metric_collection(merge_metric_specs(self.metrics, spec)).clone(prefix=prefix)
-
-    def _network(self) -> Any:
-        """The live ``transformers`` model — the wrapper's, or a bare one wired directly."""
-        return getattr(self.model, "model", self.model)
+    def _build_eval_metrics(self) -> None:
+        TorchTrainerRunnable._build_eval_metrics(self)
 
     def _processor(self) -> Any:
         """The checkpoint's image processor — the ONE component that shapes detection batches."""
@@ -352,7 +269,7 @@ class HuggingFaceDetector(TorchRunner, ProgressReporting):
             )
         return processor
 
-    # ---- data --------------------------------------------------------------- #
+    # ---- data ------------------------------------------------------------------------------- #
     def _to_hf_batch(self, records: Sequence[Any]) -> Dict[str, torch.Tensor]:
         """A list of records → the mapping ``Trainer`` feeds the model, via the PROCESSOR.
 
@@ -369,108 +286,28 @@ class HuggingFaceDetector(TorchRunner, ProgressReporting):
         encoded = self._processor()(images=images, annotations=annotations, return_tensors="pt")
         return dict(encoded)
 
-    # ---- the Trainer -------------------------------------------------------- #
-    def _training_arguments(self) -> Any:
-        """``TrainingArguments`` from the shared knobs — the flat config, in Trainer's words.
+    # ---- the Trainer seams ------------------------------------------------------------------- #
+    def _argument_floor(self) -> Dict[str, Any]:
+        floor = super()._argument_floor()
+        # The SAME seed `initialize()` already applied — one value, so the head's
+        # initialization and the Trainer's data order cannot disagree about the run.
+        floor["seed"] = self.seed
+        return floor
 
-        A FLOOR, not an override: a key the config pinned on the ``training_arguments`` slot WINS,
-        and only the ones it did not mention are injected (the workspace's standing
-        ``TrainingArguments`` rule — replacing would silently drop ``remove_unused_columns=False``,
-        which surfaces as a ``KeyError`` inside Trainer's own collator).
-        """
-        derived: Dict[str, Any] = {
-            "output_dir": self._output_dir(),
-            "num_train_epochs": self.max_epochs,
-            "per_device_train_batch_size": self.batch_size,
-            "per_device_eval_batch_size": self.batch_size,
-            "learning_rate": self.learning_rate,
-            "weight_decay": self.weight_decay,
-            "dataloader_num_workers": self.num_workers,
-            # A generic map-style source is not a `datasets.Dataset`, so Trainer must not drop
-            # "unused" columns by inspecting the model signature.
-            "remove_unused_columns": False,
-            "report_to": self.report_to,
-            # The SAME seed `initialize()` already applied — one value, so the head's
-            # initialization and the Trainer's data order cannot disagree about the run.
-            "seed": self.seed,
-            "run_name": self.run_name,
-            "disable_tqdm": True,
-            "save_strategy": "no",
-            "eval_strategy": "epoch" if self.val_set is not None else "no",
-        }
-        pinned = getattr(self.training_arguments, "kwargs", None) or {}
-        return flow(self.training_arguments, **{k: v for k, v in derived.items() if k not in pinned})
+    def _fit_val_scores(self, trainer: Any) -> Dict[str, float]:
+        """The post-fit validation scores come from OUR decode + torchmetrics pass."""
+        return self._decoded_scores(self.val_set, cast(MetricCollection, self.val_metrics))
 
-    def _build_trainer(self, train: Any = None, evaluate: Any = None) -> Any:
-        """Flow the ``Trainer`` with everything only the RUN knows. No ``compute_metrics``:
-        detection quality is scored by OUR decode + torchmetrics pass (module docstring)."""
-        return flow(
-            self.trainer,
-            model=self._network(),
-            args=self._training_arguments(),
-            train_dataset=train,
-            eval_dataset=evaluate,
-            data_collator=self._to_hf_batch,
-            callbacks=[flow(cb) for cb in (self.callbacks or [])] or None,
-        )
+    def _evaluate_split(self, source: Any, split: Literal["val", "test"]) -> Dict[str, float]:
+        collection = self.val_metrics if split == "val" else self.test_metrics
+        return self._decoded_scores(source, cast(MetricCollection, collection))
 
-    def _output_dir(self) -> str:
-        """Where Trainer writes its state — beside the sidecar when one is configured."""
-        if self.output_dir:
-            return str(Path(self.output_dir).expanduser())
-        if self.metrics_sidecar_path:
-            return str(Path(self.metrics_sidecar_path).expanduser().parent / self.run_name)
-        return str(Path("./hf_runs") / self.run_name)
-
-    # ---- the four entry points ---------------------------------------------- #
-    @entrypoint("fit", role="trainer", primary=True)
-    def fit(self) -> None:
-        logger.info(f"raidar huggingface training: {self.experiment_name} ({self.run_name})")
-        if self.train_set is None:
-            raise ValueError("HuggingFaceDetector.fit() requires a 'train_set'.")
-        # Provenance through matrainer's plain FUNCTIONS — `runnable=self` so the hyperparameters
-        # and the resolved config come from matrainer's ONE derivation.
-        trackers = self._live_trackers()
-        manifest = log_run_context(trackers, runnable=self)
-        trainer = self._build_trainer(train=self.train_set, evaluate=self.val_set)
-        result = trainer.train()
-        names = as_metric_names(self.metric_names)
-        scored = names({k: float(v) for k, v in result.metrics.items() if _is_number(v)}, source="huggingface")
-        if self.val_set is not None:
-            scored.update(self._score(self.val_set, cast(MetricCollection, self.val_metrics)))
-        self._computed_metrics = scored
-        _log_trainer_history(trainer, trackers, names)
-        for tracker in trackers:
-            tracker.log_metrics(self._computed_metrics)
-        logger.info(f"Training complete: {self._computed_metrics}")
-        write_metrics_sidecar(self.metrics_sidecar_path, self._computed_metrics, self.experiment_name, self.run_name)
-        # Uploads the log file, stamps the manifest's terminal status AND finalizes every tracker.
-        capture_log_file(trackers, manifest=manifest, status="success")
-
-    @entrypoint("evaluate", role="evaluator")
-    def evaluate(self) -> None:
-        """Score the VALIDATION split — the `evaluate` / `test` split is the only difference."""
-        if self.val_set is None:
-            raise ValueError("HuggingFaceDetector.evaluate() requires a 'val_set'.")
-        self._computed_metrics = self._score(self.val_set, cast(MetricCollection, self.val_metrics))
-        for tracker in self._live_trackers():
-            tracker.log_metrics(self._computed_metrics)
-        write_metrics_sidecar(self.metrics_sidecar_path, self._computed_metrics, self.experiment_name, self.run_name)
-
-    @entrypoint("test", role="evaluator", primary=True)
-    def test(self) -> None:
-        if self.test_set is None:
-            raise ValueError("HuggingFaceDetector.test() requires a 'test_set'.")
-        self._computed_metrics = self._score(self.test_set, cast(MetricCollection, self.test_metrics))
-        for tracker in self._live_trackers():
-            tracker.log_metrics(self._computed_metrics)
-        write_metrics_sidecar(self.metrics_sidecar_path, self._computed_metrics, self.experiment_name, self.run_name)
-
-    @entrypoint("predict", role="predictor", primary=True)
+    # ---- the four entry points: predict is the one full override ----------------------------- #
     def predict(self) -> None:
         """Stream per-record decoded predictions to the sink, paired with each record's metadata."""
         if self.test_set is None:
             raise ValueError("HuggingFaceDetector.predict() requires a 'test_set'.")
+        self.test_set = self._prepare(self.test_set)
         sink = flow(self.predictions_sink)
         for record, prediction in self._decoded_predictions(cast(Any, self.test_set)):
             if sink is not None:
@@ -484,7 +321,7 @@ class HuggingFaceDetector(TorchRunner, ProgressReporting):
             sink.close()
         logger.info("Prediction complete.")
 
-    # ---- evaluation: OUR decode + the fleet's torchmetrics ------------------- #
+    # ---- evaluation: OUR decode + the fleet's torchmetrics ----------------------------------- #
     @torch.no_grad()
     def _decoded_predictions(self, dataset: Any) -> Iterable[Tuple[Any, Dict[str, torch.Tensor]]]:
         """Yield ``(record, prediction)`` pairs decoded back into ORIGINAL pixel space.
@@ -508,7 +345,7 @@ class HuggingFaceDetector(TorchRunner, ProgressReporting):
             for record, prediction in zip(records, decoded):
                 yield record, {k: v.detach().cpu() for k, v in prediction.items()}
 
-    def _score(self, dataset: Any, collection: MetricCollection) -> Dict[str, float]:
+    def _decoded_scores(self, dataset: Any, collection: MetricCollection) -> Dict[str, float]:
         """Evaluate a split through the SAME torchmetrics path as the torch-family backends."""
         for record, prediction in self._decoded_predictions(dataset):
             boxes, labels = _record_target(record, self.target_key)
@@ -539,50 +376,3 @@ class HuggingFaceDetector(TorchRunner, ProgressReporting):
                 tracker.log_text(payload["name"], table)
                 if figure is not None:
                     tracker.log_figure(payload["name"], figure)
-
-    # ---- tracking ------------------------------------------------------------ #
-    def _live_trackers(self) -> List[Tracker]:
-        """Normalize and flow the wired trackers ONCE, writing the result back to the slot."""
-        self.trackers = [flow(t) for t in as_tracker_list(self.trackers) or []]
-        return cast(List[Tracker], self.trackers)
-
-    # ---- @outputs ------------------------------------------------------------ #
-    @property
-    @output
-    def trained_model(self) -> Any:
-        """The live trained model (post-run ``@output``). Raises while still deferred."""
-        if isinstance(self.model, Fluid):
-            raise RuntimeError("trained_model is only available after run() — the model is still deferred.")
-        return self.model
-
-    @property
-    @output
-    def computed_metrics(self) -> Dict[str, float]:
-        """Final SCALAR metrics (post-run ``@output``). Raises before ``run()``."""
-        if not self._computed_metrics:
-            raise RuntimeError("computed_metrics is only available after run().")
-        return dict(self._computed_metrics)
-
-
-def _is_number(value: Any) -> bool:
-    return isinstance(value, (int, float)) and not isinstance(value, bool)
-
-
-def _log_trainer_history(trainer: Any, trackers: Sequence[Tracker], names: MetricNames) -> None:
-    """Forward EVERY logged step to the trackers, not just the final metrics.
-
-    ``Trainer`` accumulates its own ``log_history`` and nothing else sees those rows, so without
-    this a tracked run would show one point per RUN where every other backend shows a curve.
-    """
-    if not trackers:
-        return
-    for entry in getattr(trainer.state, "log_history", []) or []:
-        values = names(
-            {k: float(v) for k, v in entry.items() if _is_number(v) and k != "epoch"},
-            source="huggingface",
-        )
-        if not values:
-            continue
-        step = int(entry.get("step", 0))
-        for tracker in trackers:
-            tracker.log_metrics(values, step=step)

@@ -18,8 +18,10 @@ from recordstream.runnable import entrypoint_tasks
 if importlib.util.find_spec("mlx") is None:  # pragma: no cover - non-Apple hardware
     pytest.skip("mlx is Apple-silicon only", allow_module_level=True)
 
+from matrainer.mlx.loop import as_mlx_optimizer as _as_optimizer  # noqa: E402
+
 from raidar.fcos.targets import FcosTargets  # noqa: E402
-from raidar.mlx_detector import DetectorTask, MlxDetector, _as_optimizer  # noqa: E402
+from raidar.mlx_detector import DetectorTask, MlxDetector  # noqa: E402
 
 
 def _make_stream(n: int = 4, size: int = 64) -> Stream:

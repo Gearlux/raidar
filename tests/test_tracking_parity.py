@@ -45,14 +45,23 @@ def test_every_backend_hands_matrainer_the_runnable() -> None:
         source = _source(name)
         if any(
             m in source
-            for m in ("LightningRunnable", "TorchLoopRunnable", "FastaiRunnable", "KerasRunnable", "TensorFlowRunnable")
+            for m in (
+                "LightningRunnable",
+                "TorchLoopRunnable",
+                "FastaiRunnable",
+                "KerasRunnable",
+                "TensorFlowRunnable",
+                "HuggingFaceRunnable",
+                "JaxLoopRunnable",
+                "MlxLoopRunnable",
+            )
         ):
             # Built on a shared machinery base (2026-08-06): the lightning base's
             # `_build_trainer` wires `TrackingCallback(trackers, runnable=self)`, the owned
             # loop's `_log_run_context` passes `runnable=self` — pinned in matrainer's own
             # suite; the module must not shadow that wiring.
-            assert "def _build_trainer" not in source, f"{name} shadows the shared _build_trainer"
-            assert "def _log_run_context" not in source, f"{name} shadows the shared _log_run_context"
+            assert "def _build_trainer(" not in source, f"{name} shadows the shared _build_trainer"
+            assert "def _log_run_context(" not in source, f"{name} shadows the shared _log_run_context"
             continue
         assert entry in source, f"{name}: expected the {entry} hookup"
         assert "runnable=self" in source, f"{name}: tracking must pass runnable=self"
@@ -104,12 +113,21 @@ def test_every_backend_puts_its_METRICS_on_the_trackers() -> None:
         source = (SOURCE_DIR / name).read_text()
         if any(
             m in source
-            for m in ("LightningRunnable", "TorchLoopRunnable", "FastaiRunnable", "KerasRunnable", "TensorFlowRunnable")
+            for m in (
+                "LightningRunnable",
+                "TorchLoopRunnable",
+                "FastaiRunnable",
+                "KerasRunnable",
+                "TensorFlowRunnable",
+                "HuggingFaceRunnable",
+                "JaxLoopRunnable",
+                "MlxLoopRunnable",
+            )
         ):
             # The bridge lives in the shared machinery base (the `TrackerLogger` adapters in
             # `_build_trainer` / the `tracker.log_metrics` calls in the loop's `fit` and
             # `_score`) — pinned in matrainer's own suite; the module must not shadow it.
-            assert "def fit" not in source and "def _score" not in source and "def _build_trainer" not in source
+            assert "def fit(" not in source and "def _score(" not in source and "def _build_trainer(" not in source
             continue
         assert marker in source, f"{name} never reaches a tracker's metric channel via {marker}"
 
