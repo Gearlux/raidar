@@ -84,6 +84,10 @@ class TorchDetector(DetectionTorchHooks, TorchLoopRunnable):
         trackers: matrainer trackers — one or a list.
         class_names: Labels for the per-class metric report, in class-id order; indices otherwise.
         plot_metrics: ALSO send each per-class metric to the trackers as a matplotlib bar chart.
+        seed: Seed for torch's global RNG, applied when `initialize()` builds the model —
+            the torchvision builders randomly reinitialize their `num_classes` head, and no
+            framework covers that draw. Applied without restoring the RNG state (the
+            workspace wrapper-seeding idiom), so the loader shuffle is seeded too.
         metric_names: How recorded metrics are named — see
             :class:`~matrainer.metric_names.MetricNames`. This loop already writes the canonical
             ``<split>/<name>``, so the default translates nothing; wiring ``target:`` is what
@@ -119,6 +123,7 @@ class TorchDetector(DetectionTorchHooks, TorchLoopRunnable):
         trackers: Optional[Union[Lazy[Tracker], Iterable[Lazy[Tracker]]]] = None,
         class_names: Optional[List[str]] = None,
         plot_metrics: bool = False,
+        seed: int = 0,
         metric_names: Optional[Lazy[MetricNames]] = None,
     ) -> None:
         super().__init__(
@@ -149,6 +154,7 @@ class TorchDetector(DetectionTorchHooks, TorchLoopRunnable):
         self.num_classes = int(num_classes) if num_classes is not None else None
         self.class_names: Optional[List[str]] = list(class_names) if class_names else None
         self.plot_metrics = plot_metrics
+        self.seed = int(seed)
 
     # ---- the batch boundary --------------------------------------------------------------- #
     def _to_device(self, batch: Any) -> Any:

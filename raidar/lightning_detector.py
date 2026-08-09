@@ -85,6 +85,10 @@ class LightningDetector(DetectionTorchHooks, LightningRunnable):
         plot_metrics: ALSO send each per-class metric to the trackers as a matplotlib bar chart,
             not only as a table. Off by default: it makes matplotlib (``matrainer[plot]``) a cost
             of every eval epoch, where the table costs nothing.
+        seed: Seed for torch's global RNG, applied when ``initialize()`` builds the model —
+            the torchvision builders randomly reinitialize their ``num_classes`` head, and no
+            framework covers that draw. Applied without restoring the RNG state (the
+            workspace wrapper-seeding idiom), so the loader shuffle is seeded too.
         metric_names: How recorded metrics are named — see
             :class:`~matrainer.metric_names.MetricNames`. The ``self.log`` calls already write
             the canonical ``<split>/<name>``, so the default translates nothing; it is handed to
@@ -120,6 +124,7 @@ class LightningDetector(DetectionTorchHooks, LightningRunnable):
         test_metrics: MetricsSpec = None,
         class_names: Optional[List[str]] = None,
         plot_metrics: bool = False,
+        seed: int = 0,
         metric_names: Optional[Lazy[MetricNames]] = None,
     ) -> None:
         super().__init__(
@@ -147,6 +152,7 @@ class LightningDetector(DetectionTorchHooks, LightningRunnable):
         self.num_classes = int(num_classes) if num_classes is not None else None
         self.class_names: Optional[List[str]] = list(class_names) if class_names else None
         self.plot_metrics = plot_metrics
+        self.seed = int(seed)
 
     def forward(self, images: List[Tensor]) -> List[Dict[str, Tensor]]:  # type: ignore[override]
         return cast(List[Dict[str, Tensor]], cast(nn.Module, self.model)(images))

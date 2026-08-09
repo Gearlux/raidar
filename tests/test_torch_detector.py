@@ -8,7 +8,7 @@ the loop IS the module's content: forward, backward, step, validate, report.
 import ast
 import inspect
 import json
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Union, cast
 
 import pytest
 import torch
@@ -204,3 +204,37 @@ def test_training_rejects_a_missing_target() -> None:
             [collate_list([{"image": torch.rand(3, 8, 8)}])],  # type: ignore[arg-type]
             torch.optim.SGD(detector.model.parameters(), lr=0.1),  # type: ignore[union-attr]
         )
+
+
+class TestTheSeedCoversTheModelBuild:
+    """The torchvision builders randomly reinitialize their `num_classes` head, and no framework
+    covers that draw — the zoo cells' losses moved between identical sweep runs (2026-08-08/09)
+    until `DetectionTorchHooks.initialize` seeded torch's global RNG before the build."""
+
+    def test_initialize_seeds_BEFORE_the_task_base_builds_the_model(self) -> None:
+        from raidar.detection_torch import DetectionTorchHooks
+
+        body = inspect.getsource(DetectionTorchHooks.initialize).split('"""')[-1]
+        assert "torch.manual_seed(self.seed)" in body
+        assert body.index("torch.manual_seed(self.seed)") < body.index(
+            "super().initialize()"
+        ), "the seed is applied AFTER the model is built — the head init is uncovered"
+
+    def test_the_seed_actually_reproduces_the_weights(self) -> None:
+        """The knob is only worth having if it BINDS — assert on the built weights, not the API."""
+        from confluid import LazyClass
+
+        def first_param(seed: int) -> Tensor:
+            detector = TorchDetector(
+                model=LazyClass(nn.Linear, in_features=4, out_features=2),
+                num_classes=2,
+                device="cpu",
+                seed=seed,
+            )
+            detector.initialize()
+            model = cast(nn.Module, detector.model)
+            return next(model.parameters()).detach().clone()
+
+        a, b, other = first_param(0), first_param(0), first_param(1)
+        assert torch.equal(a, b), "the same seed must rebuild the same weights"
+        assert not torch.equal(a, other), "a different seed must not — else it is seeding nothing"
