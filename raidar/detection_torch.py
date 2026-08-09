@@ -14,6 +14,7 @@ imports torch, so the four spec engines must never import it.
 
 from typing import Any, List, Mapping, Optional
 
+import torch
 from confluid import LazyClass
 from loggair import get_logger
 from matrainer.torch.metrics import MetricsSpec
@@ -33,6 +34,25 @@ __all__ = ["DetectionTorchHooks"]
 
 class DetectionTorchHooks(DetectionBase, TorchTrainerRunnable):
     """The torch half of the detection task, mixed into every torch-family backend."""
+
+    #: Declared on each concrete's flat ctor (`seed: int = 0`) and stored there; applied ONCE
+    #: here so the three torchvision-family backends cannot drift apart on when it fires.
+    seed: int
+
+    def initialize(self) -> None:
+        """Seed torch's global RNG, THEN run the task base's setup — which builds the model.
+
+        The torchvision builders randomly reinitialize their ``num_classes`` head on every
+        build and no framework covers that draw (Lightning's ``seed_everything`` is not wired
+        and the other two loops are ours), so the zoo cells' losses moved between identical
+        sweep runs (measured 2026-08-08/09). Seeding at BUILD time without restoring the RNG
+        state is the workspace's wrapper-seeding idiom (the restoration project's 2026-08-06
+        precedent): a run-level seed applied at the earliest useful moment, covering the
+        DataLoader shuffle draws too. The spec model (``TorchFcos``) additionally seeds
+        itself — its knob binds the ARCHITECTURE comparison, this one binds the RUN.
+        """
+        torch.manual_seed(self.seed)
+        super().initialize()
 
     def _default_metrics(self) -> MetricsSpec:
         """COCO mAP, the field's primary detection score.

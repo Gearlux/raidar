@@ -156,6 +156,10 @@ class FastaiDetector(DetectionTorchHooks, FastaiRunnable):
             own placement callback honours it (see :meth:`_place`).
         class_names: Labels for the per-class metric report, in class-id order.
         plot_metrics: ALSO send each per-class metric to the trackers as a bar chart.
+        seed: Seed for torch's global RNG, applied when `initialize()` builds the model —
+            the torchvision builders randomly reinitialize their `num_classes` head, and no
+            framework covers that draw. Applied without restoring the RNG state (the
+            workspace wrapper-seeding idiom), so the loader shuffle is seeded too.
         metric_names: How recorded metrics are named. This backend reports through its OWN
             torchmetrics pass under canonical names; the Recorder's ``train_loss`` is translated
             from fastai's vocabulary.
@@ -192,6 +196,7 @@ class FastaiDetector(DetectionTorchHooks, FastaiRunnable):
         device: Device = "auto",
         class_names: Optional[List[str]] = None,
         plot_metrics: bool = False,
+        seed: int = 0,
         metric_names: Optional[Lazy[MetricNames]] = None,
         callbacks: Optional[List[Lazy[FastaiCallback]]] = None,
         trackers: Optional[Union[Lazy[Tracker], Iterable[Lazy[Tracker]]]] = None,
@@ -229,6 +234,7 @@ class FastaiDetector(DetectionTorchHooks, FastaiRunnable):
         self.device_choice: Device = device
         self.class_names: Optional[List[str]] = list(class_names) if class_names else None
         self.plot_metrics = plot_metrics
+        self.seed = int(seed)
 
     # ---- the torchmetrics half the base leaves open ----------------------------------------- #
     def _build_fit_metrics(self, include_train: bool = True) -> None:
