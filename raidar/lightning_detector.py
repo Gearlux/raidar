@@ -68,7 +68,7 @@ class LightningDetector(DetectionTorchHooks, LightningRunnable):
             ``pytorch_lightning.loggers``.
         experiment_name / run_name: tracking identity.
         input_key: Record key carrying the input image (default ``"image"``).
-        target_key: Record key carrying the detection target ``Regions`` (default ``"target"``).
+        target_key: Record key carrying the detection target ``Boxes`` (default ``"target"``).
         metrics: Single-metric templates flowed per EVAL split (default ``MeanAveragePrecision``).
             There is deliberately NO ``train_metrics`` slot: a torchvision-native model in train
             mode returns ONLY the loss dict — there are no train-split predictions to score, so a

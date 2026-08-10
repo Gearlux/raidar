@@ -31,7 +31,7 @@ from loggair import get_logger
 from matrainer.metric_names import MetricNames, as_metric_names
 from matrainer.mlx.loop import EpochCallback, MlxLoopRunnable, MlxOptimizer
 from matrainer.tracking.base import Tracker
-from recordstream import RecordSource, batch_regions, batch_values
+from recordstream import RecordSource, batch_boxes, batch_values
 
 from raidar.detection_base import DetectionBase
 from raidar.fcos import spec
@@ -101,8 +101,8 @@ class MlxDetector(DetectionBase, MlxLoopRunnable):
         trackers: matrainer trackers — one or a list. This run's ONLY output wiring.
         callbacks: Callables invoked as ``callback(epoch, logs)`` after each epoch.
         experiment_name / run_name: tracking identity.
-        input_key / target_key: Record keys for the image and the ground-truth ``Regions``
-            (``FcosTargets`` leaves it intact; ``batch_regions`` reads it back for scoring).
+        input_key / target_key: Record keys for the image and the ground-truth ``Boxes``
+            (``FcosTargets`` leaves it intact; ``batch_boxes`` reads it back for scoring).
         cls_key / box_key / ctr_key: Record keys of the dense maps ``FcosTargets`` wrote.
         learning_rate: Learning rate for the optimizer.
         optimizer: An ``mlx.optimizers`` class NAME (``"adam"`` / ``"adamw"`` / ``"sgd"``) or the
@@ -254,7 +254,7 @@ class MlxDetector(DetectionBase, MlxLoopRunnable):
         targets: List[Dict[str, np.ndarray]] = []
         for index, batch in enumerate(sequence.batches()):
             predictions.extend(self._decoded_batch(sequence[index][0]))
-            targets.extend(batch_regions(batch, self.target_key))
+            targets.extend(batch_boxes(batch, self.target_key))
         return spec.average_precision_50(predictions, targets)
 
     # ---- predictions --------------------------------------------------------------------------- #

@@ -36,7 +36,9 @@ pipeline {
                 sh "${VENV_BIN}/uv pip install --no-deps git+https://github.com/Gearlux/confluid.git@main"
                 sh "${VENV_BIN}/uv pip install --no-deps git+https://github.com/Gearlux/liquifai.git@main"
                 sh "${VENV_BIN}/uv pip install --no-deps git+https://github.com/Gearlux/recordstream.git@main"
-                sh "${VENV_BIN}/uv pip install -e .[dev]"
+                sh "${VENV_BIN}/uv pip install --no-deps git+https://github.com/Gearlux/torpaido.git@main"
+                sh "${VENV_BIN}/uv pip install --no-deps git+https://github.com/Gearlux/matrainer.git@main"
+                sh "${VENV_BIN}/uv pip install -e .[dev,torch,lightning,huggingface,rfdetr,keras,mlflow,tensorboard]"
                 // Notebook-only extras (matplotlib, jupyter kernels, etc.) live
                 // in the optional `[notebook]` extra when the project ships
                 // notebooks; absence is not an error.
@@ -209,7 +211,7 @@ with open('isort-checkstyle.xml', 'w') as f:
             steps {
                 script {
                     if (fileExists('tests') && sh(script: "find tests -name '*.py' | grep -q .", returnStatus: true) == 0) {
-                        sh "${VENV_BIN}/pytest tests --junitxml=test-report.xml --cov=raidar --cov-report=xml:coverage.xml --cov-report=term"
+                        sh "${VENV_BIN}/pytest tests -m 'not slow' --junitxml=test-report.xml --cov=raidar --cov-report=xml:coverage.xml --cov-report=term"
                     } else {
                         echo "No tests found in 'tests' directory. Skipping."
                     }
@@ -227,6 +229,27 @@ with open('isort-checkstyle.xml', 'w') as f:
                                 name: 'Raidar Coverage',
                                 tools: [[parser: 'COBERTURA', pattern: 'coverage.xml']]
                             )
+                        }
+                    }
+                }
+            }
+        }
+
+        stage('Slow Tests') {
+            steps {
+                script {
+                    // 5 = the marker is registered but nothing is currently marked — valid, not a failure.
+                    def rc = sh(script: "${VENV_BIN}/pytest tests -m slow --junitxml=slow-test-report.xml", returnStatus: true)
+                    if (rc != 0 && rc != 5) {
+                        error("Slow tests failed (exit ${rc}).")
+                    }
+                }
+            }
+            post {
+                always {
+                    script {
+                        if (fileExists('slow-test-report.xml')) {
+                            junit allowEmptyResults: true, testResults: 'slow-test-report.xml'
                         }
                     }
                 }

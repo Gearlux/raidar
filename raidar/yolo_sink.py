@@ -31,7 +31,7 @@ dataset trades startup cost for faster epochs and lets third-party tools
 Generic over any detection Stream whose input-key value is an image
 (``[3,H,W]`` / ``[H,W,3]`` / ``[H,W]``, float ``[0,1]`` or ``uint8``, numpy or
 torch) and whose target-key value is ``{"boxes": [N,4] xyxy-pixel float32, "labels": [N] int64}``
-— i.e. exactly what :class:`waivefront.targets.RegionsToDetectionBoxesOp`
+— i.e. exactly what :class:`waivefront.targets.RegionsToDetectionBoxes`
 produces. (No ``ultralytics`` import — it only writes the on-disk layout.)
 """
 
@@ -47,7 +47,7 @@ import yaml
 from confluid import configurable
 from loggair import get_logger
 from PIL import Image
-from recordstream import Label, Record, Regions, item_data
+from recordstream import Boxes, Label, Record, item_data
 from recordstream.storage.base import Storage
 
 logger = get_logger(__name__)
@@ -93,13 +93,13 @@ def _record_image(record: Record, input_key: str) -> Any:
 
 
 def _record_target_dict(record: Record, target_key: str) -> Dict[str, Any]:
-    """The ``{boxes, labels}`` detection target under ``target_key`` — a :class:`~recordstream.Regions`
+    """The ``{boxes, labels}`` detection target under ``target_key`` — a :class:`~recordstream.Boxes`
     item (the ``CocoToTorchVisionDetection`` output) unwrapped, a dict-valued ``Label`` / raw dict
     passed through, or ``{}`` when the key is absent."""
     if target_key not in record:
         return {}
     item = record[target_key]
-    if isinstance(item, Regions):
+    if isinstance(item, Boxes):
         return {"boxes": item.boxes, "labels": item.labels}
     data = item.value if isinstance(item, Label) else item_data(item)
     return data if isinstance(data, dict) else {}
@@ -251,7 +251,7 @@ class YoloSink(Storage):
         index_padding: Zero-padding width for the per-split sequential filenames (``6`` → ``000000.png``).
         write_coco: Also write ``annotations/<split>.json`` in COCO format alongside the YOLO-txt labels.
         input_key: Record key carrying the input image (default ``"image"``).
-        target_key: Record key carrying the detection target ``Regions`` (default ``"target"``).
+        target_key: Record key carrying the detection target ``Boxes`` (default ``"target"``).
     """
 
     def __init__(

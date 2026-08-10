@@ -33,7 +33,7 @@ _BACKEND_NAMES = {
     # it is the huggingface BACKEND's model (the model computes its own loss from `labels=`).
     "HuggingFaceDetectionModel": ("raidar.huggingface_model", "huggingface"),
     # The torch engine's registered metric set (one module per engine). Batching is
-    # recordstream's — `collate_records` + `batch_regions`, no raidar collate.
+    # recordstream's — `collate_records` + `batch_boxes`, no raidar collate.
     "DetectionConfusionMatrix": ("raidar.torch_detection", "torch"),
     # The shared tiny-FCOS spec's torch implementation (serves the lightning/torch/fastai loops).
     "TorchFcos": ("raidar.fcos.torch_fcos", "torch"),
@@ -49,7 +49,7 @@ _BACKEND_NAMES = {
     # Apple's MLX loop + the spec in mlx.nn (Apple silicon only).
     "MlxDetector": ("raidar.mlx_detector", "mlx"),
     "MlxFcos": ("raidar.fcos.mlx_fcos", "mlx"),
-    # FcosTargets is numpy + the spec only, but it reads Regions targets the torch-shaped chain
+    # FcosTargets is numpy + the spec only, but it reads Boxes targets the torch-shaped chain
     # produced — its extra is torch (the smallest install that can feed it).
     "FcosTargets": ("raidar.fcos.targets", "torch"),
     # The on-disk YOLO-layout sink is numpy/PIL/yaml only — no framework — but it stays lazy so

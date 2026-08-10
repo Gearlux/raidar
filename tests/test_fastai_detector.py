@@ -10,7 +10,7 @@ from typing import Any, Dict, List, Optional, Union, get_args
 
 import torch
 import torch.nn as nn
-from recordstream import Image, Record, Regions
+from recordstream import Boxes, Image, Record
 from recordstream.core import Stream
 from recordstream.runnable import entrypoint_tasks
 from torch import Tensor
@@ -51,7 +51,7 @@ def _make_stream(n: int = 4, size: int = 32) -> Stream:
     records: List[Record] = [
         {
             "image": Image(torch.rand(3, size, size).numpy(), layout="CHW"),
-            "target": Regions(
+            "target": Boxes(
                 boxes=torch.tensor([[4.0, 4.0, 20.0, 20.0]], dtype=torch.float32),
                 labels=torch.tensor([1], dtype=torch.int64),
             ),

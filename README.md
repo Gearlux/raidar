@@ -302,7 +302,7 @@ backend shares, plus that engine's registered metrics:
 
 | Symbol | Role |
 |---|---|
-| `native_batch` | The ONE torch-contract adapter: reads a collated batch into the `(List[Tensor], per-image targets)` pair torchvision's forward takes. **Batching itself is recordstream's** — the loaders declare `collate_fn=collate_list` (the unstacked batch the native contract needs), and `batch_regions` / `batch_metadata` read it back. Override `collate_fn` for a model wanting one stacked tensor. |
+| `native_batch` | The ONE torch-contract adapter: reads a collated batch into the `(List[Tensor], per-image targets)` pair torchvision's forward takes. **Batching itself is recordstream's** — the loaders declare `collate_fn=collate_list` (the unstacked batch the native contract needs), and `batch_boxes` / `batch_metadata` read it back. Override `collate_fn` for a model wanting one stacked tensor. |
 | `DetectionOutput` / `DetectionPredictions` | Task-agnostic per-image prediction schema (re-exported from recordstream). |
 | the `torchmetrics.detection` family + `DetectionConfusionMatrix` | The engine's registered metrics (TP / FP / FN + precision / recall / F1 for the last). |
 
@@ -320,7 +320,7 @@ are `(detection, model)`, and `raidar.torchvision_detection` registers the torch
 `lazy=True`, so a discovery service or visual editor enumerates them beside the wrapper classes
 and a deferred builder still gets the dataset-derived `num_classes` injected at run time.
 Mask R-CNN / Keypoint R-CNN are intentionally not registered — they need instance-mask /
-keypoint targets, not the `{boxes, labels}` shape `recordstream.batch_regions` yields. Discovery runs
+keypoint targets, not the `{boxes, labels}` shape `recordstream.batch_boxes` yields. Discovery runs
 off the `confluid.configurables` entry points (one per registering module); there are no
 hand-written manifest files.
 

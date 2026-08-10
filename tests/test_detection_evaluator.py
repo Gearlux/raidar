@@ -12,7 +12,7 @@ import torch
 import torch.nn as nn
 from confluid import Class, LazyClass
 from confluid.fluid import Class as ConfluidClass
-from recordstream import Image, Regions, collate_list
+from recordstream import Boxes, Image, collate_list
 from recordstream.core import Stream
 from torch import Tensor
 from torch.utils.data import DataLoader
@@ -53,9 +53,9 @@ class _NativeDetector(nn.Module):
         ]
 
 
-def _regions(boxes: Any, labels: Any) -> Regions:
-    """A detection-target Regions carrying tensor boxes/labels (as the typed detection op produces)."""
-    return Regions(boxes=boxes, labels=labels)
+def _regions(boxes: Any, labels: Any) -> Boxes:
+    """A detection-target Boxes carrying tensor boxes/labels (as the typed detection op produces)."""
+    return Boxes(boxes=boxes, labels=labels)
 
 
 def _make_stream(n: int = 4, size: int = 32) -> Stream:

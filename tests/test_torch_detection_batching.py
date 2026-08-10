@@ -1,8 +1,8 @@
 """The torch-contract batch adapter — what is left after the collate moved upstream.
 
 ``collate_records`` (recordstream's own) batches a detection record correctly on its own: a
-variable-size image column stays a per-image list, a variable-N ``Regions`` keeps per-record
-columns, and ``batch_regions`` transposes those back. What raidar still owns is ONE fact —
+variable-size image column stays a per-image list, a variable-N ``Boxes`` keeps per-record
+columns, and ``batch_boxes`` transposes those back. What raidar still owns is ONE fact —
 the torchvision-native forward takes ``List[Tensor]`` — so this file tests exactly that
 adapter and nothing about batching itself (recordstream's ``tests/test_batch.py`` owns that).
 """
@@ -12,7 +12,7 @@ from typing import List
 import numpy as np
 import pytest
 import torch
-from recordstream import Image, Record, Regions, collate_records
+from recordstream import Boxes, Image, Record, collate_records
 
 from raidar.torch_detection import native_batch
 
@@ -21,7 +21,7 @@ def _records(counts: tuple = (1, 3), sizes: tuple = (8, 12)) -> List[Record]:
     return [
         {
             "image": torch.rand(3, size, size),
-            "target": Regions(boxes=torch.rand(n, 4), labels=torch.zeros(n, dtype=torch.int64)),
+            "target": Boxes(boxes=torch.rand(n, 4), labels=torch.zeros(n, dtype=torch.int64)),
             "idx": i,
         }
         for i, (n, size) in enumerate(zip(counts, sizes))
@@ -49,7 +49,7 @@ def test_a_stacked_uniform_image_column_still_yields_per_image_tensors() -> None
     records: List[Record] = [
         {
             "image": Image(np.random.rand(3, 8, 8).astype("float32"), layout="CHW"),
-            "target": Regions(boxes=torch.rand(1, 4), labels=torch.zeros(1, dtype=torch.int64)),
+            "target": Boxes(boxes=torch.rand(1, 4), labels=torch.zeros(1, dtype=torch.int64)),
         }
         for _ in range(2)
     ]
@@ -64,7 +64,7 @@ def test_a_batch_without_targets_yields_none() -> None:
 
 
 def test_configured_keys_are_honoured() -> None:
-    batch = collate_records([{"pixels": torch.rand(3, 8, 8), "boxes": Regions(boxes=torch.rand(2, 4))}])
+    batch = collate_records([{"pixels": torch.rand(3, 8, 8), "boxes": Boxes(boxes=torch.rand(2, 4))}])
     images, targets = native_batch(batch, input_key="pixels", target_key="boxes")
     assert len(images) == 1 and targets is not None and tuple(targets[0]["boxes"].shape) == (2, 4)
 

@@ -16,8 +16,8 @@ Every registered class is named in the literal ``__all__``: ``scan_module`` filt
 
 **There is no detection collate here, and that is the point (2026-08-05):** batching a
 detection record is ``recordstream.collate_records`` unchanged — it leaves variable-size images
-as a per-image list and a variable-N :class:`~recordstream.Regions` as per-record columns — and
-reading it back is ``recordstream.batch_regions`` / ``batch_values`` / ``batch_metadata``. The
+as a per-image list and a variable-N :class:`~recordstream.Boxes` as per-record columns — and
+reading it back is ``recordstream.batch_boxes`` / ``batch_values`` / ``batch_metadata``. The
 ~90 lines this project used to carry for it were re-deriving the engine's own collate.
 
 The torchvision detection BUILDERS are registered by the sibling
@@ -35,7 +35,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import torch
 from confluid import configurable, register
-from recordstream import DetectionOutput, batch_regions, batch_values
+from recordstream import DetectionOutput, batch_boxes, batch_values
 from torch import Tensor
 from torchmetrics import Metric
 from torchmetrics.detection import (
@@ -70,7 +70,7 @@ def native_batch(
 
     Every line is a recordstream call. The loaders here DECLARE
     :func:`~recordstream.collate_list` — the unstacked batch — because the native forward takes
-    ``List[Tensor]``; :func:`~recordstream.batch_regions` is the transpose back into per-image
+    ``List[Tensor]``; :func:`~recordstream.batch_boxes` is the transpose back into per-image
     target dicts, and it reads either collate. The comprehension is the one TORCHVISION fact
     left: it normalizes both shapes a batch can hold (a per-record list, or a stacked payload
     if a config chose the ``"record"`` collate) into the list the forward wants.
@@ -81,11 +81,11 @@ def native_batch(
     Args:
         batch: A batched record (the output of ``collate_records``).
         input_key: Record key carrying the image.
-        target_key: Record key carrying the target ``Regions``; absent, ``targets`` is ``None``
+        target_key: Record key carrying the target ``Boxes``; absent, ``targets`` is ``None``
             (the prediction path, where there is no ground truth to read).
     """
     images = [torch.as_tensor(value) for value in batch_values(batch, input_key)]
-    targets = batch_regions(batch, target_key) if target_key in batch else None
+    targets = batch_boxes(batch, target_key) if target_key in batch else None
     return images, targets
 
 

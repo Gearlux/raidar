@@ -4,7 +4,7 @@ Since P6 (2026-08-08) this is ``(DetectionBase, matrainer.huggingface.HuggingFac
 the machinery — the deferred ``TrainingArguments`` / ``Trainer`` slots, the run-time argument
 FLOOR, the entry points with the plain-function tracking hookup, the ``log_history`` replay —
 lives in :class:`matrainer.huggingface.trainer.HuggingFaceRunnable`; the ``num_classes``
-resolution (model head → explicit → lazy kwarg → the announced ``Regions`` walk) in
+resolution (model head → explicit → lazy kwarg → the announced ``Boxes`` walk) in
 :class:`~raidar.detection_base.DetectionBase`. What stays HERE is detection's huggingface
 vocabulary, and each piece exists because detection is not classification:
 
@@ -47,7 +47,7 @@ from matrainer.torch import scalar_metrics
 from matrainer.torch.runnable import TorchTrainerRunnable
 from matrainer.tracking.base import Tracker
 from matrainer.tracking.render import per_class_vectors, render_vector_as_figure, render_vector_as_table
-from recordstream import PredictionsSink, RecordSource, Regions, item_data
+from recordstream import Boxes, PredictionsSink, RecordSource, item_data
 from torchmetrics import Metric, MetricCollection
 from torchmetrics.detection import MeanAveragePrecision
 
@@ -97,7 +97,7 @@ def _as_rgb_array(payload: Any) -> np.ndarray:
 def _record_target(record: Any, target_key: str) -> Tuple[np.ndarray, np.ndarray]:
     """A record's detection target as ``(boxes xyxy absolute, labels)`` numpy arrays."""
     target = record[target_key]
-    if isinstance(target, Regions):
+    if isinstance(target, Boxes):
         boxes, labels = target.boxes, target.labels
     else:
         data = item_data(target)
@@ -141,7 +141,7 @@ class HuggingFaceDetector(DetectionBase, HuggingFaceRunnable):
         trackers: matrainer trackers — one or a list.
         callbacks: ``transformers.TrainerCallback`` instances.
         experiment_name / run_name: tracking identity.
-        input_key / target_key: Record keys for the image and the detection ``Regions``.
+        input_key / target_key: Record keys for the image and the detection ``Boxes``.
         metrics: torchmetrics templates for the EVAL splits — the same vocabulary as the
             torch-family backends, because evaluation runs through OUR decode + torchmetrics
             pass (see the module docstring). ``val_metrics`` / ``test_metrics`` merge over it.

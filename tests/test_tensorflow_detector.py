@@ -98,7 +98,7 @@ def test_the_raw_tf_model_reaches_no_keras_initializer() -> None:
 def _make_stream(n: int = 4, size: int = 64) -> Any:
     import numpy as np
     import torch
-    from recordstream import Image, Regions
+    from recordstream import Boxes, Image
     from recordstream.core import Stream
 
     from raidar.fcos.targets import FcosTargets
@@ -106,7 +106,7 @@ def _make_stream(n: int = 4, size: int = 64) -> Any:
     records: List[Dict[str, Any]] = [
         {
             "image": Image(np.random.default_rng(i).random((3, size, size)).astype("float32"), layout="CHW"),
-            "target": Regions(
+            "target": Boxes(
                 boxes=torch.tensor([[8.0, 8.0, 40.0, 40.0]], dtype=torch.float32),
                 labels=torch.tensor([1], dtype=torch.int64),
             ),
