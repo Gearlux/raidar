@@ -21,8 +21,8 @@ Detection is the family's odd member, and every oddity is a task fact:
 * **Detection quality is the SPEC's numpy AP, not compile-slot metrics** — torchmetrics is
   torch-only and Keras ships no variable-size detection metric, so :meth:`_score` decodes the
   raw head maps (:func:`raidar.fcos.spec.decode_predictions`) and scores
-  :func:`raidar.fcos.spec.average_precision_50` against the ``Regions`` ground truth
-  ``batch_regions`` reads back. The engines differ only in HOW a batch is predicted, which is
+  :func:`raidar.fcos.spec.average_precision_50` against the ``Boxes`` ground truth
+  ``batch_boxes`` reads back. The engines differ only in HOW a batch is predicted, which is
   the one seam (:meth:`_batch_predictor`).
 * **``evaluate()`` scores the VAL split** (the fleet harmonization) and ``test()`` the
   held-out one — both through :meth:`_score`; neither engine's own eval pass runs, because a
@@ -35,7 +35,7 @@ import numpy as np
 from confluid import flow
 from loggair import get_logger
 from matrainer.metric_names import as_metric_names
-from recordstream import PredictionsSink, batch_metadata, batch_regions, batch_values
+from recordstream import PredictionsSink, batch_boxes, batch_metadata, batch_values
 from recordstream.keras import keras
 
 from raidar.detection_base import DetectionBase
@@ -141,7 +141,7 @@ class DetectionKerasHooks(DetectionBase):
 
         The ground truth comes from the batched record's ``target_key`` — the plain
         ``{"boxes", "labels"}`` dicts ``FcosTargets`` left beside the dense maps, batched as a
-        per-record list and read back by ``batch_regions``.
+        per-record list and read back by ``batch_boxes``.
         """
         predict = self._batch_predictor()
         sequence = self._sequence(source, with_targets=False)
@@ -149,7 +149,7 @@ class DetectionKerasHooks(DetectionBase):
         targets: List[Dict[str, np.ndarray]] = []
         for index, batch in enumerate(sequence.batches()):
             predictions.extend(self._decoded_maps(predict(sequence[index][0])))
-            targets.extend(batch_regions(batch, self.target_key))
+            targets.extend(batch_boxes(batch, self.target_key))
         return spec.average_precision_50(predictions, targets)
 
     # ---- the fit epilogue + the eval/predict entry points ------------------------------------ #

@@ -11,7 +11,7 @@ from typing import Any, Dict, List, get_args
 import numpy as np
 import pytest
 import torch
-from recordstream import Image, Record, Regions
+from recordstream import Boxes, Image, Record
 from recordstream.core import Stream
 from recordstream.runnable import entrypoint_tasks
 
@@ -28,7 +28,7 @@ def _make_stream(n: int = 4, size: int = 64) -> Stream:
     records: List[Record] = [
         {
             "image": Image(np.random.default_rng(i).random((3, size, size)).astype("float32"), layout="CHW"),
-            "target": Regions(
+            "target": Boxes(
                 boxes=torch.tensor([[8.0, 8.0, 40.0, 40.0]], dtype=torch.float32),
                 labels=torch.tensor([1], dtype=torch.int64),
             ),

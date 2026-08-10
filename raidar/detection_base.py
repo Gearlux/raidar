@@ -1,7 +1,7 @@
 """``DetectionBase`` — the task half of every raidar backend, written once.
 
 The detection logic that used to exist per backend module: ``num_classes`` resolution
-(concrete model head → explicit → lazy kwarg → the announced target walk over the ``Regions``
+(concrete model head → explicit → lazy kwarg → the announced target walk over the ``Boxes``
 column), the injected-only-when-accepted model flow (torchvision ships its detectors as
 builder FUNCTIONS with differing signatures), the fork-safe split preparation, and the
 fit/eval initialization split — including detection's own asymmetry, the missing train
@@ -21,7 +21,7 @@ from confluid import Fluid, flow
 from confluid.registry import resolve_class
 from loggair import get_logger
 from matrainer.runnable import TrainerRunnable
-from recordstream import Regions, iter_key
+from recordstream import Boxes, iter_key
 from tqdm import tqdm
 
 if TYPE_CHECKING:  # annotation-only — this module must not import torch
@@ -160,7 +160,7 @@ class DetectionBase(TrainerRunnable):
             iter_key(src, self.target_key), total=total, desc="raidar: deriving num_classes", unit="record"
         ):
             labels: Any
-            if isinstance(target, Regions):
+            if isinstance(target, Boxes):
                 labels = target.labels
             elif isinstance(target, dict):
                 labels = target.get("labels")

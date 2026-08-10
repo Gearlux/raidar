@@ -13,7 +13,7 @@ from typing import Any, Optional, cast, get_args
 import numpy as np
 import pytest
 import torch
-from recordstream import Regions
+from recordstream import Boxes
 from recordstream.runnable import entrypoint_tasks
 
 from raidar.huggingface_detector import (
@@ -109,7 +109,7 @@ def test_coco_annotations_carry_xywh_and_area() -> None:
 
 
 def test_record_target_unwraps_regions() -> None:
-    record = {"target": Regions(boxes=torch.tensor([[1.0, 2.0, 3.0, 4.0]]), labels=torch.tensor([1]))}
+    record = {"target": Boxes(boxes=torch.tensor([[1.0, 2.0, 3.0, 4.0]]), labels=torch.tensor([1]))}
     boxes, labels = _record_target(record, "target")
     assert boxes.shape == (1, 4) and labels.tolist() == [1]
 
@@ -125,8 +125,8 @@ def test_a_model_without_a_processor_is_rejected() -> None:
 # --------------------------------------------------------------------------- #
 def test_num_classes_is_derived_from_0_indexed_targets() -> None:
     records = [
-        {"target": Regions(boxes=torch.zeros((1, 4)), labels=torch.tensor([3]))},
-        {"target": Regions(boxes=torch.zeros((1, 4)), labels=torch.tensor([1]))},
+        {"target": Boxes(boxes=torch.zeros((1, 4)), labels=torch.tensor([3]))},
+        {"target": Boxes(boxes=torch.zeros((1, 4)), labels=torch.tensor([1]))},
     ]
     detector = HuggingFaceDetector(model=torch.nn.Identity())
     assert detector._num_classes_from_targets(records) == 4  # max label 3 -> K = 4

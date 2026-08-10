@@ -14,7 +14,7 @@ import pytorch_lightning as L
 import torch
 import torch.nn as nn
 from confluid import LazyClass
-from recordstream import Image, Record, Regions, collate_list
+from recordstream import Boxes, Image, Record, collate_list
 from recordstream.core import Stream
 from recordstream.runnable import runnable_entrypoints
 from torch import Tensor
@@ -65,13 +65,13 @@ class _NativeDetector(nn.Module):
         return out
 
 
-def _regions(boxes: Any, labels: Any) -> Regions:
-    """A detection-target Regions carrying tensor boxes/labels (as the typed detection op produces)."""
-    return Regions(boxes=boxes, labels=labels)
+def _regions(boxes: Any, labels: Any) -> Boxes:
+    """A detection-target Boxes carrying tensor boxes/labels (as the typed detection op produces)."""
+    return Boxes(boxes=boxes, labels=labels)
 
 
 def _make_records(n: int = 4, size: int = 32) -> List[Record]:
-    """Per-record records shaped like a detection source: Image + Regions target + plain meta key."""
+    """Per-record records shaped like a detection source: Image + Boxes target + plain meta key."""
     records: List[Record] = []
     for i in range(n):
         records.append(

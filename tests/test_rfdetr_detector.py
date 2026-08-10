@@ -226,11 +226,11 @@ def _best_available_device() -> str:
 @pytest.mark.slow
 def test_stream_train_smoke(tmp_path: Any) -> None:
     pytest.importorskip("rfdetr.training")
-    from recordstream import Image, Regions
+    from recordstream import Boxes, Image
     from recordstream.core import Stream
 
-    def _regions(boxes: Any, labels: Any) -> Regions:
-        return Regions(boxes=boxes, labels=labels)
+    def _regions(boxes: Any, labels: Any) -> Boxes:
+        return Boxes(boxes=boxes, labels=labels)
 
     def _stream(n: int) -> Stream:
         return Stream(

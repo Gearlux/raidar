@@ -168,7 +168,7 @@ class FastaiDetector(DetectionTorchHooks, FastaiRunnable):
         experiment_name: Run identity, recorded in artifacts and tracking.
         run_name: Run identity; a random ``adjective_noun`` when omitted.
         input_key: Record key holding the image.
-        target_key: Record key holding the detection target ``Regions``.
+        target_key: Record key holding the detection target ``Boxes``.
 
     Optional OVERRIDE slots — every one is already constructed with a sensible default in
     ``__init__``, so nothing here NEEDS wiring; a same-named top-level YAML key replaces one

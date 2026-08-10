@@ -14,7 +14,7 @@ import pytest
 pytest.importorskip("rfdetr.training")  # the [train,loggers] extras
 
 import torch  # noqa: E402
-from recordstream import Image, Record, Regions  # noqa: E402
+from recordstream import Boxes, Image, Record  # noqa: E402
 from recordstream.core import Stream  # noqa: E402
 from rfdetr.config import RFDETRNanoConfig, TrainConfig  # noqa: E402
 
@@ -23,8 +23,8 @@ from raidar.stream_rfdetr_dataset import StreamRFDETRDataModule, StreamRFDETRDat
 
 
 def _det_record(image: Any, boxes: Any, labels: Any, idx: int) -> Record:
-    """A detection record: Image under "image" + Regions under "target" (the CocoToTorchVisionDetection shape)."""
-    return {"image": Image(image.numpy(), layout="CHW"), "target": Regions(boxes=boxes, labels=labels), "idx": idx}
+    """A detection record: Image under "image" + Boxes under "target" (the CocoToTorchVisionDetection shape)."""
+    return {"image": Image(image.numpy(), layout="CHW"), "target": Boxes(boxes=boxes, labels=labels), "idx": idx}
 
 
 def _stream(n: int = 4, *, h: int = 40, w: int = 60, empty: bool = False) -> Stream:

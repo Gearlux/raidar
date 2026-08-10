@@ -15,8 +15,9 @@ import pytest
 import torch
 import yaml
 from PIL import Image
+from recordstream import Boxes
 from recordstream import Image as SFImage
-from recordstream import Record, Regions
+from recordstream import Record
 from recordstream.core import Stream
 
 from raidar.yolo_sink import YoloSink, _jsonable_metadata, _to_uint8_hwc, _yolo_lines
@@ -25,7 +26,7 @@ from raidar.yolo_sink import YoloSink, _jsonable_metadata, _to_uint8_hwc, _yolo_
 def _make_record(
     height: int = 400, width: int = 400, boxes_xyxy: Any = None, labels: Any = None, metadata: Any = None
 ) -> Record:
-    """Detection record matching CocoToTorchVisionDetection: Image [3,H,W] under "image"; Regions
+    """Detection record matching CocoToTorchVisionDetection: Image [3,H,W] under "image"; Boxes
     (boxes [N,4] xyxy-pixel + labels [N] int64) under "target"; metadata entries as plain keys."""
     boxes: Any = (
         torch.zeros((0, 4), dtype=torch.float32)
@@ -35,7 +36,7 @@ def _make_record(
     lbls: Any = torch.zeros((0,), dtype=torch.int64) if labels is None else torch.as_tensor(labels, dtype=torch.int64)
     record: Record = {
         "image": SFImage(torch.rand(3, height, width).numpy(), layout="CHW"),
-        "target": Regions(boxes=boxes, labels=lbls),
+        "target": Boxes(boxes=boxes, labels=lbls),
     }
     record.update(metadata or {})
     return record

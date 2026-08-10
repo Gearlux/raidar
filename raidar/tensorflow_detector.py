@@ -66,7 +66,7 @@ class TensorFlowDetector(DetectionKerasHooks, TensorFlowRunnable):
         trackers: matrainer trackers — one or a list.
         callbacks: Keras callbacks, driven by hand through a ``CallbackList``.
         experiment_name / run_name: tracking identity.
-        input_key / target_key: Record keys for the image and the ground-truth ``Regions``.
+        input_key / target_key: Record keys for the image and the ground-truth ``Boxes``.
         cls_key / box_key / ctr_key: Record keys of the dense maps ``FcosTargets`` wrote.
         optimizer: Keras optimizer — a string alias (``"adam"``) or an instance.
         learning_rate: Learning rate applied to a STRING-alias optimizer.

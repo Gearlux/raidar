@@ -140,23 +140,23 @@ or "optimize" an implementation in a way that changes its parameter count.
 ## 4. Detection batches for the non-torch engines are DENSE, encoded before collation (2026-08-05)
 
 **Context.** Detection targets are variable-length — N boxes per image. `collate_records`
-handles that natively for the TORCH family (a `Regions` column keeps per-record boxes/labels,
-which `batch_regions` reads back — raidar owns no collate), but the keras/tf/jax/mlx loops need
+handles that natively for the TORCH family (a `Boxes` column keeps per-record boxes/labels,
+which `batch_boxes` reads back — raidar owns no collate), but the keras/tf/jax/mlx loops need
 REGULAR stacking: their models take dense arrays, a ragged `[N, 4]` column is not one, and the
 collate mandate forbids padding.
 
 **Decision.** Encode EARLY: `raidar.fcos.targets.FcosTargets` runs at the END of the ops chain
-and turns each record's `Regions` into the spec's fixed-shape dense maps (class one-hot, ltrb
+and turns each record's `Boxes` into the spec's fixed-shape dense maps (class one-hot, ltrb
 distances, centerness) via the numpy assignment — so every batch stacks regularly and the
 per-engine batch adapter only reads arrays. It **adds** those maps and destroys nothing: the
-`Regions` rides along for the eval pass, because a region column never stacks anyway (its
-boxes/labels are declared item attrs, which the collate lists per record) and `batch_regions`
+`Boxes` rides along for the eval pass, because a region column never stacks anyway (its
+boxes/labels are declared item attrs, which the collate lists per record) and `batch_boxes`
 reads it back.
 
 **Consequences.** The four non-torch backends share one batching story and zero adapter code
 beyond a transpose. The cost is a config obligation: THREE knobs must agree — `ResizeDetection`'s
 `width`/`height`, the op's `input_shape`, and the model's. The op can only see two of them, and
-since the `Regions` survives it (2026-08-05) it checks the one it can: the boxes' own `canvas`
+since the `Boxes` survives it (2026-08-05) it checks the one it can: the boxes' own `canvas`
 against its `input_shape`, raising at the first record and naming the knobs. That is an earlier,
 better-aimed error rather than a correctness fix — a real mismatch also dies in the model, which
 reports tensor shapes several frames from the config lines responsible.

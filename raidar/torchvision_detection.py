@@ -23,7 +23,7 @@ Registered with a presentation-only ``group="detection"`` for palette nesting (m
 builders sit beside the raidar wrapper class (``RFDETRModel``) in every model picker.
 
 Mask R-CNN / Keypoint R-CNN are intentionally excluded — they need instance masks / keypoints in the
-target, not the ``{boxes, labels}`` shape ``recordstream.batch_regions`` yields.
+target, not the ``{boxes, labels}`` shape ``recordstream.batch_boxes`` yields.
 
 Exposed via the ``confluid.configurables`` entry point + ``__all__`` so StreamStudio's discovery second
 pass surfaces them — ``scan_module`` alone skips them (their ``__module__`` is ``torchvision``).

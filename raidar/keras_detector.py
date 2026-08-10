@@ -12,7 +12,7 @@ concrete AND its native-TensorFlow sibling. What stays here is the FULL flat con
 confluid introspection surface).
 
 **Detection's batching problem, and the spec's answer.** The torch backends carry
-variable-length per-image ``Regions`` targets as per-record COLUMNS; this loop needs REGULAR
+variable-length per-image ``Boxes`` targets as per-record COLUMNS; this loop needs REGULAR
 stacking for its dense maps, so a Keras detection config appends
 :class:`raidar.fcos.targets.FcosTargets` to its ops chain — see the hooks module for the rest
 (the CHW transpose, the loss design, the scoring).
@@ -59,8 +59,8 @@ class KerasDetector(DetectionKerasHooks, KerasRunnable):
         trackers: matrainer trackers — one or a list. This run's ONLY output wiring.
         callbacks: ``keras.callbacks.Callback`` instances.
         experiment_name / run_name: tracking identity.
-        input_key / target_key: Record keys for the image and the ground-truth ``Regions``
-            (``FcosTargets`` leaves it intact; ``batch_regions`` reads it back for scoring).
+        input_key / target_key: Record keys for the image and the ground-truth ``Boxes``
+            (``FcosTargets`` leaves it intact; ``batch_boxes`` reads it back for scoring).
         cls_key / box_key / ctr_key: Record keys of the dense maps ``FcosTargets`` wrote — the
             names must match that op's.
         optimizer: Keras optimizer — a string alias (``"adam"``) or an instance.

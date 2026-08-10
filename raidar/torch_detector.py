@@ -71,7 +71,7 @@ class TorchDetector(DetectionTorchHooks, TorchLoopRunnable):
         experiment_name: Run identity, recorded in artifacts and tracking.
         run_name: Run identity; a random ``adjective_noun`` when omitted.
         input_key: Record key holding the image.
-        target_key: Record key holding the detection target ``Regions``.
+        target_key: Record key holding the detection target ``Boxes``.
         metrics: torchmetrics templates, flowed per EVAL split. ``None`` picks COCO mAP. There is
             deliberately NO ``train_metrics`` slot: a native model in train mode returns ONLY the
             loss dict — no train-split predictions exist to score (wiring one raises loudly, via

@@ -28,7 +28,7 @@ torchvision-detection convention raidar uses elsewhere,
   Floats in ``[0, 1]`` are rescaled to ``uint8 [0, 255]``; uint8 passes through.
   (No BGR flip — RF-DETR's ``ToImage``/``Normalize`` expect RGB, unlike
   ultralytics.)
-* The ``target_key`` :class:`recordstream.Regions` value — ``boxes`` ``[N, 4]``
+* The ``target_key`` :class:`recordstream.Boxes` value — ``boxes`` ``[N, 4]``
   xyxy-pixel + ``labels`` ``[N]`` int — with labels **0-indexed ``0..K-1``**
   (RF-DETR reserves index ``K`` for the background class internally — the
   OPPOSITE of torchvision's background-at-0, so do NOT ``+1``-shift labels for
@@ -43,7 +43,7 @@ import numpy as np
 import torch
 from loggair import get_logger
 from PIL import Image
-from recordstream import Regions, Stream, item_data, iter_key
+from recordstream import Boxes, Stream, item_data, iter_key
 
 # PRIVATE rfdetr module, and it moves: `build_namespace` was renamed
 # `_namespace_from_configs` in rfdetr 1.9.0, which broke this import outright. rfdetr exposes
@@ -93,11 +93,11 @@ def _record_input_to_rgb_pil(arr_in: Any) -> Image.Image:
 
 def _target_boxes_labels(target: Any) -> Any:
     """Extract ``(boxes, labels)`` from a projected detection target — a typed
-    :class:`~recordstream.Regions` (the ``CocoToTorchVisionDetection`` op output) or a raw
+    :class:`~recordstream.Boxes` (the ``CocoToTorchVisionDetection`` op output) or a raw
     ``{"boxes", "labels"}`` dict. Returns ``(None, None)`` when either is absent."""
     if target is None:
         return None, None
-    if isinstance(target, Regions):
+    if isinstance(target, Boxes):
         return target.boxes, target.labels
     if hasattr(target, "boxes") and hasattr(target, "labels"):
         return target.boxes, target.labels
@@ -179,7 +179,7 @@ class StreamRFDETRDataset(torch.utils.data.Dataset):
             train_config)``) — carries ``square_resize_div_64`` / ``multi_scale`` /
             ``patch_size`` / ``num_windows`` / ``aug_config`` that drive the transform.
         input_key: Record key carrying the input image (default ``"image"``).
-        target_key: Record key carrying the target ``Regions`` (default ``"target"``).
+        target_key: Record key carrying the target ``Boxes`` (default ``"target"``).
     """
 
     def __init__(
