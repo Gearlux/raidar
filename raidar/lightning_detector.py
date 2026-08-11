@@ -106,7 +106,7 @@ class LightningDetector(DetectionTorchHooks, LightningRunnable):
 
     def __init__(
         self,
-        model: Mandatory[Lazy[nn.Module]],
+        model: Optional[Mandatory[Lazy[nn.Module]]] = None,
         train_set: Optional[Lazy[RecordSource]] = None,
         test_set: Optional[Lazy[RecordSource]] = None,
         num_classes: Optional[int] = None,

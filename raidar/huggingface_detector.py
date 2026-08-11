@@ -158,7 +158,7 @@ class HuggingFaceDetector(DetectionBase, HuggingFaceRunnable):
 
     def __init__(
         self,
-        model: Mandatory[Lazy[HuggingFaceNetwork]],
+        model: Optional[Mandatory[Lazy[HuggingFaceNetwork]]] = None,
         train_set: Optional[Lazy[RecordSource]] = None,
         test_set: Optional[Lazy[RecordSource]] = None,
         num_classes: Optional[int] = None,

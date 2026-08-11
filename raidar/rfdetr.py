@@ -183,9 +183,6 @@ class RFDETRModel(nn.Module):
         checkpoint_path: Optional[str] = None,
         checkpoint_strict: bool = False,
     ) -> None:
-        from rfdetr.detr import RFDETR
-        from rfdetr.models.lwdetr import build_criterion_and_postprocessors
-
         super().__init__()
         if variant not in _VARIANT_CLASSES:
             raise ValueError(f"variant must be one of {sorted(_VARIANT_CLASSES)}, got {variant!r}.")
@@ -196,24 +193,74 @@ class RFDETRModel(nn.Module):
         # run record needs cannot be one the constructor consumes and forgets.
         self.pretrained_detector = bool(pretrained_detector)
         self.checkpoint_path = checkpoint_path
+        self.checkpoint_strict = bool(checkpoint_strict)
+        # Lazy: store config only. Building here allocated 30.1M parameters AND read the
+        # pretrained checkpoint off disk (~/.roboflow) at CONSTRUCTION — 2.1 s before this
+        # object could even be asked what its parameters are named, which the Lazy-Init /
+        # Zero-Arg mandate forbids. Everything the build derives is resolved in solidify().
+        self._requested_resolution = resolution
+        self._resolution: Optional[int] = None
+        self.detector: Optional[nn.Module] = None
+        self.postprocess: Optional[Any] = None
+        self.criterion: Optional[nn.Module] = None
 
-        rfdetr = _build_rfdetr(
-            variant=variant,
-            num_classes=self.num_classes,
-            pretrained_detector=pretrained_detector,
-            resolution=resolution,
-        )
-        self.detector = rfdetr.model.model
-        self.postprocess = rfdetr.model.postprocess
-        self.resolution = int(rfdetr.model_config.resolution)
-        criterion_args = _build_criterion_args(rfdetr.model_config, rfdetr.model.device)
-        criterion, _ = build_criterion_and_postprocessors(criterion_args)
-        self.criterion = criterion
-        self.register_buffer("_mean", torch.tensor(RFDETR.means).view(1, 3, 1, 1))
-        self.register_buffer("_std", torch.tensor(RFDETR.stds).view(1, 3, 1, 1))
+    def solidify(self) -> nn.Module:
+        """Build (once) and return the live detector — confluid's ``flow()``-time hook.
 
-        if checkpoint_path:
-            load_lightning_checkpoint(self, checkpoint_path, strict=checkpoint_strict)
+        Resolves everything the eager constructor used to derive from the built model: the
+        detector itself, its postprocessor, the EFFECTIVE resolution (which the library picks
+        from the variant when none was requested) and the criterion. Idempotent; ``flow()``
+        calls it, so ``self.parameters()`` is populated before an optimizer reads it, and
+        :meth:`forward` calls it for a directly constructed instance. The checkpoint load stays
+        last, so its values win — the same order the eager constructor had.
+        """
+        if self.detector is None:
+            from rfdetr.detr import RFDETR
+            from rfdetr.models.lwdetr import build_criterion_and_postprocessors
+
+            # The ImageNet normalization constants are the LIBRARY's. Registering the buffers
+            # HERE rather than in __init__ is what keeps construction free of the `rfdetr`
+            # import itself — measured at 0.3-0.5 s for the first instance in a process, which
+            # a schema read of this class should not pay. They land before the checkpoint load
+            # below, so a `.ckpt` carrying them still wins.
+            self.register_buffer("_mean", torch.tensor(RFDETR.means).view(1, 3, 1, 1))
+            self.register_buffer("_std", torch.tensor(RFDETR.stds).view(1, 3, 1, 1))
+            rfdetr = _build_rfdetr(
+                variant=self.variant,
+                num_classes=self.num_classes,
+                pretrained_detector=self.pretrained_detector,
+                resolution=self._requested_resolution,
+            )
+            self.detector = rfdetr.model.model
+            self.postprocess = rfdetr.model.postprocess
+            self._resolution = int(rfdetr.model_config.resolution)
+            criterion_args = _build_criterion_args(rfdetr.model_config, rfdetr.model.device)
+            criterion, _ = build_criterion_and_postprocessors(criterion_args)
+            self.criterion = criterion
+            if self.checkpoint_path:
+                load_lightning_checkpoint(self, self.checkpoint_path, strict=self.checkpoint_strict)
+        return cast(nn.Module, self.detector)
+
+    @property
+    def backbone(self) -> nn.Module:
+        """The live detector, built on first access.
+
+        ``flow()`` never touches property getters (confluid's lazy-init rule 3), which is why
+        :meth:`solidify` exists as a method as well; this is what makes a directly constructed,
+        never-flowed instance usable.
+        """
+        return self.solidify()
+
+    @property
+    def resolution(self) -> int:
+        """The EFFECTIVE square input size, which only the built model knows.
+
+        ``resolution=None`` (the default) lets the library choose per variant, so this cannot be
+        answered from stored config alone — reading it builds. Callers that only want to know
+        what was REQUESTED read ``_requested_resolution`` instead and get no build.
+        """
+        self.solidify()
+        return cast(int, self._resolution)
 
     def _preprocess(self, images: List[Tensor]) -> Tensor:
         """Stack images and apply ImageNet normalization on-device."""
@@ -229,8 +276,11 @@ class RFDETRModel(nn.Module):
         return (stacked - mean) / std
 
     def _criterion_loss(self, outputs: Dict[str, Any], targets_detr: List[Dict[str, Tensor]]) -> Tensor:
-        loss_dict = self.criterion(outputs, targets_detr)
-        weight_dict = self.criterion.weight_dict
+        # Built alongside the detector in solidify(); only ever reached from forward(), which
+        # solidifies first — the cast documents that rather than re-checking it here.
+        criterion = cast(Any, self.criterion)
+        loss_dict = criterion(outputs, targets_detr)
+        weight_dict = criterion.weight_dict
         device = outputs["pred_logits"].device
         zero = torch.zeros((), device=device)
         total: Tensor = sum(
@@ -258,22 +308,26 @@ class RFDETRModel(nn.Module):
         images: List[Tensor],
         targets: Optional[List[Dict[str, Tensor]]] = None,
     ) -> Union[Dict[str, Tensor], List[DetectionOutput]]:
+        # Build up front rather than relying on `_preprocess` happening to read the
+        # resolution property first — this is the one call that must not be order-sensitive.
+        detector = self.solidify()
+
         if self.training:
             if targets is None:
                 raise ValueError("RFDETRModel in train mode requires targets.")
             normalised = self._preprocess(images)
             targets_detr = _build_rfdetr_targets(targets, self.resolution, normalised.device)
-            outputs = self.detector(normalised, targets_detr)
+            outputs = detector(normalised, targets_detr)
             loss_total = self._criterion_loss(outputs, targets_detr)
             return {"loss": loss_total}
 
         normalised = self._preprocess(images)
-        outputs = self.detector(normalised)
+        outputs = detector(normalised)
         target_sizes = torch.tensor(
             [[self.resolution, self.resolution]] * normalised.shape[0],
             device=normalised.device,
         )
-        results = self.postprocess(outputs, target_sizes)
+        results = cast(Any, self.postprocess)(outputs, target_sizes)
         predictions = _decode_rfdetr_predictions(results, self.num_classes, self.score_threshold)
         return predictions
 

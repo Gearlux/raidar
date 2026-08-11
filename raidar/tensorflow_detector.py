@@ -78,7 +78,7 @@ class TensorFlowDetector(DetectionKerasHooks, TensorFlowRunnable):
 
     def __init__(
         self,
-        model: Mandatory[Lazy[TensorFlowNetwork]],
+        model: Optional[Mandatory[Lazy[TensorFlowNetwork]]] = None,
         train_set: Optional[Lazy[RecordSource]] = None,
         test_set: Optional[Lazy[RecordSource]] = None,
         num_classes: Optional[int] = None,
