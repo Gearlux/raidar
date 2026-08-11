@@ -5,7 +5,7 @@ predictions list in eval mode — the only detection path (the matrainer-generic
 adapter wrappers were removed).
 """
 
-from typing import Dict, List
+from typing import Any, Dict, List, cast
 
 import pytest
 import torch
@@ -153,10 +153,58 @@ def test_rfdetr_rejects_wrong_size_image(small_rfdetr: RFDETRModel) -> None:
 
 
 def test_rfdetr_class_embed_matches_num_classes(small_rfdetr: RFDETRModel) -> None:
-    assert small_rfdetr.detector.class_embed.out_features == small_rfdetr.num_classes + 1
-    assert small_rfdetr.detector.num_queries == 300
+    # `.backbone`, not `.detector`: the model builds lazily, so reading the raw slot would only
+    # work when an earlier test in this module happened to have run a forward pass first.
+    # `cast`: `class_embed` / `num_queries` are rfdetr's own attributes, not `nn.Module`'s.
+    detector = cast(Any, small_rfdetr.backbone)
+    assert detector.class_embed.out_features == small_rfdetr.num_classes + 1
+    assert detector.num_queries == 300
 
 
 def test_rfdetr_pretrained_detector_default_off() -> None:
     model = RFDETRModel(num_classes=2, variant="nano", pretrained_detector=False, resolution=RESOLUTION)
-    assert model.detector.class_embed.out_features == 3
+    assert cast(Any, model.backbone).class_embed.out_features == 3  # the property triggers the build
+
+
+# ---------------------------------------------------------------------------
+# lazy construction (Lazy-Init / Zero-Arg mandate)
+# ---------------------------------------------------------------------------
+
+
+def test_construction_materializes_nothing_and_does_not_import_the_library() -> None:
+    """Building the wrapper must be free — no parameters, and no ``rfdetr`` import.
+
+    Before this was made lazy the constructor allocated 30.1M parameters and read the
+    pretrained checkpoint from ``~/.roboflow`` (measured: 2.1 s), so merely asking this class
+    for its schema paid for a whole network. The IMPORT is part of the cost the constructor
+    must not pay either — it is the only reason the normalization buffers are registered in
+    ``solidify()`` rather than ``__init__``, which is easy to "tidy" back without noticing the
+    half-second it puts on every first construction.
+    """
+    import subprocess
+    import sys
+
+    # A subprocess, because `rfdetr` may already be in sys.modules from an earlier test.
+    source = (
+        "import sys;"
+        "from raidar.rfdetr import RFDETRModel;"
+        "m = RFDETRModel(num_classes=2, variant='nano', pretrained_detector=False);"
+        "print(sum(p.numel() for p in m.parameters()), 'rfdetr.detr' in sys.modules)"
+    )
+    result = subprocess.run([sys.executable, "-c", source], capture_output=True, text=True, check=True)
+
+    assert result.stdout.strip().endswith("0 False"), result.stdout
+
+
+def test_solidify_builds_once_and_keeps_the_normalization_buffers_in_the_state_dict() -> None:
+    """The buffers moved into ``solidify()``; a built model's checkpoint must be unchanged."""
+    model = RFDETRModel(num_classes=2, variant="nano", pretrained_detector=False, resolution=RESOLUTION)
+
+    built = model.solidify()
+
+    assert model.solidify() is built, "the build must be cached, not repeated"
+    assert model.backbone is built, "the property and solidify() share one cache"
+    assert sum(p.numel() for p in model.parameters()) > 0
+    state = model.state_dict()
+    assert "_mean" in state and "_std" in state
+    assert model.resolution == RESOLUTION

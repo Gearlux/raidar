@@ -116,7 +116,7 @@ class JaxDetector(DetectionBase, JaxLoopRunnable):
 
     def __init__(
         self,
-        model: Mandatory[Lazy[nnx.Module]],
+        model: Optional[Mandatory[Lazy[nnx.Module]]] = None,
         train_set: Optional[Lazy[RecordSource]] = None,
         val_set: Optional[Lazy[RecordSource]] = None,
         test_set: Optional[Lazy[RecordSource]] = None,
