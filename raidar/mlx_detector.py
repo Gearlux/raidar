@@ -26,7 +26,7 @@ from typing import Any, Callable, Dict, Iterable, List, Literal, Optional, Tuple
 import mlx.core as mx
 import mlx.nn as nn
 import numpy as np
-from confluid import Lazy, Mandatory, configurable
+from confluid import Mandatory, Partial, configurable
 from loggair import get_logger
 from matrainer.metric_names import MetricNames, as_metric_names
 from matrainer.mlx.loop import EpochCallback, MlxLoopRunnable, MlxOptimizer
@@ -115,16 +115,16 @@ class MlxDetector(DetectionBase, MlxLoopRunnable):
 
     def __init__(
         self,
-        model: Optional[Mandatory[Lazy[nn.Module]]] = None,
-        train_set: Optional[Lazy[RecordSource]] = None,
-        val_set: Optional[Lazy[RecordSource]] = None,
-        test_set: Optional[Lazy[RecordSource]] = None,
+        model: Optional[Mandatory[Partial[nn.Module]]] = None,
+        train_set: Optional[Partial[RecordSource]] = None,
+        val_set: Optional[Partial[RecordSource]] = None,
+        test_set: Optional[Partial[RecordSource]] = None,
         num_classes: Optional[int] = None,
         task: DetectorTask = "fit",
         max_epochs: int = 10,
         batch_size: int = 2,
-        trackers: Optional[Union[Lazy[Tracker], Iterable[Lazy[Tracker]]]] = None,
-        callbacks: Optional[List[Lazy[EpochCallback]]] = None,
+        trackers: Optional[Union[Partial[Tracker], Iterable[Partial[Tracker]]]] = None,
+        callbacks: Optional[List[Partial[EpochCallback]]] = None,
         experiment_name: str = "raidar_detection",
         run_name: Optional[str] = None,
         input_key: str = "image",
@@ -134,7 +134,7 @@ class MlxDetector(DetectionBase, MlxLoopRunnable):
         ctr_key: str = "fcos_ctr",
         learning_rate: float = 1e-3,
         optimizer: MlxOptimizer = "adam",
-        metric_names: Optional[Lazy[MetricNames]] = None,
+        metric_names: Optional[Partial[MetricNames]] = None,
     ) -> None:
         super().__init__(
             model=model,

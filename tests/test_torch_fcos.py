@@ -35,7 +35,7 @@ def _model(**overrides: object) -> TorchFcos:
 
 
 # --------------------------------------------------------------------------- #
-# Lazy construction
+# Partial construction
 # --------------------------------------------------------------------------- #
 def test_zero_arg_construction_builds_nothing() -> None:
     model = TorchFcos()

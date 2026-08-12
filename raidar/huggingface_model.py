@@ -64,7 +64,7 @@ class HuggingFaceDetectionModel:
         pretrained: bool = True,
         trust_remote_code: bool = False,
     ) -> None:
-        # Lazy: store only. No Hub call, no download — the workspace zero-arg mandate.
+        # Partial: store only. No Hub call, no download — the workspace zero-arg mandate.
         self.model_name = model_name
         self.num_classes = int(num_classes)
         self.pretrained = pretrained

@@ -103,7 +103,7 @@ class FlaxFcos(nnx.Module):
         max_detections: int = 100,
         seed: int = 0,
     ) -> None:
-        # Lazy: store only. No parameter allocation — the workspace zero-arg mandate.
+        # Partial: store only. No parameter allocation — the workspace zero-arg mandate.
         self.num_classes = num_classes
         self.input_shape = tuple(input_shape)
         self.widths = tuple(widths)

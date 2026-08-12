@@ -22,7 +22,7 @@ Keras 3 picks its engine from ``KERAS_BACKEND``; this module never sets it.
 
 from typing import Iterable, List, Literal, Optional, Union
 
-from confluid import Lazy, Mandatory, configurable
+from confluid import Mandatory, Partial, configurable
 from loggair import get_logger
 from matrainer.keras.runnable import KerasOptimizer
 from matrainer.keras.trainer import KerasRunnable
@@ -75,15 +75,15 @@ class KerasDetector(DetectionKerasHooks, KerasRunnable):
 
     def __init__(
         self,
-        model: Optional[Mandatory[Lazy[keras.Model]]] = None,
-        train_set: Optional[Lazy[RecordSource]] = None,
-        test_set: Optional[Lazy[RecordSource]] = None,
+        model: Optional[Mandatory[Partial[keras.Model]]] = None,
+        train_set: Optional[Partial[RecordSource]] = None,
+        test_set: Optional[Partial[RecordSource]] = None,
         num_classes: Optional[int] = None,
         task: DetectorTask = "fit",
         max_epochs: int = 10,
         batch_size: int = 2,
-        trackers: Optional[Union[Lazy[Tracker], Iterable[Lazy[Tracker]]]] = None,
-        callbacks: Optional[List[Lazy[keras.callbacks.Callback]]] = None,
+        trackers: Optional[Union[Partial[Tracker], Iterable[Partial[Tracker]]]] = None,
+        callbacks: Optional[List[Partial[keras.callbacks.Callback]]] = None,
         experiment_name: str = "raidar_detection",
         run_name: Optional[str] = None,
         input_key: str = "image",
@@ -91,9 +91,9 @@ class KerasDetector(DetectionKerasHooks, KerasRunnable):
         cls_key: str = "fcos_cls",
         box_key: str = "fcos_box",
         ctr_key: str = "fcos_ctr",
-        optimizer: Lazy[KerasOptimizer] = "adam",
+        optimizer: Partial[KerasOptimizer] = "adam",
         learning_rate: float = 1e-3,
-        metric_names: Optional[Lazy[MetricNames]] = None,
+        metric_names: Optional[Partial[MetricNames]] = None,
     ) -> None:
         super().__init__(
             model=model,

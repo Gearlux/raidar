@@ -29,7 +29,7 @@ from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tupl
 
 import torch
 import torch.nn as nn
-from confluid import Lazy, Mandatory, configurable
+from confluid import Mandatory, Partial, configurable
 from fastai.callback.core import Callback as FastaiCallback
 from fastai.data.core import DataLoaders
 from fastai.learner import Learner
@@ -178,9 +178,9 @@ class FastaiDetector(DetectionTorchHooks, FastaiRunnable):
 
     def __init__(
         self,
-        model: Optional[Mandatory[Lazy[nn.Module]]] = None,
-        train_set: Optional[Lazy[RecordSource]] = None,
-        test_set: Optional[Lazy[RecordSource]] = None,
+        model: Optional[Mandatory[Partial[nn.Module]]] = None,
+        train_set: Optional[Partial[RecordSource]] = None,
+        test_set: Optional[Partial[RecordSource]] = None,
         num_classes: Optional[int] = None,
         task: DetectorTask = "fit",
         max_epochs: int = 10,
@@ -197,9 +197,9 @@ class FastaiDetector(DetectionTorchHooks, FastaiRunnable):
         class_names: Optional[List[str]] = None,
         plot_metrics: bool = False,
         seed: int = 0,
-        metric_names: Optional[Lazy[MetricNames]] = None,
-        callbacks: Optional[List[Lazy[FastaiCallback]]] = None,
-        trackers: Optional[Union[Lazy[Tracker], Iterable[Lazy[Tracker]]]] = None,
+        metric_names: Optional[Partial[MetricNames]] = None,
+        callbacks: Optional[List[Partial[FastaiCallback]]] = None,
+        trackers: Optional[Union[Partial[Tracker], Iterable[Partial[Tracker]]]] = None,
         experiment_name: str = "raidar_detection",
         run_name: Optional[str] = None,
         input_key: str = "image",

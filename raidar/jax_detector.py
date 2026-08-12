@@ -23,7 +23,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import optax
-from confluid import Lazy, Mandatory, configurable
+from confluid import Mandatory, Partial, configurable
 from flax import nnx
 from loggair import get_logger
 from matrainer.jax.loop import EpochCallback, JaxLoopRunnable, JaxOptimizer
@@ -116,16 +116,16 @@ class JaxDetector(DetectionBase, JaxLoopRunnable):
 
     def __init__(
         self,
-        model: Optional[Mandatory[Lazy[nnx.Module]]] = None,
-        train_set: Optional[Lazy[RecordSource]] = None,
-        val_set: Optional[Lazy[RecordSource]] = None,
-        test_set: Optional[Lazy[RecordSource]] = None,
+        model: Optional[Mandatory[Partial[nnx.Module]]] = None,
+        train_set: Optional[Partial[RecordSource]] = None,
+        val_set: Optional[Partial[RecordSource]] = None,
+        test_set: Optional[Partial[RecordSource]] = None,
         num_classes: Optional[int] = None,
         task: DetectorTask = "fit",
         max_epochs: int = 10,
         batch_size: int = 2,
-        trackers: Optional[Union[Lazy[Tracker], Iterable[Lazy[Tracker]]]] = None,
-        callbacks: Optional[List[Lazy[EpochCallback]]] = None,
+        trackers: Optional[Union[Partial[Tracker], Iterable[Partial[Tracker]]]] = None,
+        callbacks: Optional[List[Partial[EpochCallback]]] = None,
         experiment_name: str = "raidar_detection",
         run_name: Optional[str] = None,
         input_key: str = "image",
@@ -135,7 +135,7 @@ class JaxDetector(DetectionBase, JaxLoopRunnable):
         ctr_key: str = "fcos_ctr",
         learning_rate: float = 1e-3,
         optimizer: JaxOptimizer = "adam",
-        metric_names: Optional[Lazy[MetricNames]] = None,
+        metric_names: Optional[Partial[MetricNames]] = None,
         jit: bool = True,
     ) -> None:
         super().__init__(

@@ -16,7 +16,7 @@ the same bucket as ``RFDETRModel``) + ``lazy=True`` so:
 * StreamStudio generates an OBJECT node for it (``streamstudio.bridge._build_object_node`` is
   callable-aware): widgets come from the builder's signature (``num_classes`` / ``weights_backbone``
   / …) and the node's role-qualified output socket (``RECORDSTREAM_OBJECT:model``, carrying a
-  ``LazyClass(builder, …)``) wires STRAIGHT into a detection trainer's ``model`` slot — no Retag.
+  ``PartialClass(builder, …)``) wires STRAIGHT into a detection trainer's ``model`` slot — no Retag.
 
 Registered with a presentation-only ``group="detection"`` for palette nesting (mirroring how
 ``matrainer.lightning.configurables`` groups the torch optimizers). The ``role="model"`` is what lets these raw

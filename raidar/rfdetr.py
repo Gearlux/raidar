@@ -194,9 +194,9 @@ class RFDETRModel(nn.Module):
         self.pretrained_detector = bool(pretrained_detector)
         self.checkpoint_path = checkpoint_path
         self.checkpoint_strict = bool(checkpoint_strict)
-        # Lazy: store config only. Building here allocated 30.1M parameters AND read the
+        # Partial: store config only. Building here allocated 30.1M parameters AND read the
         # pretrained checkpoint off disk (~/.roboflow) at CONSTRUCTION — 2.1 s before this
-        # object could even be asked what its parameters are named, which the Lazy-Init /
+        # object could even be asked what its parameters are named, which the Partial-Init /
         # Zero-Arg mandate forbids. Everything the build derives is resolved in solidify().
         self._requested_resolution = resolution
         self._resolution: Optional[int] = None

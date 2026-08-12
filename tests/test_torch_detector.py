@@ -184,7 +184,7 @@ def test_predict_writes_per_record_to_the_sink(tmp_path: Any) -> None:
 
 def test_default_loader_DECLARES_the_list_collate() -> None:
 
-    from confluid.fluid import Class as ConfluidClass
+    from confluid.fluid import Target as ConfluidClass
 
     detector = TorchDetector(model=_NativeDetector())
     assert isinstance(detector.train_loader, ConfluidClass)
@@ -222,11 +222,11 @@ class TestTheSeedCoversTheModelBuild:
 
     def test_the_seed_actually_reproduces_the_weights(self) -> None:
         """The knob is only worth having if it BINDS — assert on the built weights, not the API."""
-        from confluid import LazyClass
+        from confluid import PartialClass
 
         def first_param(seed: int) -> Tensor:
             detector = TorchDetector(
-                model=LazyClass(nn.Linear, in_features=4, out_features=2),
+                model=PartialClass(nn.Linear, in_features=4, out_features=2),
                 num_classes=2,
                 device="cpu",
                 seed=seed,

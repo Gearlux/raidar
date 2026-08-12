@@ -39,7 +39,7 @@ from typing import Any, Dict, Iterable, List, Literal, Optional, Sequence, Tuple
 
 import numpy as np
 import torch
-from confluid import Lazy, LazyClass, Mandatory, configurable, flow
+from confluid import Mandatory, Partial, PartialClass, configurable, flow
 from loggair import get_logger
 from matrainer.huggingface.trainer import HuggingFaceRunnable
 from matrainer.metric_names import MetricNames
@@ -60,7 +60,7 @@ logger = get_logger(__name__)
 DetectorTask = Literal["fit", "evaluate", "test", "predict"]
 
 #: What a metrics slot admits — the SAME torchmetrics vocabulary as the torch-family backends.
-MetricsSpec = Optional[Union[Dict[str, Union[Metric, LazyClass[Metric]]], MetricCollection]]
+MetricsSpec = Optional[Union[Dict[str, Union[Metric, PartialClass[Metric]]], MetricCollection]]
 
 #: The model slot: the raidar Hub wrapper, or any torch module carrying a compatible
 #: ``transformers`` detection model. ``Any`` in the first arm keeps the module-level
@@ -158,9 +158,9 @@ class HuggingFaceDetector(DetectionBase, HuggingFaceRunnable):
 
     def __init__(
         self,
-        model: Optional[Mandatory[Lazy[HuggingFaceNetwork]]] = None,
-        train_set: Optional[Lazy[RecordSource]] = None,
-        test_set: Optional[Lazy[RecordSource]] = None,
+        model: Optional[Mandatory[Partial[HuggingFaceNetwork]]] = None,
+        train_set: Optional[Partial[RecordSource]] = None,
+        test_set: Optional[Partial[RecordSource]] = None,
         num_classes: Optional[int] = None,
         task: DetectorTask = "fit",
         max_epochs: int = 10,
@@ -172,8 +172,8 @@ class HuggingFaceDetector(DetectionBase, HuggingFaceRunnable):
         report_to: str = "none",
         seed: int = 42,
         output_dir: Optional[str] = None,
-        trackers: Optional[Union[Lazy[Tracker], Iterable[Lazy[Tracker]]]] = None,
-        callbacks: Optional[List[Lazy[Any]]] = None,
+        trackers: Optional[Union[Partial[Tracker], Iterable[Partial[Tracker]]]] = None,
+        callbacks: Optional[List[Partial[Any]]] = None,
         experiment_name: str = "raidar_detection",
         run_name: Optional[str] = None,
         input_key: str = "image",
@@ -183,7 +183,7 @@ class HuggingFaceDetector(DetectionBase, HuggingFaceRunnable):
         test_metrics: MetricsSpec = None,
         class_names: Optional[List[str]] = None,
         plot_metrics: bool = False,
-        metric_names: Optional[Lazy[MetricNames]] = None,
+        metric_names: Optional[Partial[MetricNames]] = None,
     ) -> None:
         super().__init__(
             model=model,
@@ -249,7 +249,7 @@ class HuggingFaceDetector(DetectionBase, HuggingFaceRunnable):
 
     def _default_metrics(self) -> Any:
         """COCO mAP, identical to every other backend's choice — the FAMILY's torchmetrics hook."""
-        return {"map": LazyClass[Metric](MeanAveragePrecision, iou_type="bbox")}
+        return {"map": PartialClass[Metric](MeanAveragePrecision, iou_type="bbox")}
 
     # The machinery no-ops the metric builders for the name-list tasks; detection scores with
     # the fleet's torchmetrics, so the FAMILY builders are restored (the fastai-base precedent).
