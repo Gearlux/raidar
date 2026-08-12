@@ -266,7 +266,7 @@ class YoloSink(Storage):
         input_key: str = "image",
         target_key: str = "target",
     ) -> None:
-        # Lazy / zero-arg: store config only; validate + create dirs in open().
+        # Partial / zero-arg: store config only; validate + create dirs in open().
         self.output_dir = output_dir
         self.class_names = class_names
         self.split = split

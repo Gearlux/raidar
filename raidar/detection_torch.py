@@ -15,7 +15,7 @@ imports torch, so the four spec engines must never import it.
 from typing import Any, List, Mapping, Optional
 
 import torch
-from confluid import LazyClass
+from confluid import PartialClass
 from loggair import get_logger
 from matrainer.torch.metrics import MetricsSpec
 from matrainer.torch.runnable import TorchTrainerRunnable
@@ -61,7 +61,7 @@ class DetectionTorchHooks(DetectionBase, TorchTrainerRunnable):
         ``num_classes`` (and `_metric_flow_dims` stays the empty default: detection metrics
         score box overlap, not a fixed-width head).
         """
-        return {"map": LazyClass[Metric](MeanAveragePrecision, iou_type="bbox")}
+        return {"map": PartialClass[Metric](MeanAveragePrecision, iou_type="bbox")}
 
     def _reportable(self, values: Mapping[str, Any]) -> Mapping[str, Any]:
         """Drop MAP's ``classes`` key on EVERY reporting path.

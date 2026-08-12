@@ -13,7 +13,7 @@ import pytest
 import pytorch_lightning as L
 import torch
 import torch.nn as nn
-from confluid import LazyClass
+from confluid import PartialClass
 from recordstream import Boxes, Image, Record, collate_list
 from recordstream.core import Stream
 from recordstream.runnable import runnable_entrypoints
@@ -201,7 +201,7 @@ def test_reportable_metrics_filters_the_classes_bookkeeping_key() -> None:
 
 
 def test_user_supplied_instance_metric_passes_through() -> None:
-    """An already-instantiated metric is held verbatim — no Lazy wrapping needed."""
+    """An already-instantiated metric is held verbatim — no Partial wrapping needed."""
     custom = MeanAveragePrecision(iou_type="bbox", class_metrics=True)
     trainer = LightningDetector(model=_NativeDetector(), train_set=_make_stream(4), num_classes=2)
     trainer.val_metrics = custom
@@ -225,7 +225,7 @@ def test_metric_collection_with_native_confusion_matrix_construction() -> None:
 
 def test_default_loader_DECLARES_the_list_collate() -> None:
 
-    from confluid.fluid import Class as ConfluidClass
+    from confluid.fluid import Target as ConfluidClass
 
     trainer = LightningDetector(
         model=_NativeDetector(),
@@ -408,7 +408,7 @@ def _labelled_stream(label_sets: List[List[int]], size: int = 16) -> Stream:
 
 def test_initialize_derives_num_classes_from_targets_and_flows_lazy_model() -> None:
     # Labels up to 2 → derived num_classes = max + 1 = 3; injected into the lazy model.
-    trainer = LightningDetector(model=LazyClass(_NumClassesDetector), train_set=_labelled_stream([[1, 2], [1]]))
+    trainer = LightningDetector(model=PartialClass(_NumClassesDetector), train_set=_labelled_stream([[1, 2], [1]]))
     trainer.initialize()
     assert trainer.num_classes == 3
     assert isinstance(trainer.model, _NumClassesDetector)
@@ -416,7 +416,9 @@ def test_initialize_derives_num_classes_from_targets_and_flows_lazy_model() -> N
 
 
 def test_initialize_explicit_num_classes_injected_into_lazy_model() -> None:
-    trainer = LightningDetector(model=LazyClass(_NumClassesDetector), train_set=_labelled_stream([[1]]), num_classes=7)
+    trainer = LightningDetector(
+        model=PartialClass(_NumClassesDetector), train_set=_labelled_stream([[1]]), num_classes=7
+    )
     trainer.initialize()
     assert isinstance(trainer.model, _NumClassesDetector)
     assert trainer.num_classes == 7 and trainer.model.num_classes == 7
@@ -424,7 +426,9 @@ def test_initialize_explicit_num_classes_injected_into_lazy_model() -> None:
 
 def test_initialize_lazy_model_pinned_num_classes_used() -> None:
     # num_classes pinned on the lazy model's kwargs is used as-is.
-    trainer = LightningDetector(model=LazyClass(_NumClassesDetector, num_classes=9), train_set=_labelled_stream([[1]]))
+    trainer = LightningDetector(
+        model=PartialClass(_NumClassesDetector, num_classes=9), train_set=_labelled_stream([[1]])
+    )
     trainer.initialize()
     assert isinstance(trainer.model, _NumClassesDetector)
     assert trainer.num_classes == 9 and trainer.model.num_classes == 9
@@ -441,14 +445,14 @@ def test_initialize_concrete_model_num_classes_is_authoritative() -> None:
 
 def test_initialize_model_without_num_classes_param_flowed_plainly() -> None:
     # A lazy model whose builder takes no num_classes is flowed plainly (no kwarg error).
-    trainer = LightningDetector(model=LazyClass(_NativeDetector), train_set=_labelled_stream([[1]]), num_classes=3)
+    trainer = LightningDetector(model=PartialClass(_NativeDetector), train_set=_labelled_stream([[1]]), num_classes=3)
     trainer.initialize()
     assert isinstance(trainer.model, _NativeDetector)
     assert trainer.num_classes == 3
 
 
 def test_trained_model_output_raises_before_run_returns_after_flow() -> None:
-    trainer = LightningDetector(model=LazyClass(_NumClassesDetector), train_set=_labelled_stream([[1]]))
+    trainer = LightningDetector(model=PartialClass(_NumClassesDetector), train_set=_labelled_stream([[1]]))
     with pytest.raises(RuntimeError, match="only available after run"):
         _ = trainer.trained_model
     trainer.initialize()  # flows the model into a live instance

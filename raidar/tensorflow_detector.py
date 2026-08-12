@@ -22,7 +22,7 @@ This loop is raw TensorFlow and REQUIRES the engine: run with ``KERAS_BACKEND=te
 from typing import Any, Callable, Iterable, List, Literal, Optional, Union, cast
 
 import numpy as np
-from confluid import Lazy, Mandatory, configurable
+from confluid import Mandatory, Partial, configurable
 from loggair import get_logger
 from matrainer.metric_names import MetricNames
 from matrainer.tracking.base import Tracker
@@ -78,9 +78,9 @@ class TensorFlowDetector(DetectionKerasHooks, TensorFlowRunnable):
 
     def __init__(
         self,
-        model: Optional[Mandatory[Lazy[TensorFlowNetwork]]] = None,
-        train_set: Optional[Lazy[RecordSource]] = None,
-        test_set: Optional[Lazy[RecordSource]] = None,
+        model: Optional[Mandatory[Partial[TensorFlowNetwork]]] = None,
+        train_set: Optional[Partial[RecordSource]] = None,
+        test_set: Optional[Partial[RecordSource]] = None,
         num_classes: Optional[int] = None,
         task: DetectorTask = "fit",
         max_epochs: int = 10,
@@ -88,8 +88,8 @@ class TensorFlowDetector(DetectionKerasHooks, TensorFlowRunnable):
         jit_compile: bool = False,
         prefetch: bool = True,
         export_dir: Optional[str] = None,
-        trackers: Optional[Union[Lazy[Tracker], Iterable[Lazy[Tracker]]]] = None,
-        callbacks: Optional[List[Lazy[keras.callbacks.Callback]]] = None,
+        trackers: Optional[Union[Partial[Tracker], Iterable[Partial[Tracker]]]] = None,
+        callbacks: Optional[List[Partial[keras.callbacks.Callback]]] = None,
         experiment_name: str = "raidar_detection",
         run_name: Optional[str] = None,
         input_key: str = "image",
@@ -97,9 +97,9 @@ class TensorFlowDetector(DetectionKerasHooks, TensorFlowRunnable):
         cls_key: str = "fcos_cls",
         box_key: str = "fcos_box",
         ctr_key: str = "fcos_ctr",
-        optimizer: Lazy[KerasOptimizer] = "adam",
+        optimizer: Partial[KerasOptimizer] = "adam",
         learning_rate: float = 1e-3,
-        metric_names: Optional[Lazy[MetricNames]] = None,
+        metric_names: Optional[Partial[MetricNames]] = None,
     ) -> None:
         super().__init__(
             model=model,

@@ -167,7 +167,7 @@ def test_rfdetr_pretrained_detector_default_off() -> None:
 
 
 # ---------------------------------------------------------------------------
-# lazy construction (Lazy-Init / Zero-Arg mandate)
+# lazy construction (Partial-Init / Zero-Arg mandate)
 # ---------------------------------------------------------------------------
 
 

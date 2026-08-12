@@ -10,8 +10,8 @@ from typing import Any, Dict, List
 import pytorch_lightning as L
 import torch
 import torch.nn as nn
-from confluid import Class, LazyClass
-from confluid.fluid import Class as ConfluidClass
+from confluid import PartialClass, Target
+from confluid.fluid import Target as ConfluidClass
 from recordstream import Boxes, Image, collate_list
 from recordstream.core import Stream
 from torch import Tensor
@@ -112,8 +112,8 @@ def test_evaluator_run_writes_metrics_sidecar(tmp_path: Any) -> None:
     ev = _evaluator(
         model=_NativeDetector(),
         dataset=_make_stream(4),
-        test_loader=Class(DataLoader, batch_size=2, collate_fn=collate_list),
-        lightning=Class(
+        test_loader=Target(DataLoader, batch_size=2, collate_fn=collate_list),
+        lightning=Target(
             L.Trainer,
             accelerator="cpu",
             enable_progress_bar=False,
@@ -143,9 +143,9 @@ def test_evaluator_writes_to_predictions_sink(tmp_path: Any) -> None:
     ev = _evaluator(
         model=_NativeDetector(),
         dataset=_make_stream(4),
-        test_loader=Class(DataLoader, batch_size=2, collate_fn=collate_list),
+        test_loader=Target(DataLoader, batch_size=2, collate_fn=collate_list),
         predictions_sink=sink,
-        lightning=Class(
+        lightning=Target(
             L.Trainer,
             accelerator="cpu",
             enable_progress_bar=False,
@@ -176,7 +176,7 @@ class _NumClassesDetector(nn.Module):
 
 def test_initialize_reads_num_classes_off_trained_model() -> None:
     # On the eval path, initialize() flows the model first, then reads num_classes off the LIVE model.
-    ev = _evaluator(model=LazyClass(_NumClassesDetector, num_classes=5), dataset=_make_stream(4))
+    ev = _evaluator(model=PartialClass(_NumClassesDetector, num_classes=5), dataset=_make_stream(4))
     assert ev.num_classes is None  # not resolved until initialize()
     ev.initialize()
     assert isinstance(ev.model, _NumClassesDetector)
@@ -208,10 +208,10 @@ def test_initialize_normalizes_dataset_to_stream() -> None:
 
 def test_run_calls_initialize(tmp_path: Any) -> None:
     ev = _evaluator(
-        model=LazyClass(_NumClassesDetector, num_classes=6),
+        model=PartialClass(_NumClassesDetector, num_classes=6),
         dataset=_make_stream(4),
-        test_loader=Class(DataLoader, batch_size=2, collate_fn=collate_list),
-        lightning=Class(
+        test_loader=Target(DataLoader, batch_size=2, collate_fn=collate_list),
+        lightning=Target(
             L.Trainer,
             accelerator="cpu",
             enable_progress_bar=False,

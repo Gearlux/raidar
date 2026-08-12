@@ -33,7 +33,7 @@ import csv
 from pathlib import Path
 from typing import Any, Dict, List, Literal, Optional, Sequence, Union, cast
 
-from confluid import Lazy, configurable, flow, output
+from confluid import Partial, configurable, flow, output
 from loggair import get_logger
 from matrainer.artifacts import write_metrics_sidecar
 from matrainer.metric_names import MetricNames, as_metric_names
@@ -169,14 +169,14 @@ class RFDETRDetector(TorchRunner, ProgressReporting):
         output_dir: str = "output",
         run_name: Optional[str] = None,
         experiment_name: str = "rfdetr_run",
-        train_set: Optional[Lazy[RecordSource]] = None,
-        val_set: Optional[Lazy[RecordSource]] = None,
-        test_set: Optional[Lazy[RecordSource]] = None,
+        train_set: Optional[Partial[RecordSource]] = None,
+        val_set: Optional[Partial[RecordSource]] = None,
+        test_set: Optional[Partial[RecordSource]] = None,
         num_classes: Optional[int] = None,
         class_names: Optional[Dict[int, str]] = None,
         train_config: Optional[Dict[str, Any]] = None,
-        trackers: Optional[Union[Lazy[Tracker], List[Lazy[Tracker]]]] = None,
-        metric_names: Optional[Lazy[MetricNames]] = None,
+        trackers: Optional[Union[Partial[Tracker], List[Partial[Tracker]]]] = None,
+        metric_names: Optional[Partial[MetricNames]] = None,
         metrics_sidecar_path: Optional[str] = None,
     ) -> None:
         # Store config ONLY — no functional work (zero-arg / lazy-init mandate).
@@ -199,8 +199,8 @@ class RFDETRDetector(TorchRunner, ProgressReporting):
         self.class_names = dict(class_names) if class_names else None
         self.train_config = dict(train_config) if train_config else {}
         # Stored VERBATIM (lazy-init mandate); `_live_trackers()` normalizes + flows at run time.
-        self.trackers: Optional[Union[Lazy[Tracker], List[Lazy[Tracker]]]] = trackers
-        self.metric_names: Optional[Lazy[MetricNames]] = metric_names
+        self.trackers: Optional[Union[Partial[Tracker], List[Partial[Tracker]]]] = trackers
+        self.metric_names: Optional[Partial[MetricNames]] = metric_names
         self.metrics_sidecar_path = metrics_sidecar_path
         self._computed_metrics: Optional[Dict[str, float]] = None
 
@@ -329,7 +329,7 @@ class RFDETRDetector(TorchRunner, ProgressReporting):
         for tracker in trackers:
             tracker.log_metrics(dict(self._computed_metrics))
 
-    def _prepare_stream(self, source: Optional[Lazy[RecordSource]]) -> Optional[Any]:
+    def _prepare_stream(self, source: Optional[Partial[RecordSource]]) -> Optional[Any]:
         """Flow a wired Stream slot LIVE and materialize it in THIS process.
 
         The CLI's manual materialization leaves a nested ``!class:`` dataset as a deferred marker

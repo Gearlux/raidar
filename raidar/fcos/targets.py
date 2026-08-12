@@ -70,7 +70,7 @@ class FcosTargets(Transform):
         ctr_key: str = "fcos_ctr",
     ) -> None:
         super().__init__()
-        # Lazy / zero-arg: store config only; num_classes is validated in __call__.
+        # Partial / zero-arg: store config only; num_classes is validated in __call__.
         self.num_classes = int(num_classes)
         self.input_shape = tuple(input_shape)
         self.widths = tuple(widths)
