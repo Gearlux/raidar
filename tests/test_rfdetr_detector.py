@@ -309,7 +309,7 @@ class TestTheSeedCoversTheMODEL:
         import confluid
 
         example = Path(__file__).resolve().parents[1] / "examples" / "train_cppe5.yaml"
-        doc = confluid.load(confluid.load_config(example), flow=False, scopes=["framework=rfdetr"])
+        doc = confluid.load(example, until="document", scopes=["framework=rfdetr"])
         pinned = doc["runnable"].kwargs["train_config"]
         assert pinned.get("seed") is not None, "the shipped rfdetr block must pin a seed"
 

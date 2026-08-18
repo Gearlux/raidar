@@ -29,9 +29,9 @@ TRACKERS = {
 }
 
 
-def resolve(framework: str, tracker: str = "mlflow") -> Dict[str, Any]:
+def load(framework: str, tracker: str = "mlflow", until="settled") -> Dict[str, Any]:
     document = confluid.load(
-        confluid.load_config(SWEEP), flow=False, scopes=[f"framework={framework}", f"tracker={tracker}"]
+        confluid.load(SWEEP, until="raw"), until="document", scopes=[f"framework={framework}", f"tracker={tracker}"]
     )
     assert isinstance(document, dict)
     return document
@@ -62,7 +62,7 @@ def test_every_tracker_block_wires_its_backend_with_the_run_identity(tracker: st
     pair — a `!class:` in a LIST stays a deferred marker that `_live_trackers()` flows WITHOUT
     the document, so the refs are the ONLY way the sweep driver's per-cell identity reaches
     the tracker."""
-    document = resolve("torch", tracker=tracker)
+    document = load("torch", tracker=tracker, until="settled")
     wired = document.get("trackers")
     assert isinstance(wired, list) and len(wired) == 1
     assert target_name(wired[0]) == TRACKERS[tracker]
@@ -75,5 +75,5 @@ def test_the_overlay_resolves_for_every_swept_framework(framework: str) -> None:
     """`include:` deep-merges the example, so every framework block the example declares must
     still activate under the overlay — a scope block REPLACES the key it lands on, and a
     malformed overlay block would silently discard a backend's runnable."""
-    document = resolve(framework, tracker="csv")
+    document = load(framework, tracker="csv", until="settled")
     assert document.get("runnable") is not None, f"{framework}: the overlay lost the runnable"
