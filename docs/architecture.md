@@ -35,10 +35,13 @@ pins both config-level.
 **Example.**
 
 ```yaml
-runnable: !class:raidar.LightningDetector        # top level = the default backend
-detection_ops:
+default_scopes: [framework=lightning]            # what a bare `raidar train cfg.yaml` picks
+detection_ops:                                   # the torchvision-family defaults every block inherits
   - !class:recordstream.ops.target.CocoToTorchVisionDetection { label_offset: 1 }
 num_classes: 6
+
+lightning: !scope:framework=lightning            # the default, a block like every other
+  runnable: !class:raidar.LightningDetector
 
 rfdetr: !scope:framework=rfdetr                  # `raidar train cfg.yaml --framework rfdetr`
   runnable: !class:raidar.RFDETRDetector { variant: nano }

@@ -12,10 +12,10 @@
 # batch/epoch knobs, the run identity. Only the keys below it change when the training engine
 # does.
 #
-# The top level is also the DEFAULT backend (lightning), so this config runs as-is with no scope
-# at all. An alternative backend is a `!scope:framework=<name>` block that OVERRIDES only the
-# framework-specific keys (document order, last write wins). `--framework <name>` activates it,
-# and it is the SAME flag on either runner:
+# Every backend is a `!scope:framework=<name>` block that OVERRIDES only the framework-specific
+# keys (document order, last write wins), and `default_scopes:` names the one a bare run uses
+# (lightning), so this config runs as-is with no scope at all. `--framework <name>` picks
+# another, and it is the SAME flag on either runner:
 #
 #   raidar train    examples/train_cppe5.yaml --framework rfdetr
 #   recordstream run examples/train_cppe5.yaml --framework rfdetr
@@ -26,6 +26,11 @@
 # ===========================================================================
 # Shared — identical for every backend
 # ===========================================================================
+
+# The backend a bare `raidar train` / `recordstream run` uses. A `--framework <name>` wins over
+# it; the value must name a block below (a typo is the same error a typo'd flag gets); it is a
+# static list — never a `${...}` value.
+default_scopes: [framework=lightning]
 
 experiment_name: cppe5_detection
 run_name: cppe5
@@ -79,12 +84,13 @@ max_epochs: 5
 # ===========================================================================
 # Framework-specific — the ONLY part a backend swap touches
 # ===========================================================================
-# Top level = the default backend (lightning).
+# The `runnable:` lives in each framework block below; the keys HERE are the torchvision-family
+# defaults every block inherits unless it overrides them.
 #
-# EVERY framework-specific key sits at THIS level — `runnable`, `model`, `detection_ops`,
-# `num_classes`, `class_names` — and an alternative backend overrides the ones it must. That
-# flatness is not cosmetic: a scope block replaces a KEY and takes its whole subtree with it, so
-# a `model:` nested INSIDE `runnable:` would vanish the moment a block swapped the runnable.
+# EVERY framework-specific key sits at THIS level — `model`, `detection_ops`, `num_classes`,
+# `class_names` — and a backend block overrides the ones it must. That flatness is not cosmetic:
+# a scope block replaces a KEY and takes its whole subtree with it, so a `model:` nested INSIDE
+# `runnable:` would vanish the moment a block swapped the runnable.
 #
 # ⚠️ THE label convention is the real semantic difference between the backends, and it is silent
 # when wrong:
@@ -94,18 +100,6 @@ max_epochs: 5
 #     `label_offset: 0` and `num_classes: 5`.
 # Each backend's block therefore restates `detection_ops` + `num_classes` — inheriting the
 # torchvision shift would train with every label off by one and nothing raising.
-
-runnable: !class:raidar.LightningDetector
-  # torchvision's detection models fall back off Apple's MPS accelerator so hard that the GPU is
-  # ~30x SLOWER than the CPU here — measured on this exact model and data (Faster R-CNN
-  # MobileNet-320, batch 2): 1.04 s/step on cpu vs 32.9 s/step on mps, 2026-08-04. PL would pick
-  # mps by itself on Apple silicon, so the example pins cpu. **Delete the `lightning:` slot on a
-  # CUDA box**, where the GPU is both faster and correct. (Nested in the runnable — not a
-  # top-level sibling — because it is lightning-backend-specific AND the top-level key name is
-  # taken by the `!scope:framework=lightning` block below; the block restates it.)
-  lightning: !lazy:pytorch_lightning.Trainer
-    accelerator: cpu
-    max_epochs: !ref:max_epochs
 
 # RAW torchvision builder, wired `!lazy:` so `initialize()` injects the resolved `num_classes` at
 # run time (confluid flows the builder FUNCTION with `num_classes=...`). The MobileNetV3-320
@@ -132,16 +126,19 @@ detection_ops:
 # (decoding every train image) is skipped.
 num_classes: 6
 
-# The default backend gets a block of its own even though the top level already IS lightning:
-# confluid raises when a scope activation matches no block, so an undeclared default would make
-# `--framework lightning` an error. That raise is the typo check — `--framework lightnin` lists
-# the backends this file declares instead of silently training the default one.
-#
-# The runnable is RESTATED IN FULL, nested `lightning:` slot included — a scope block replaces
-# the `runnable` key wholesale, so a bare restatement would silently drop the cpu pin above
-# (the classic scope-block trap).
+# The default — `default_scopes:` at the top of the file names it, so a bare `raidar train` runs
+# this block and `--framework lightning` names the same one. A typo'd `--framework lightnin` is
+# an error listing the backends this file declares — the typo check a backend SUBCOMMAND could
+# never do.
 lightning: !scope:framework=lightning
   runnable: !class:raidar.LightningDetector
+    # torchvision's detection models fall back off Apple's MPS accelerator so hard that the GPU
+    # is ~30x SLOWER than the CPU here — measured on this exact model and data (Faster R-CNN
+    # MobileNet-320, batch 2): 1.04 s/step on cpu vs 32.9 s/step on mps, 2026-08-04. PL would
+    # pick mps by itself on Apple silicon, so the example pins cpu. **Delete the `lightning:`
+    # slot on a CUDA box**, where the GPU is both faster and correct. (Nested in the runnable —
+    # it is lightning-backend-specific, and a top-level sibling would collide with this block's
+    # own key name.)
     lightning: !lazy:pytorch_lightning.Trainer
       accelerator: cpu
       max_epochs: !ref:max_epochs

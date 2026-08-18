@@ -178,11 +178,16 @@ def test_the_zero_indexed_backends_restate_the_label_convention() -> None:
         assert offsets == [1 if framework == "lightning" else 0], f"{framework}: label_offset {offsets}"
 
 
-def test_the_default_backend_has_a_block_of_its_own() -> None:
-    """The top level already IS lightning, but confluid raises on an activation matching no
-    block — so an undeclared default would make naming it explicitly an ERROR. That raise is the
-    check a backend subcommand could never do: a typo now lists the declared backends instead of
-    silently training the default one."""
+def test_the_default_backend_is_a_block_named_by_default_scopes() -> None:
+    """Every backend is a `!scope:framework=<name>` block and `default_scopes:` names the one a
+    bare run uses — no top-level `runnable:` is privileged. Confluid raises on an activation
+    matching no block, and the default goes through the same check, so a typo lists the declared
+    backends instead of silently training the default one."""
+    raw = confluid.load(EXAMPLE, until="raw")
+    assert raw["default_scopes"] == ["framework=lightning"]
+    assert "runnable" not in raw, "the runnable lives in each framework block, not at the top level"
+    bare = confluid.load(EXAMPLE, until="document")
+    assert bare["runnable"].target == "raidar.LightningDetector"
     with pytest.raises(confluid.ScopeError) as excinfo:
         confluid.load(EXAMPLE, until="document", scopes=["framework=lightnin"])
     assert "lightning" in str(excinfo.value), "the error must LIST the values the config declares"
