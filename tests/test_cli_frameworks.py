@@ -158,7 +158,7 @@ def test_every_declared_framework_resolves_to_a_complete_runnable(framework: str
     a missing-argument TypeError minutes into a run. Keeping every framework-specific key a
     top-level SIBLING is what prevents it, and this asserts the result rather than the layout.
     """
-    doc = confluid.load(confluid.load_config(EXAMPLE), flow=False, scopes=[f"framework={framework}"])
+    doc = confluid.load(EXAMPLE, until="document", scopes=[f"framework={framework}"])
     for key in ("runnable", "train_set", "val_set", "detection_ops", "num_classes"):
         assert doc.get(key) is not None, f"--framework {framework} leaves {key!r} unset"
 
@@ -171,7 +171,7 @@ def test_the_zero_indexed_backends_restate_the_label_convention() -> None:
     inheriting the torchvision shift would train with every label off by one and nothing raising.
     """
     for framework, expected_nc in (("lightning", 6), ("rfdetr", 5), ("ultralytics", 5)):
-        doc = confluid.load(confluid.load_config(EXAMPLE), flow=False, scopes=[f"framework={framework}"])
+        doc = confluid.load(EXAMPLE, until="document", scopes=[f"framework={framework}"])
         assert doc["num_classes"] == expected_nc, f"{framework}: num_classes"
         ops = doc["detection_ops"]
         offsets = [op.kwargs.get("label_offset") for op in ops if "CocoToTorchVision" in str(op.target)]
@@ -184,7 +184,7 @@ def test_the_default_backend_has_a_block_of_its_own() -> None:
     check a backend subcommand could never do: a typo now lists the declared backends instead of
     silently training the default one."""
     with pytest.raises(confluid.ScopeError) as excinfo:
-        confluid.load(confluid.load_config(EXAMPLE), flow=False, scopes=["framework=lightnin"])
+        confluid.load(EXAMPLE, until="document", scopes=["framework=lightnin"])
     assert "lightning" in str(excinfo.value), "the error must LIST the values the config declares"
 
 
