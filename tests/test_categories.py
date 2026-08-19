@@ -7,6 +7,7 @@ dropped tag fails CI instead of silently emptying a detection picker.
 """
 
 import pytest
+from confluid import marks
 from confluid.registry import get_registry
 
 from raidar.rfdetr import RFDETRModel
@@ -138,10 +139,12 @@ def test_torchvision_builders_registered_as_detection_models() -> None:
     for builder in _BUILDER_NAMES:
         assert builder in listed, f"{builder} not registered as detection_model"
     # Marked lazy (a deferred runtime-injection slot — the trainer flows num_classes at run()).
-    fn = raidar.torchvision_detection.fasterrcnn_mobilenet_v3_large_320_fpn
-    assert fn.__confluid_lazy__ is True  # type: ignore[attr-defined]
-    assert fn.__confluid_role__ == "model"  # type: ignore[attr-defined]
-    assert fn.__confluid_group__ == "detection"  # type: ignore[attr-defined]
+    # Read through `marks()`, the ONE public stamp surface — the dunder names are confluid-internal
+    # (the stamp was renamed once already, which is what broke the raw read this replaced).
+    fn_marks = marks(raidar.torchvision_detection.fasterrcnn_mobilenet_v3_large_320_fpn)
+    assert fn_marks.lazy is True
+    assert fn_marks.role == "model"
+    assert fn_marks.group == "detection"
 
 
 @pytest.mark.filterwarnings("ignore::pydantic.json_schema.PydanticJsonSchemaWarning")
