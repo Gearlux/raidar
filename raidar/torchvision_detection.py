@@ -7,7 +7,7 @@ detection contract every torch-family backend consumes
 ``register`` each here with ``task="detection", role="model"`` (→ derived ``category="detection_model"``,
 the same bucket as ``RFDETRModel``) + ``lazy=True`` so:
 
-* confluid stamps ``__confluid_lazy__`` on the function (a deferred / runtime-injection slot — the
+* confluid marks the function lazy (``marks(fn).lazy`` — a deferred / runtime-injection slot — the
   trainer flows it with the dataset-derived ``num_classes`` at ``run()``);
 * navigaitor's ``list_configurable_classes(category="detection_model")`` / ``list_classes(task=…,
   role=…)`` and the form-spec enumerate them alongside ``RFDETRModel`` — confluid's ``to_pydantic``
