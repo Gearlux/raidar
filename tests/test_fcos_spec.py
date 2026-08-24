@@ -48,10 +48,15 @@ def _mlx_fcos() -> Any:
     return MlxFcos(num_classes=5)
 
 
+# Each engine joins only where its extra is installed — a workspace PICKS its frameworks, so a
+# machine legitimately carries torch + keras and none of the rest. Registering one unconditionally
+# turns a deselected extra into a failure instead of a skip.
 IMPLEMENTATIONS["torch"] = _torch_fcos
 IMPLEMENTATIONS["keras"] = _keras_fcos
-IMPLEMENTATIONS["tensorflow"] = _tensorflow_fcos
-IMPLEMENTATIONS["jax"] = _flax_fcos
+if importlib.util.find_spec("tensorflow") is not None:
+    IMPLEMENTATIONS["tensorflow"] = _tensorflow_fcos
+if importlib.util.find_spec("jax") is not None:
+    IMPLEMENTATIONS["jax"] = _flax_fcos
 if importlib.util.find_spec("mlx") is not None:  # Apple silicon only — the extra's own marker
     IMPLEMENTATIONS["mlx"] = _mlx_fcos
 

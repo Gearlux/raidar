@@ -144,6 +144,10 @@ class FastaiDetector(DetectionTorchHooks, FastaiRunnable):
             model head or the train targets.
         task: Which entry point ``run()`` dispatches to.
         max_epochs / batch_size / num_workers: the shared knobs.
+        persistent_workers: Override the pairing derived from ``num_workers`` (``None`` derives
+            ``num_workers != 0``). An explicit value is for a HOST fact no derivation can see —
+            macOS terminates persistent workers slowly, so a config there sets ``false`` while
+            keeping its workers. ``True`` with ``num_workers=0`` is refused.
         learning_rate: Peak LR — ``lr_max`` for one-cycle, ``lr`` otherwise.
         weight_decay: fastai's ``wd``. ``None`` is fastai's own default.
         one_cycle: Use ``fit_one_cycle`` (fastai's headline scheduler) instead of plain ``fit``.
@@ -186,6 +190,7 @@ class FastaiDetector(DetectionTorchHooks, FastaiRunnable):
         max_epochs: int = 10,
         batch_size: int = 2,
         num_workers: int = 0,
+        persistent_workers: Optional[bool] = None,
         learning_rate: float = 1e-4,
         weight_decay: Optional[float] = None,
         one_cycle: bool = True,
@@ -213,6 +218,7 @@ class FastaiDetector(DetectionTorchHooks, FastaiRunnable):
             max_epochs=max_epochs,
             batch_size=batch_size,
             num_workers=num_workers,
+            persistent_workers=persistent_workers,
             trackers=trackers,
             experiment_name=experiment_name,
             run_name=run_name,

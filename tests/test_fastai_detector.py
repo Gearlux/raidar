@@ -8,14 +8,18 @@ only a live Learner exercises it.
 
 from typing import Any, Dict, List, Optional, Union, get_args
 
-import torch
-import torch.nn as nn
-from recordstream import Boxes, Image, Record
-from recordstream.core import Stream
-from recordstream.runnable import entrypoint_tasks
-from torch import Tensor
+import pytest
 
-from raidar.fastai_detector import (
+pytest.importorskip("fastai", reason="the fastai backend needs raidar[fastai]")
+
+import torch  # noqa: E402 - after the skip, so a fastai-less install never imports it for this file
+import torch.nn as nn  # noqa: E402
+from recordstream import Boxes, Image, Record  # noqa: E402
+from recordstream.core import Stream  # noqa: E402
+from recordstream.runnable import entrypoint_tasks  # noqa: E402
+from torch import Tensor  # noqa: E402
+
+from raidar.fastai_detector import (  # noqa: E402
     DetectorTask,
     FastaiDetector,
     NativeDetectionAdapter,
