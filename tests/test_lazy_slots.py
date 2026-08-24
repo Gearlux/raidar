@@ -11,20 +11,27 @@ This derives the expectation from the SOURCE rather than restating a list, so a 
 added tomorrow is covered without editing this file.
 """
 
+import importlib.util
 import inspect
 import re
-from typing import Set
+from typing import Any, List, Set
 
 import pytest
 from confluid import partial_param_names
 
-from raidar.fastai_detector import FastaiDetector  # noqa: E402
-from raidar.huggingface_detector import HuggingFaceDetector  # noqa: E402
+from raidar.huggingface_detector import HuggingFaceDetector
 from raidar.lightning_detector import LightningDetector
 from raidar.rfdetr_detector import RFDETRDetector
-from raidar.torch_detector import TorchDetector  # noqa: E402
+from raidar.torch_detector import TorchDetector
 
-RUNNABLES = [LightningDetector, TorchDetector, FastaiDetector, HuggingFaceDetector, RFDETRDetector]
+#: fastai is a SELECTABLE extra, so a workspace that did not pick it has no `fastai` at all and
+#: `raidar.fastai_detector` cannot be imported. It then drops out of the sweep rather than taking
+#: the whole file down — every other runnable's slots stay checked.
+RUNNABLES: List[Any] = [LightningDetector, TorchDetector, HuggingFaceDetector, RFDETRDetector]
+if importlib.util.find_spec("fastai") is not None:
+    from raidar.fastai_detector import FastaiDetector
+
+    RUNNABLES.append(FastaiDetector)
 
 
 def _slots_flowed_at_runtime(cls: type) -> Set[str]:

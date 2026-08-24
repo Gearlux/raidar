@@ -494,3 +494,15 @@ def test_run_dispatches_to_the_entry_point_declaring_the_task(task: str) -> None
         setattr(trainer, name, lambda n=name: calls.append(n))
     trainer.run()
     assert calls == [task]
+
+
+def test_persistent_workers_can_be_named_instead_of_derived() -> None:
+    """The HOST-scoped knob: a config says `persistent_workers: false` and keeps its workers.
+
+    macOS terminates persistent workers slowly enough that a short run spends longer stopping
+    than training, which no derivation from `num_workers` can see."""
+    runnable = LightningDetector(model=_NativeDetector(), num_classes=2, num_workers=2, persistent_workers=False)
+    for split in ("train_loader", "val_loader", "test_loader"):
+        marker = getattr(runnable, split)
+        assert marker.kwargs["persistent_workers"] is False, split
+        assert marker.kwargs["num_workers"] == 2, split

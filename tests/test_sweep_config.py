@@ -29,7 +29,7 @@ TRACKERS = {
 }
 
 
-def load(framework: str, tracker: str = "mlflow", until="settled") -> Dict[str, Any]:
+def load(framework: str, tracker: str = "mlflow", until: str = "settled") -> Dict[str, Any]:
     document = confluid.load(
         confluid.load(SWEEP, until="raw"), until="document", scopes=[f"framework={framework}", f"tracker={tracker}"]
     )

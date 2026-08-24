@@ -5,15 +5,18 @@ import ast
 from pathlib import Path
 from typing import Any, Dict, List, get_args
 
-import numpy as np
 import pytest
-import torch
-from recordstream import Boxes, Image, Record
-from recordstream.core import Stream
-from recordstream.runnable import entrypoint_tasks
 
-from raidar.fcos.targets import FcosTargets
-from raidar.jax_detector import DetectorTask, JaxDetector
+pytest.importorskip("jax", reason="the jax backend needs raidar[jax]")
+
+import numpy as np  # noqa: E402
+import torch  # noqa: E402
+from recordstream import Boxes, Image, Record  # noqa: E402
+from recordstream.core import Stream  # noqa: E402
+from recordstream.runnable import entrypoint_tasks  # noqa: E402
+
+from raidar.fcos.targets import FcosTargets  # noqa: E402
+from raidar.jax_detector import DetectorTask, JaxDetector  # noqa: E402
 
 SOURCE = Path(__file__).resolve().parent.parent / "raidar" / "jax_detector.py"
 
