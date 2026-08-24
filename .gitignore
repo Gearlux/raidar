@@ -54,7 +54,7 @@ rfdetr*.pt
 flake8.txt
 mypy.txt
 coverage.xml
-test-report.xml
+*test-report.xml
 
 # Training artifacts
 csv_logs/
