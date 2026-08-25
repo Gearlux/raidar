@@ -30,7 +30,7 @@ requires-python = ">=3.12"
 # the batch plumbing — so each of those declares `raidar[torch]` rather than restating the list.
 torch = [
     "matrainer[torch]>=0.1.0",
-    "recordstream[torch]>=0.1.0",
+    "recordstream[torch]>=0.1.0a1",
     "torch",
     "torchvision",
     # [detection] pulls pycocotools' torchmetrics glue; pycocotools restated because the
@@ -76,14 +76,14 @@ huggingface = [
 keras = [
     "keras>=3.0",
     "torch",
-    "recordstream[keras,torch]>=0.1.0",
+    "recordstream[keras,torch]>=0.1.0a1",
     "matrainer[keras]>=0.1.0",
 ]
 tensorflow = [
     "keras>=3.0",           # Keras 3 IS tf.keras in TF >= 2.16
     "tensorflow>=2.16",     # ...this extra's engine
     "torch",                # the detection target chain is torch-shaped (see the keras extra)
-    "recordstream[keras,torch]>=0.1.0",
+    "recordstream[keras,torch]>=0.1.0a1",
     "matrainer[keras]>=0.1.0",
 ]
 # JAX brings NO detection zoo to wrap (`transformers` dropped Flax in v5), so this extra
@@ -94,7 +94,7 @@ jax = [
     "flax>=0.8",            # NNX is the current Flax module API
     "optax>=0.2",           # the optimizers and the stable BCE the spec loss uses
     "torch",
-    "recordstream[keras,torch]>=0.1.0",
+    "recordstream[keras,torch]>=0.1.0a1",
     "matrainer>=0.1.0",
 ]
 # MLX is Apple-silicon ONLY — a property of the framework. The platform marker keeps
@@ -102,7 +102,7 @@ jax = [
 mlx = [
     "mlx>=0.20; sys_platform == 'darwin' and platform_machine == 'arm64'",
     "torch",
-    "recordstream[keras,torch]>=0.1.0",
+    "recordstream[keras,torch]>=0.1.0a1",
     "matrainer>=0.1.0",
 ]
 # RF-DETR's own training stack (Apache-2.0). rfdetr[train] pulls PTL + the native training loop
