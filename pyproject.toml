@@ -113,6 +113,13 @@ rfdetr = [
     "rfdetr[train,loggers]>=1.6.0",
     "faster-coco-eval",
 ]
+# TRACKING BACKENDS. Tracking runs through matrainer — raidar imports neither mlflow nor
+# tensorboard directly — so each extra forwards to the backend that implements it. They must
+# exist because `[tool.aisland] trackers` below NAMES them: `aisland tracker set mlflow`
+# intersects that declaration with the operator's selection and installs `raidar[mlflow]`,
+# and an extra that is declared but never defined makes uv warn and install nothing.
+mlflow = ["matrainer[mlflow]>=0.1.0"]
+tensorboard = ["matrainer[tensorboard]>=0.1.0"]
 dev = [
     "black>=24.0.0,<25.0.0",
     "isort>=5.13.0,<6.0.0",
