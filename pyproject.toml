@@ -10,7 +10,9 @@ license = {text = "MIT"}
 # backend-owned name in `raidar/__init__.py` resolves lazily to match.
 dependencies = [
     "confluid>=0.3.0",
-    "recordstream>=0.1.0",
+    # recordstream ships as a pre-release (0.1.0a1). Under PEP 440 a plain `>=0.1.0`
+    # EXCLUDES every pre-release of 0.1.0, so it would resolve to nothing.
+    "recordstream>=0.1.0a1",
     "liquifai>=0.1.0",
     "loggair>=0.1.0",
     # matrainer is the TRACKING library (and the metric-slot rule + artifact writers). Its own
