@@ -167,6 +167,7 @@ raidar-fastai = "raidar.fastai_detector"
 raidar-rfdetr = "raidar.rfdetr_detector"
 raidar-rfdetr-model = "raidar.rfdetr"
 raidar-huggingface-model = "raidar.huggingface_model"
+raidar-torchvision-model = "raidar.torchvision_model"
 # The torch engine's module: the native batch plumbing + the registered metric set.
 raidar-torch-detection = "raidar.torch_detection"
 # The shared FCOS spec's implementations + its dense-target op (raidar/fcos/).

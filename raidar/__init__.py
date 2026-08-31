@@ -32,6 +32,9 @@ _BACKEND_NAMES = {
     # The ONE Hub zoo wrapper — a `model_name` string reaches any object-detection checkpoint;
     # it is the huggingface BACKEND's model (the model computes its own loss from `labels=`).
     "HuggingFaceDetectionModel": ("raidar.huggingface_model", "huggingface"),
+    # The torchvision zoo behind ONE configured wrapper (weights/score cut/label numbering/
+    # checkpoint load) — the inference twin of the raw builder functions the trainers wire.
+    "TorchVisionDetectionModel": ("raidar.torchvision_model", "torch"),
     # The torch engine's registered metric set (one module per engine). Batching is
     # recordstream's — `collate_records` + `batch_boxes`, no raidar collate.
     "DetectionConfusionMatrix": ("raidar.torch_detection", "torch"),
