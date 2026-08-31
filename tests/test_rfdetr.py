@@ -12,7 +12,7 @@ import torch
 from pydantic import ValidationError
 from torch import Tensor
 
-from raidar.rfdetr import RFDETRModel, _build_rfdetr_targets, _decode_rfdetr_predictions
+from raidar.rfdetr import RFDETRModel, _build_rfdetr_targets, _checkpoint_num_classes, _decode_rfdetr_predictions
 
 RESOLUTION = 128
 
@@ -90,6 +90,45 @@ def test_decode_rfdetr_predictions_filters_background_and_threshold() -> None:
 # --- RFDETRModel construction ----------------------------------------------
 
 
+class TestNumClassesIsBakedIntoTheCheckpoint:
+    """`checkpoint_path` alone must be enough (user ruling 2026-08-31: "only use checkpoint_path").
+
+    The head size travels in the checkpoint's own `class_embed` shape ([K+1, hidden] — the
+    no-object slot rides at index K), and the pretrained COCO detector's count is a known
+    constant — so `num_classes` stays unset unless the user is building a FRESH random head.
+    """
+
+    def test_an_rfdetr_style_checkpoint_derives_its_foreground_count(self, tmp_path: Any) -> None:
+        path = tmp_path / "checkpoint_best_total.pth"
+        torch.save({"model": {"class_embed.weight": torch.zeros(6, 256)}}, path)
+        assert _checkpoint_num_classes(str(path)) == 5
+
+    def test_a_lightning_prefixed_checkpoint_derives_too(self, tmp_path: Any) -> None:
+        path = tmp_path / "epoch=3.ckpt"
+        torch.save({"state_dict": {"model.detector.class_embed.weight": torch.zeros(6, 256)}}, path)
+        assert _checkpoint_num_classes(str(path)) == 5
+
+    def test_a_headless_or_missing_file_derives_nothing(self, tmp_path: Any) -> None:
+        headless = tmp_path / "other.pt"
+        torch.save({"model": {"backbone.weight": torch.zeros(2, 2)}}, headless)
+        assert _checkpoint_num_classes(str(headless)) is None
+        assert _checkpoint_num_classes(str(tmp_path / "absent.pth")) is None
+
+    def test_resolution_order_explicit_then_checkpoint_then_pretrained(self, tmp_path: Any) -> None:
+        path = tmp_path / "trained.pth"
+        torch.save({"model": {"class_embed.weight": torch.zeros(6, 256)}}, path)
+        explicit = RFDETRModel(num_classes=2, checkpoint_path=str(path))
+        assert explicit._resolve_num_classes() == 2, "an explicit value always wins"
+        derived = RFDETRModel(checkpoint_path=str(path))
+        assert derived._resolve_num_classes() == 5, "unset -> read off the checkpoint"
+        pretrained = RFDETRModel()
+        assert pretrained._resolve_num_classes() == 90, "unset, no checkpoint -> the COCO head's own count"
+
+    def test_no_head_to_read_from_is_a_clear_error(self) -> None:
+        with pytest.raises(ValueError, match="num_classes"):
+            RFDETRModel(pretrained_detector=False)._resolve_num_classes()
+
+
 def test_rfdetr_rejects_unknown_variant() -> None:
     # Confluid's ``@configurable`` now validates kwargs against the
     # auto-generated pydantic schema before the body runs. Since
@@ -157,6 +196,7 @@ def test_rfdetr_class_embed_matches_num_classes(small_rfdetr: RFDETRModel) -> No
     # work when an earlier test in this module happened to have run a forward pass first.
     # `cast`: `class_embed` / `num_queries` are rfdetr's own attributes, not `nn.Module`'s.
     detector = cast(Any, small_rfdetr.backbone)
+    assert small_rfdetr.num_classes is not None, "the fixture pins an explicit count"
     assert detector.class_embed.out_features == small_rfdetr.num_classes + 1
     assert detector.num_queries == 300
 

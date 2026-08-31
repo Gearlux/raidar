@@ -260,3 +260,70 @@ mandate and matrainer `docs/architecture.md` record 9 amendment 6.)
 (`_build_trainer` / `_live_trackers` / `_run_eval` / `_report_epoch_metrics`) — extend through
 the hooks, or change the base in matrainer with every consumer updated in the same workspace
 change.
+
+## 6. The torchvision zoo has TWO spellings — raw builders for training, ONE wrapper for inference (2026-08-31)
+
+**Context.** The zoo's builder functions are registered as `detection_model` configurables and
+serve the trainers well: a `!lazy:` slot the runnable flows with the dataset-derived
+`num_classes` at `run()`. But three inference decisions cannot be stated on a builder as plain
+config values: the pretrained `weights` parameter is a torchvision **enum object** (in a
+generated form it renders as a wired object socket with no producer — so a canvas-drawn
+fasterrcnn silently came up with RANDOM weights and detected nothing); torchvision reports
+every box above its internal 0.05 (measured on a real cppe-5 frame: 11 detections, scores
+0.95 down to 0.27 — noise in any review surface); and the zoo emits 1-indexed foreground
+labels (background reserved at index 0) while the workspace's other detection wrappers
+(RF-DETR, the Hub wrapper) emit 0-indexed, so cross-model label comparisons were off by one.
+There is also no builder knob for loading a TRAINED checkpoint back for inference.
+
+**Decision.** One wrapper class, `raidar.torchvision_model.TorchVisionDetectionModel`,
+mirroring `RFDETRModel`'s shape: partial-init (`__init__` stores config, `solidify()` builds
+once, checkpoint load LAST so its values win), closed `Literal` knobs (`variant` — the same
+nine builders `torchvision_detection.py` registers; `weights` — `none`/`DEFAULT`/`COCO_V1`,
+verified identical across all nine zoo enums; `label_indexing` — `zero_based`/`one_based`),
+and an eval decode that drops sub-threshold and background rows and renumbers labels. A
+`weights` name the variant's enum lacks (future torchvision skew — the constructor already
+refuses names outside the Literal) WARNS and builds with random init, because the
+checkpoint-load flow legitimately follows. The raw builders stay registered and stay the
+training spelling — the example config is untouched.
+
+**Consequences.** Two spellings for one zoo, deliberately: the builder is the trainer's slot,
+the wrapper is the inference slot (it also trains — the loss dict passes through — but nothing
+ships configured that way). `zero_based` is the default, so a wrapper-emitted label matches
+the other wrappers' vocabulary with no extra op; the cost is that COCO-pretrained output uses
+0-indexed COCO ids (person = 0, not the familiar 1) — `one_based` restores the native numbering.
+
+**Example.** The measured before/after on one cppe-5 frame (fasterrcnn_resnet50_fpn, COCO
+weights): raw forward — 11 detections, labels `[1, 1, 1, ...]`, scores `[0.95, 0.85, 0.57,
+0.44, 0.27, ...]`; through the wrapper (`score_threshold: 0.5`, `zero_based`) — 3 detections,
+labels `[0, 0, 0]`, scores `[0.95, 0.85, 0.57]`, boxes unchanged in the original frame.
+
+```yaml
+model: !class:raidar.torchvision_model.TorchVisionDetectionModel()
+  variant: fasterrcnn_resnet50_fpn
+  weights: none                                 # random init …
+  checkpoint_path: runs/frcnn_cppe5/best.ckpt   # … head sized FROM the checkpoint, weights loaded
+```
+
+(Amended 2026-08-31, user question "why do we need to set num_classes for a trained
+checkpoint": the class count is BAKED INTO a checkpoint's classification-head shapes, so
+`_checkpoint_num_classes` reads it per variant — Faster R-CNN's linear head is `[K, …]`,
+RetinaNet's cls_logits conv `[9K, …]`, FCOS `[K, …]`, SSD300 level-0 `[4K, …]`, SSDLite
+level-0 `[6K, …]`, all measured — suffix-matched so Lightning's `model.` and the wrapper's
+`detector.` prefixes both resolve. An explicit `num_classes` still wins, and a disagreement
+fails the load loudly — `load_state_dict` raises on a size mismatch even with
+`strict=False`, measured.)
+
+**What you may change.** The decode's vocabulary (a new knob appends to the signature — the
+widget order is APPEND-ONLY once shipped) and the `Literal` sets when torchvision's zoo moves.
+What you may not do: make the label shift unconditional again (the knob was a user decision,
+2026-08-31), turn the weights-skew warning into an error, or grow zoo-style knobs on the spec
+models (record 3).
+
+(Amended 2026-08-31, user ruling "only use checkpoint_path": `checkpoint_strict` is REMOVED
+from BOTH wrappers — loads are always `strict=False`, where missing keys are logged and a
+head-size disagreement still raises on its own — and the baked-in `num_classes` landed on
+`RFDETRModel` too: unset, it reads the checkpoint's own `class_embed` rows − 1, and with no
+checkpoint keeps the pretrained COCO detector's 90 instead of silently re-heading it to a
+random 1-class head. Measured end to end on a real trained checkpoint (`last_ema.pth`,
+cppe-5): `checkpoint_path` alone → 3 of 5 annotations matched at mean IoU 0.927, 0 FP, where
+the same graph with the old explicit `num_classes: 1` died on a state-dict size mismatch.)

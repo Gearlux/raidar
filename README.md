@@ -290,6 +290,7 @@ checkpoints for evaluation under `LightningDetector`).
 | Model | Notes |
 |---|---|
 | `torchvision.models.detection.fasterrcnn_*` / `retinanet_*` / `fcos_*` / `ssd*` | Used **raw** — they conform to the native forward contract directly. Registered as `detection_model` builders (below). |
+| `raidar.TorchVisionDetectionModel` | The same torchvision zoo behind ONE configured wrapper — pretrained `weights` as a plain value, an eval-time `score_threshold`, a `label_indexing` knob, and a `checkpoint_path` to load a trained model back for inference (below). |
 | `raidar.RFDETRModel` | RF-DETR family as a native torchvision-style model module. |
 | `raidar.HuggingFaceDetectionModel` | ONE light wrapper — `model_name:` reaches any Hub object-detection checkpoint (D-FINE, RT-DETRv2, DETR, Deformable-DETR, …). |
 | `raidar.fcos.*` | The shared spec's five native implementations (above). |
@@ -309,6 +310,37 @@ backend shares, plus that engine's registered metrics:
 `raidar.torchvision_detection` registers the torchvision zoo's builder **functions** separately —
 one module per upstream library, both named in the `lightning` / `torch` / `fastai` rows of the
 `FRAMEWORKS` table.
+
+### Using a torchvision detector for inference — `TorchVisionDetectionModel`
+
+The raw builders are the TRAINING spelling (a `!lazy:` slot the trainer flows with the
+dataset-derived `num_classes`). For inference — a prediction chain, a visual review pipeline —
+`raidar.TorchVisionDetectionModel` puts every decision in plain config values:
+
+```yaml
+model: !class:raidar.torchvision_model.TorchVisionDetectionModel()
+  variant: fasterrcnn_resnet50_fpn     # one of the nine registered zoo members
+  weights: DEFAULT                     # DEFAULT / COCO_V1 (COCO, 91 classes) / none
+  score_threshold: 0.5                 # torchvision itself reports every box above 0.05
+  label_indexing: zero_based           # emitted labels 0..K-1 (default) — one_based keeps 1..K
+```
+
+For a model you trained yourself, start from random init and load the checkpoint —
+`weights: none` and `checkpoint_path: <a Lightning .ckpt or plain state dict>`. The head size
+is read off the checkpoint itself (the class count is baked into its classification-head
+shapes), so `num_classes` stays unset; set it only to build a FRESH random head without a
+checkpoint, and note an explicit value that disagrees with the checkpoint fails the load
+loudly. Keys retarget to the wrapped detector automatically; missing keys are logged.
+`RFDETRModel` follows the same rule: `checkpoint_path` alone is enough — its head size comes
+off the checkpoint's own `class_embed` shape, and with no checkpoint at all the pretrained
+COCO detector keeps its own 90-class head instead of being silently re-headed.
+Eval output follows the native contract after two adaptations: rows below `score_threshold`
+and background rows (label 0) are dropped, and labels are renumbered per `label_indexing` —
+`zero_based` matches what the other model wrappers here emit. A `weights` name the chosen
+variant's zoo does not publish logs a warning and builds with random init instead (the
+constructor already refuses names outside the declared set). Training still works through the
+wrapper (the loss dict passes through untouched), but the example config deliberately keeps
+the raw builders for that role.
 
 ## Discovery
 

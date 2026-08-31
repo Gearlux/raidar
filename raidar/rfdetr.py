@@ -150,6 +150,42 @@ def _decode_rfdetr_predictions(
     return predictions
 
 
+#: The pretrained RF-DETR checkpoints are COCO-trained — 90 foreground classes. Resolving an
+#: unset ``num_classes`` to this is what lets the DEFAULT node detect out of the box instead of
+#: silently re-heading the checkpoint to a random 1-class head (measured 2026-08-31: the library
+#: itself warns "Checkpoint has 90 classes but model is configured for 1").
+_PRETRAINED_NUM_CLASSES = 90
+
+
+def _checkpoint_num_classes(path: str) -> Optional[int]:
+    """The FOREGROUND class count baked into a checkpoint — its ``class_embed`` rows minus one.
+
+    RF-DETR's head is ``[K + 1, hidden]`` (the no-object slot rides at index K). The state dict
+    is unwrapped from the containers both training routes write (``state_dict`` for a Lightning
+    ``.ckpt``, ``model`` for RF-DETR's own ``checkpoint_best_total.pth``) and the key is
+    suffix-matched, so ``model.``/``detector.`` prefixes resolve too. ``None`` when the file is
+    absent (the loader owns that error) or carries no such head.
+    """
+    import os
+
+    if not os.path.exists(path):
+        return None
+    raw: Any = torch.load(path, map_location="cpu", weights_only=False)
+    state = raw
+    for container in ("state_dict", "model"):
+        if isinstance(state, dict) and isinstance(state.get(container), dict):
+            state = state[container]
+    if isinstance(state, dict):
+        for key, value in state.items():
+            if (
+                isinstance(key, str)
+                and (key == "class_embed.weight" or key.endswith(".class_embed.weight"))
+                and hasattr(value, "shape")
+            ):
+                return int(value.shape[0]) - 1
+    return None
+
+
 @configurable(task="detection", role="model")
 class RFDETRModel(nn.Module):
     """Torchvision-native RF-DETR wrapper for
@@ -161,45 +197,47 @@ class RFDETRModel(nn.Module):
     * **Eval**: ``forward(images) → List[Dict]`` of per-image predictions.
 
     Args:
-        num_classes: Foreground class count. Internally an extra
-            ``num_classes`` slot is reserved for the no-object class and any
-            prediction with that label is dropped during decode.
+        num_classes: Foreground class count. ``None`` (the default) reads it
+            off ``checkpoint_path``'s own head when one is set, else uses the
+            pretrained COCO detector's 90 — set it only to build a fresh random
+            head. Internally an extra slot is reserved for the no-object class
+            and any prediction with that label is dropped during decode.
         variant: ``"nano"`` (default), ``"small"``, ``"medium"``, ``"large"``.
         pretrained_detector: Load full COCO-pretrained RF-DETR weights.
         resolution: Square input size in pixels. Must be a positive integer
             divisible by 32. ``None`` uses the variant's default resolution.
         score_threshold: Eval-time confidence cutoff applied after
             background-class filtering.
-        checkpoint_path / checkpoint_strict: Optional Lightning ``.ckpt`` load.
+        checkpoint_path: Optional trained-checkpoint load (a Lightning ``.ckpt``, RF-DETR's
+            own ``.pth``, or a plain state dict); loaded LAST, so its values win.
     """
 
     def __init__(
         self,
-        num_classes: int = 1,
+        num_classes: Optional[int] = None,
         variant: Literal["nano", "small", "medium", "large"] = "nano",
         pretrained_detector: bool = True,
         resolution: Optional[int] = None,
         score_threshold: float = 0.5,
         checkpoint_path: Optional[str] = None,
-        checkpoint_strict: bool = False,
     ) -> None:
         super().__init__()
         if variant not in _VARIANT_CLASSES:
             raise ValueError(f"variant must be one of {sorted(_VARIANT_CLASSES)}, got {variant!r}.")
-        self.num_classes = int(num_classes)
+        self.num_classes = None if num_classes is None else int(num_classes)
         self.variant = variant
         self.score_threshold = float(score_threshold)
         # Kept so the model can name its own weight artifacts (`model_refs`) — a value the
         # run record needs cannot be one the constructor consumes and forgets.
         self.pretrained_detector = bool(pretrained_detector)
         self.checkpoint_path = checkpoint_path
-        self.checkpoint_strict = bool(checkpoint_strict)
         # Partial: store config only. Building here allocated 30.1M parameters AND read the
         # pretrained checkpoint off disk (~/.roboflow) at CONSTRUCTION — 2.1 s before this
         # object could even be asked what its parameters are named, which the Partial-Init /
         # Zero-Arg mandate forbids. Everything the build derives is resolved in solidify().
         self._requested_resolution = resolution
         self._resolution: Optional[int] = None
+        self._resolved_num_classes: Optional[int] = None
         self.detector: Optional[nn.Module] = None
         self.postprocess: Optional[Any] = None
         self.criterion: Optional[nn.Module] = None
@@ -214,6 +252,8 @@ class RFDETRModel(nn.Module):
         :meth:`forward` calls it for a directly constructed instance. The checkpoint load stays
         last, so its values win — the same order the eager constructor had.
         """
+        if self._resolved_num_classes is None:
+            self._resolved_num_classes = self._resolve_num_classes()
         if self.detector is None:
             from rfdetr.detr import RFDETR
             from rfdetr.models.lwdetr import build_criterion_and_postprocessors
@@ -227,7 +267,7 @@ class RFDETRModel(nn.Module):
             self.register_buffer("_std", torch.tensor(RFDETR.stds).view(1, 3, 1, 1))
             rfdetr = _build_rfdetr(
                 variant=self.variant,
-                num_classes=self.num_classes,
+                num_classes=self._resolved_num_classes,
                 pretrained_detector=self.pretrained_detector,
                 resolution=self._requested_resolution,
             )
@@ -238,8 +278,33 @@ class RFDETRModel(nn.Module):
             criterion, _ = build_criterion_and_postprocessors(criterion_args)
             self.criterion = criterion
             if self.checkpoint_path:
-                load_lightning_checkpoint(self, self.checkpoint_path, strict=self.checkpoint_strict)
+                load_lightning_checkpoint(self, self.checkpoint_path)
         return cast(nn.Module, self.detector)
+
+    def _resolve_num_classes(self) -> int:
+        """The head size this build uses — explicit, else BAKED INTO the weights being loaded.
+
+        Order (user ruling 2026-08-31, "only use checkpoint_path"): an explicit ``num_classes``
+        wins; unset, a ``checkpoint_path``'s own ``class_embed`` shape answers; unset with only
+        the pretrained COCO detector, its known 90 — so the checkpoint loads WITHOUT the silent
+        random re-head. Reads config + at most one file; never builds.
+        """
+        if self.num_classes is not None:
+            return self.num_classes
+        if self.checkpoint_path:
+            derived = _checkpoint_num_classes(self.checkpoint_path)
+            if derived is not None:
+                return derived
+            logger.warning(
+                f"RFDETRModel: could not read the class count from {self.checkpoint_path!r} "
+                f"(no class_embed head found) — falling back to the pretrained default."
+            )
+        if self.pretrained_detector:
+            return _PRETRAINED_NUM_CLASSES
+        raise ValueError(
+            "RFDETRModel: num_classes is not set and there is no checkpoint_path or pretrained "
+            "detector to read it from — set num_classes to build a fresh head."
+        )
 
     @property
     def backbone(self) -> nn.Module:
@@ -328,7 +393,7 @@ class RFDETRModel(nn.Module):
             device=normalised.device,
         )
         results = cast(Any, self.postprocess)(outputs, target_sizes)
-        predictions = _decode_rfdetr_predictions(results, self.num_classes, self.score_threshold)
+        predictions = _decode_rfdetr_predictions(results, cast(int, self._resolved_num_classes), self.score_threshold)
         return predictions
 
 
