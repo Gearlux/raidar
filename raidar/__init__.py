@@ -13,9 +13,17 @@ raises an :class:`ImportError` naming the exact extra, instead of a traceback fr
 libraries down.
 """
 
+from importlib.metadata import PackageNotFoundError, version
+
 from matrainer._exports import lazy_exports
 
-__version__ = "0.1.0"
+try:
+    # Single source of truth: the installed distribution's metadata, i.e. pyproject.toml's
+    # `version` (the distribution is `raidar`). Never type the number in here as well.
+    __version__ = version("raidar")
+except PackageNotFoundError:  # pragma: no cover - uninstalled source checkout
+    __version__ = "0.0.0.dev0"
+
 
 #: Backend-owned name -> (defining module, the extra that installs it). Resolved on first
 #: attribute access. Keep in step with the extras in ``pyproject.toml``: a name here whose extra
