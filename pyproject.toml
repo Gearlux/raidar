@@ -10,14 +10,15 @@ license = {text = "MIT"}
 # backend-owned name in `raidar/__init__.py` resolves lazily to match.
 dependencies = [
     "confluid>=0.3.0",
-    # recordstream ships as a pre-release (0.1.0a1). Under PEP 440 a plain `>=0.1.0`
-    # EXCLUDES every pre-release of 0.1.0, so it would resolve to nothing.
-    "recordstream>=0.1.0a1",
+    # recordstream ships as a pre-release. Under PEP 440 a plain `>=0.1.0` EXCLUDES every
+    # pre-release of 0.1.0, so it would resolve to nothing. 0.1.0a2 is the first release where
+    # `ToTensor` only converts — its example uses `ConvertMode` and `Scale` before `ToTensor`.
+    "recordstream>=0.1.0a2",
     "liquifai>=0.1.0",
     "loggair>=0.1.0",
     # matrainer is the TRACKING library (and the metric-slot rule + artifact writers). Its own
     # core install is light — no torch — so it belongs here rather than in a backend extra.
-    "matrainer>=0.1.0",
+    "matrainer>=0.1.0a1",
 ]
 requires-python = ">=3.12"
 
@@ -29,8 +30,8 @@ requires-python = ">=3.12"
 # native model contract's stack — torchvision detectors, the torchmetrics detection metric set,
 # the batch plumbing — so each of those declares `raidar[torch]` rather than restating the list.
 torch = [
-    "matrainer[torch]>=0.1.0",
-    "recordstream[torch]>=0.1.0a1",
+    "matrainer[torch]>=0.1.0a1",
+    "recordstream[torch]>=0.1.0a2",
     "torch",
     "torchvision",
     # [detection] pulls pycocotools' torchmetrics glue; pycocotools restated because the
@@ -40,7 +41,7 @@ torch = [
 ]
 lightning = [
     "raidar[torch]",
-    "matrainer[lightning]>=0.1.0",
+    "matrainer[lightning]>=0.1.0a1",
     "pytorch-lightning",
 ]
 # TWO upper bounds, both upstream breaks measured in this workspace (2026-07-30, fastai 2.8.7)
@@ -76,15 +77,15 @@ huggingface = [
 keras = [
     "keras>=3.0",
     "torch",
-    "recordstream[keras,torch]>=0.1.0a1",
-    "matrainer[keras]>=0.1.0",
+    "recordstream[keras,torch]>=0.1.0a2",
+    "matrainer[keras]>=0.1.0a1",
 ]
 tensorflow = [
     "keras>=3.0",           # Keras 3 IS tf.keras in TF >= 2.16
     "tensorflow>=2.16",     # ...this extra's engine
     "torch",                # the detection target chain is torch-shaped (see the keras extra)
-    "recordstream[keras,torch]>=0.1.0a1",
-    "matrainer[keras]>=0.1.0",
+    "recordstream[keras,torch]>=0.1.0a2",
+    "matrainer[keras]>=0.1.0a1",
 ]
 # JAX brings NO detection zoo to wrap (`transformers` dropped Flax in v5), so this extra
 # installs only its framework and trains the shared FCOS spec. `torch` for the same target-chain
@@ -94,16 +95,16 @@ jax = [
     "flax>=0.8",            # NNX is the current Flax module API
     "optax>=0.2",           # the optimizers and the stable BCE the spec loss uses
     "torch",
-    "recordstream[keras,torch]>=0.1.0a1",
-    "matrainer>=0.1.0",
+    "recordstream[keras,torch]>=0.1.0a2",
+    "matrainer>=0.1.0a1",
 ]
 # MLX is Apple-silicon ONLY — a property of the framework. The platform marker keeps
 # `pip install raidar[mlx]` succeeding (and empty) elsewhere.
 mlx = [
     "mlx>=0.20; sys_platform == 'darwin' and platform_machine == 'arm64'",
     "torch",
-    "recordstream[keras,torch]>=0.1.0a1",
-    "matrainer>=0.1.0",
+    "recordstream[keras,torch]>=0.1.0a2",
+    "matrainer>=0.1.0a1",
 ]
 # RF-DETR's own training stack (Apache-2.0). rfdetr[train] pulls PTL + the native training loop
 # (`RFDETRModelModule` / `RFDETRDataModule` / `build_trainer`) that `RFDETRDetector` drives;
@@ -118,8 +119,8 @@ rfdetr = [
 # exist because `[tool.aisland] trackers` below NAMES them: `aisland tracker set mlflow`
 # intersects that declaration with the operator's selection and installs `raidar[mlflow]`,
 # and an extra that is declared but never defined makes uv warn and install nothing.
-mlflow = ["matrainer[mlflow]>=0.1.0"]
-tensorboard = ["matrainer[tensorboard]>=0.1.0"]
+mlflow = ["matrainer[mlflow]>=0.1.0a1"]
+tensorboard = ["matrainer[tensorboard]>=0.1.0a1"]
 dev = [
     "black>=24.0.0,<25.0.0",
     "isort>=5.13.0,<6.0.0",
