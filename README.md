@@ -205,7 +205,9 @@ Two structural changes in a spec engine's config block:
 detection_ops:
   - !class:recordstream.ops.target.CocoToTorchVisionDetection { bbox_format: xywh, label_offset: 0 }
   - !class:recordstream.ops.target.ResizeDetection { width: 256, height: 256 }
-  - !class:recordstream.ops.torch.ToTensor { mode: RGB, normalize: true }
+  - !class:recordstream.ops.image.ConvertMode { mode: RGB }
+  - !class:recordstream.ops.numpy.Scale {}
+  - !class:recordstream.ops.torch.ToTensor {}
   - !class:raidar.fcos.targets.FcosTargets { num_classes: 5, input_shape: [256, 256, 3] }
 ```
 
