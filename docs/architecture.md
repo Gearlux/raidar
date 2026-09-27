@@ -327,3 +327,51 @@ checkpoint keeps the pretrained COCO detector's 90 instead of silently re-headin
 random 1-class head. Measured end to end on a real trained checkpoint (`last_ema.pth`,
 cppe-5): `checkpoint_path` alone → 3 of 5 annotations matched at mean IoU 0.927, 0 FP, where
 the same graph with the old explicit `num_classes: 1` died on a state-dict size mismatch.)
+
+## 7. RF-DETR's own checkpoints load through RF-DETR's own loader (2026-09-27)
+
+**Context.** `RFDETRModel(checkpoint_path=…)` loaded every file through matrainer's generic
+checkpoint loader, which recognises the generic shapes: a Lightning `.ckpt` (`state_dict`), an
+Ultralytics `.pt` (a live module under `model`), a plain state dict. RF-DETR writes TWO shapes
+of its own. The current one (rfdetr 1.9: `model` + `args` + a Lightning-style `state_dict`)
+loaded by luck, through its `state_dict` key. The older one — `{model, optimizer,
+lr_scheduler, epoch, args}`, the shape of `rf-detr-nano.pth` and of any checkpoint an older
+rfdetr trained — has no `state_dict`, so the generic loader took the five top-level entries AS
+the state dict, matched none of them, and the model ran on random weights with nothing but its
+routine INFO lines (`checkpoint missing 468 key(s)`) to show for it.
+
+**Decision.** The wrapper routes by the file's own shape (`_is_rfdetr_checkpoint`): a top-level
+`model` MAPPING is RF-DETR's, and it is handed to the library as the weights to build from —
+the `pretrain_weights` route the rfdetr runnable's evaluation already uses, which reads both
+shapes and aligns the head. Anything else (the lightning backend's `.ckpt`, a plain state dict)
+keeps the generic loader, which knows the wrapper's `model.` / `detector.` prefixes. Rejected
+(user ruling 2026-09-27): teaching the generic loader RF-DETR's shapes, or making a load that
+matches nothing raise there — a library's format belongs to the wrapper that owns the library,
+and the generic loader's INFO line stays what it is.
+
+**Consequences.** The checkpoint's values still win: an RF-DETR file replaces the COCO weights
+at build time instead of overwriting them after. The library would quietly re-size a head that
+disagrees with an explicit `num_classes`; the wrapper refuses that first (`RuntimeError` naming
+both counts), keeping record 6's "an explicit value that disagrees fails the load". The file is
+read once more to decide the route — measured 0.01–0.06 s for a 366 MB checkpoint.
+
+**Example.** Measured on the real files, loading into `RFDETRModel(checkpoint_path=…)`:
+
+| file | before | after |
+|---|---|---|
+| `rf-detr-nano.pth` (older RF-DETR shape) | 1 of 465 tensors | 465 of 465 |
+| `runs/rfdetr_cppe5/checkpoint_best_total.pth` (current shape) | 466 of 466 | 466 of 466, through the library |
+| lightning backend `.ckpt` / plain state dict | loads | loads, through the generic loader as before |
+
+```yaml
+model: !class:raidar.rfdetr.RFDETRModel()
+  variant: nano
+  checkpoint_path: rf-detr-nano.pth   # RF-DETR's own file -> rfdetr's loader; head size read off it
+```
+
+**What you may change.** The shape test, if RF-DETR ships a third checkpoint shape. What you may
+not do: send an RF-DETR file back through the generic loader, or move RF-DETR's shapes into it.
+Pins: `tests/test_rfdetr.py` (`test_every_checkpoint_shape_loads_every_weight`,
+`test_rfdetr_files_go_to_the_library_and_the_rest_to_the_generic_loader`,
+`test_an_explicit_count_the_file_disagrees_with_fails_loudly`,
+`test_only_a_top_level_model_mapping_marks_an_rfdetr_file`).

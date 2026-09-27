@@ -20,6 +20,8 @@ Image preprocessing: assumes all images are already
 normalisation is applied internally.
 """
 
+import os
+from collections.abc import Mapping
 from types import SimpleNamespace
 from typing import Any, Dict, List, Literal, Optional, Union, cast
 
@@ -52,14 +54,23 @@ def _build_rfdetr(
     num_classes: int,
     pretrained_detector: bool,
     resolution: Optional[int],
+    weights_file: Optional[str] = None,
 ) -> Any:
-    """Instantiate a high-level ``RFDETR`` variant and return it."""
+    """Instantiate a high-level ``RFDETR`` variant and return it.
+
+    ``weights_file`` names one of RF-DETR's OWN checkpoints to build from instead of the COCO
+    weights — the library's ``pretrain_weights`` route, which reads both of its checkpoint
+    shapes and aligns the head. It wins over ``pretrained_detector``: the file replaces every
+    weight the COCO checkpoint would have supplied.
+    """
     import rfdetr
 
     cls_name = _VARIANT_CLASSES[variant]
     rfdetr_cls = getattr(rfdetr, cls_name)
     kwargs: Dict[str, Any] = {"num_classes": int(num_classes)}
-    if not pretrained_detector:
+    if weights_file is not None:
+        kwargs["pretrain_weights"] = weights_file
+    elif not pretrained_detector:
         kwargs["pretrain_weights"] = None
     if resolution is not None:
         kwargs["resolution"] = int(resolution)
@@ -166,8 +177,6 @@ def _checkpoint_num_classes(path: str) -> Optional[int]:
     suffix-matched, so ``model.``/``detector.`` prefixes resolve too. ``None`` when the file is
     absent (the loader owns that error) or carries no such head.
     """
-    import os
-
     if not os.path.exists(path):
         return None
     raw: Any = torch.load(path, map_location="cpu", weights_only=False)
@@ -184,6 +193,27 @@ def _checkpoint_num_classes(path: str) -> Optional[int]:
             ):
                 return int(value.shape[0]) - 1
     return None
+
+
+def _is_rfdetr_checkpoint(path: str) -> bool:
+    """Whether ``path`` is one of RF-DETR's OWN checkpoints — a top-level ``model`` MAPPING.
+
+    RF-DETR writes two shapes and both carry it: the older ``{model, optimizer, lr_scheduler,
+    epoch, args}`` and rfdetr 1.9's ``{model, args, state_dict, ...}``. What this project
+    writes carries none — the lightning backend's ``.ckpt`` keeps the wrapper under
+    ``state_dict``, and a plain ``state_dict()`` is keyed ``detector.*`` — and an Ultralytics
+    ``.pt``'s ``model`` is a live ``nn.Module``, not a mapping. ``False`` for a missing file:
+    the loader that runs next owns that error.
+
+    Why it matters (measured 2026-09-27): matrainer's generic loader reads the older shape as
+    a five-key state dict and lands 1 of 465 tensors, with only its INFO lines to show for it;
+    ``rfdetr``'s own loader lands all 465. Teaching the generic loader RF-DETR's shapes was
+    ruled out — a library's format is loaded by the wrapper that owns the library.
+    """
+    if not os.path.exists(path):
+        return False
+    raw: Any = torch.load(path, map_location="cpu", weights_only=False)
+    return isinstance(raw, Mapping) and isinstance(raw.get("model"), Mapping)
 
 
 @configurable(task="detection", role="model")
@@ -209,7 +239,9 @@ class RFDETRModel(nn.Module):
         score_threshold: Eval-time confidence cutoff applied after
             background-class filtering.
         checkpoint_path: Optional trained-checkpoint load (a Lightning ``.ckpt``, RF-DETR's
-            own ``.pth``, or a plain state dict); loaded LAST, so its values win.
+            own ``.pth`` in either of its shapes, or a plain state dict); its values win over
+            the pretrained ones. RF-DETR's own files load through ``rfdetr``'s loader, the
+            rest through matrainer's generic one.
     """
 
     def __init__(
@@ -249,8 +281,10 @@ class RFDETRModel(nn.Module):
         detector itself, its postprocessor, the EFFECTIVE resolution (which the library picks
         from the variant when none was requested) and the criterion. Idempotent; ``flow()``
         calls it, so ``self.parameters()`` is populated before an optimizer reads it, and
-        :meth:`forward` calls it for a directly constructed instance. The checkpoint load stays
-        last, so its values win — the same order the eager constructor had.
+        :meth:`forward` calls it for a directly constructed instance. The checkpoint's values win
+        over the pretrained ones: RF-DETR's own file is handed to the library AS the weights to
+        build from, any other file is loaded after the build — the same order the eager
+        constructor had.
         """
         if self._resolved_num_classes is None:
             self._resolved_num_classes = self._resolve_num_classes()
@@ -265,11 +299,13 @@ class RFDETRModel(nn.Module):
             # below, so a `.ckpt` carrying them still wins.
             self.register_buffer("_mean", torch.tensor(RFDETR.means).view(1, 3, 1, 1))
             self.register_buffer("_std", torch.tensor(RFDETR.stds).view(1, 3, 1, 1))
+            rfdetr_file = self._rfdetr_checkpoint()
             rfdetr = _build_rfdetr(
                 variant=self.variant,
                 num_classes=self._resolved_num_classes,
                 pretrained_detector=self.pretrained_detector,
                 resolution=self._requested_resolution,
+                weights_file=rfdetr_file,
             )
             self.detector = rfdetr.model.model
             self.postprocess = rfdetr.model.postprocess
@@ -277,9 +313,28 @@ class RFDETRModel(nn.Module):
             criterion_args = _build_criterion_args(rfdetr.model_config, rfdetr.model.device)
             criterion, _ = build_criterion_and_postprocessors(criterion_args)
             self.criterion = criterion
-            if self.checkpoint_path:
+            if self.checkpoint_path and rfdetr_file is None:
                 load_lightning_checkpoint(self, self.checkpoint_path)
         return cast(nn.Module, self.detector)
+
+    def _rfdetr_checkpoint(self) -> Optional[str]:
+        """``checkpoint_path`` when it is RF-DETR's own file, checked against an explicit head size.
+
+        An explicit ``num_classes`` wins and a checkpoint that disagrees fails the load (the
+        2026-08-31 ruling). ``rfdetr``'s loader would instead re-size the head quietly, so the
+        disagreement is refused HERE, before the library is asked.
+        """
+        if not self.checkpoint_path or not _is_rfdetr_checkpoint(self.checkpoint_path):
+            return None
+        if self.num_classes is not None:
+            baked = _checkpoint_num_classes(self.checkpoint_path)
+            if baked is not None and baked != self.num_classes:
+                raise RuntimeError(
+                    f"RFDETRModel: num_classes={self.num_classes} but {self.checkpoint_path!r} carries a "
+                    f"{baked}-class head — leave num_classes unset to use the checkpoint's own count."
+                )
+        logger.info(f"RFDETRModel: loading RF-DETR checkpoint {self.checkpoint_path} through rfdetr's own loader")
+        return self.checkpoint_path
 
     def _resolve_num_classes(self) -> int:
         """The head size this build uses — explicit, else BAKED INTO the weights being loaded.
