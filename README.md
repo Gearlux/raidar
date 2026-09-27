@@ -333,7 +333,10 @@ checkpoint, and note an explicit value that disagrees with the checkpoint fails 
 loudly. Keys retarget to the wrapped detector automatically; missing keys are logged.
 `RFDETRModel` follows the same rule: `checkpoint_path` alone is enough — its head size comes
 off the checkpoint's own `class_embed` shape, and with no checkpoint at all the pretrained
-COCO detector keeps its own 90-class head instead of being silently re-headed.
+COCO detector keeps its own 90-class head instead of being silently re-headed. It accepts
+RF-DETR's own `.pth` in either shape rfdetr writes (the older `model`/`optimizer`/`epoch` file
+and the current one) — those load through rfdetr's own loader — as well as a `.ckpt` from the
+lightning backend or a plain state dict.
 Eval output follows the native contract after two adaptations: rows below `score_threshold`
 and background rows (label 0) are dropped, and labels are renumbered per `label_indexing` —
 `zero_based` matches what the other model wrappers here emit. A `weights` name the chosen
