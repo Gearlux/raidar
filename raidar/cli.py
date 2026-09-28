@@ -86,7 +86,7 @@ FRAMEWORKS: Dict[str, Framework] = {
         "`pip install raidar-ultralytics`.",
         # Best-effort import — registers the sibling's models/trainer when it is installed;
         # absent on a default checkout, which is the correct state for an AGPL opt-in.
-        ("raidar_ultralytics",),
+        ("raidar.ultralytics",),
     ),
 }
 

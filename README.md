@@ -296,7 +296,8 @@ checkpoints for evaluation under `LightningDetector`).
 | `raidar.fcos.*` | The shared spec's five native implementations (above). |
 
 The Ultralytics-backed YOLO26 + RT-DETR native models live in a separate package that is not
-part of this distribution (Ultralytics is AGPL).
+part of this distribution (Ultralytics is AGPL). Installed, it adds the `raidar.ultralytics`
+subpackage, so a config names its classes as `raidar.ultralytics.<module>.<Class>`.
 
 `raidar.torch_detection` is the torch ENGINE's module — the batch plumbing every torch-family
 backend shares, plus that engine's registered metrics:
