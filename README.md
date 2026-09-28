@@ -27,7 +27,7 @@ The training backend is a property of the **config**, not of the CLI: an alterna
 | `jax` | An `nnx.jit`-traced optax loop (`raidar.JaxDetector`) over the spec in `flax.nnx` (`FlaxFcos`). | `raidar[jax]` |
 | `mlx` | Apple's MLX (`raidar.MlxDetector`) — unified memory, lazy arrays; Apple silicon only. | `raidar[mlx]` |
 | `rfdetr` | RF-DETR's **own** PyTorch-Lightning recipe (`raidar.RFDETRDetector`) — COCO-mAP eval, EMA, best-checkpoint saving, LR schedule. Apache-2.0, so it lives in core. | `raidar[rfdetr]` |
-| `ultralytics` | Ultralytics YOLO (AGPL) — lives in the [raidar-ultralytics](https://github.com/Gearlux/raidar-ultralytics) sibling package; raidar carries only the table row and the config block. | sibling package |
+| `ultralytics` | Ultralytics YOLO (AGPL) — lives in a separate package that is not part of this distribution; raidar carries only the table row and the config block. | separate package |
 
 ## Installation
 
@@ -35,18 +35,16 @@ The training backend is a property of the **config**, not of the CLI: an alterna
 A training framework arrives with the backend you select:
 
 ```bash
-pip install "git+https://github.com/Gearlux/raidar.git@main#egg=raidar[lightning]"    # the reference backend
-pip install "git+https://github.com/Gearlux/raidar.git@main#egg=raidar[huggingface]"  # transformers.Trainer
-pip install "git+https://github.com/Gearlux/raidar.git@main#egg=raidar[keras]"        # the Keras 3 loop
-pip install "git+https://github.com/Gearlux/raidar.git@main#egg=raidar[rfdetr]"       # RF-DETR's stack
+pip install "raidar[lightning]"     # the reference backend
+pip install "raidar[huggingface]"   # transformers.Trainer
+pip install "raidar[keras]"         # the Keras 3 loop
+pip install "raidar[rfdetr]"        # RF-DETR's stack
 ```
 
-`[torch]` is the base of the torch-family backends (`lightning` / `fastai` build on it). For the
-ultralytics backend:
+raidar is on PyPI as a pre-release; pip installs it without `--pre`, because no final release
+exists yet. Leave `--pre` off: it lets pip take pre-releases of *every* dependency too.
 
-```bash
-pip install git+https://github.com/Gearlux/raidar-ultralytics.git@main
-```
+`[torch]` is the base of the torch-family backends (`lightning` / `fastai` build on it).
 
 Every backend-owned name in `raidar/__init__.py` resolves lazily, so `import raidar` pulls no
 framework and touching a missing one raises an `ImportError` naming the exact extra.
@@ -61,7 +59,7 @@ pip install -e ".[lightning,fastai,huggingface,keras,tensorflow,jax,rfdetr,dev]"
 
 ## The one config
 
-[`examples/train_cppe5.yaml`](examples/train_cppe5.yaml) trains on **cppe-5** (the "MNIST of
+[`examples/train_cppe5.yaml`](https://github.com/Gearlux/raidar/blob/main/examples/train_cppe5.yaml) trains on **cppe-5** (the "MNIST of
 object detection": 1000 medical-PPE images, 5 classes, COCO boxes) on every backend, changing only
 the flag. Its shape is the demo:
 
@@ -181,9 +179,9 @@ pins wins. With `num_classes != 80` the pretrained class head is re-initialised
 ## The shared FCOS spec — keras, tensorflow, jax, mlx
 
 Every detection zoo raidar wraps is torch-only, so a cross-framework comparison built on zoos
-would compare different networks. The [`raidar/fcos/`](raidar/fcos/) package is the answer: a
+would compare different networks. The [`raidar/fcos/`](https://github.com/Gearlux/raidar/tree/main/raidar/fcos) package is the answer: a
 tiny single-level anchor-free FCOS-style detector (~110K parameters) **specified once**
-([`spec.py`](raidar/fcos/spec.py)) and implemented natively per framework — `TorchFcos` (serves
+([`spec.py`](https://github.com/Gearlux/raidar/blob/main/raidar/fcos/spec.py)) and implemented natively per framework — `TorchFcos` (serves
 lightning / torch / fastai too), `KerasFcos`, `TensorFlowFcos` (raw `tf.nn`), `FlaxFcos`,
 `MlxFcos` — each checked against the spec's DERIVED parameter count, so "the same network" is a
 claim the tests enforce rather than an aspiration. For real work prefer a zoo model; this is the
@@ -297,8 +295,8 @@ checkpoints for evaluation under `LightningDetector`).
 | `raidar.HuggingFaceDetectionModel` | ONE light wrapper — `model_name:` reaches any Hub object-detection checkpoint (D-FINE, RT-DETRv2, DETR, Deformable-DETR, …). |
 | `raidar.fcos.*` | The shared spec's five native implementations (above). |
 
-The Ultralytics-backed YOLO26 + RT-DETR native models live in
-[raidar-ultralytics](https://github.com/Gearlux/raidar-ultralytics).
+The Ultralytics-backed YOLO26 + RT-DETR native models live in a separate package that is not
+part of this distribution (Ultralytics is AGPL).
 
 `raidar.torch_detection` is the torch ENGINE's module — the batch plumbing every torch-family
 backend shares, plus that engine's registered metrics:

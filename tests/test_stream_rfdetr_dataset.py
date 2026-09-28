@@ -171,10 +171,14 @@ def test_datamodule_dataloader_yields_nested_tensor_batch() -> None:
     dm = StreamRFDETRDataModule(mc, tc, train_stream=_stream(4), val_stream=_stream(2), class_names=["cat", "dog"])
     dm.setup("fit")
     samples, targets = next(iter(dm.train_dataloader()))
-    # RF-DETR's collate builds a NestedTensor (.tensors [B,C,H,W], .mask) + a list of targets.
+    # RF-DETR's collate builds a NestedTensor (.tensors [B,C,H,W], .mask) + a SEQUENCE of per-sample
+    # target dicts. Its type is rfdetr's to choose — a plain list up to 1.9, a `PackedTargets` from
+    # 1.11 (one tensor per field, indexable and iterable as the same dicts) — so only the sequence
+    # behaviour raidar reads (`len`, `[i]`, `for t in targets`) is pinned here.
     assert hasattr(samples, "tensors") and samples.tensors.ndim == 4
-    assert isinstance(targets, (list, tuple)) and len(targets) == 2
+    assert len(targets) == 2
     assert set(targets[0]) >= {"boxes", "labels", "orig_size"}
+    assert [set(t) >= {"boxes", "labels"} for t in targets] == [True, True]
 
 
 def test_datamodule_test_falls_back_to_val() -> None:

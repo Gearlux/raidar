@@ -1,26 +1,55 @@
+[build-system]
+# >=77 for the PEP 639 `license` string + `license-files` below.
+requires = ["setuptools>=77", "wheel"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "raidar"
-version = "0.1.0"
+version = "0.1.0a1"
 description = "Object detection across training backends, driven by one config (torchvision, RF-DETR, HF detectors)."
-authors = [{name = "Taidal"}]
-license = {text = "MIT"}
+readme = "README.md"
+authors = [{name = "Gert Behiels"}]
+license = "MIT"
+license-files = ["LICENSE"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Scientific/Engineering :: Image Recognition",
+    "Typing :: Typed",
+]
 # The CORE is backend-free: `pip install raidar` gives the CLI and the config surface only, so a
 # machine that has not chosen a training framework never installs one. Every ML framework lives in
 # the extra of the backend that needs it (see `[project.optional-dependencies]`), and every
 # backend-owned name in `raidar/__init__.py` resolves lazily to match.
+# Floors are what the suite runs against in a clean venv resolving from PyPI alone (measured
+# 2026-09-28, before the first release). matrainer 0.1.0a1 itself requires confluid>=0.3.1,
+# liquifai>=0.3.0 and loggair>=0.2.0, so the older floors here named combinations nobody
+# could install.
 dependencies = [
-    "confluid>=0.3.0",
+    "confluid>=0.3.1",
     # recordstream ships as a pre-release. Under PEP 440 a plain `>=0.1.0` EXCLUDES every
     # pre-release of 0.1.0, so it would resolve to nothing. 0.1.0a2 is the first release where
     # `ToTensor` only converts — its example uses `ConvertMode` and `Scale` before `ToTensor`.
     "recordstream>=0.1.0a2",
-    "liquifai>=0.1.0",
-    "loggair>=0.1.0",
+    "liquifai>=0.3.0",
+    "loggair>=0.2.0",
     # matrainer is the TRACKING library (and the metric-slot rule + artifact writers). Its own
     # core install is light — no torch — so it belongs here rather than in a backend extra.
     "matrainer>=0.1.0a1",
 ]
 requires-python = ">=3.12"
+
+[project.urls]
+Homepage = "https://github.com/Gearlux/raidar"
+Repository = "https://github.com/Gearlux/raidar.git"
+Issues = "https://github.com/Gearlux/raidar/issues"
+Changelog = "https://github.com/Gearlux/raidar/blob/main/CHANGELOG.md"
 
 [project.optional-dependencies]
 # One extra per training backend. `aisland framework set lightning …` installs the ones the
@@ -122,6 +151,10 @@ rfdetr = [
 mlflow = ["matrainer[mlflow]>=0.1.0a1"]
 tensorboard = ["matrainer[tensorboard]>=0.1.0a1"]
 dev = [
+    # Release tooling: `python -m build` produces the sdist + wheel, `twine check`
+    # validates the metadata PyPI will re-validate on upload.
+    "build>=1.0.0",
+    "twine>=5.0.0",
     "black>=24.0.0,<25.0.0",
     "isort>=5.13.0,<6.0.0",
     "flake8>=6.0.0,<8.0.0",
@@ -193,8 +226,36 @@ include = ["raidar*"]
 [tool.setuptools.package-data]
 raidar = ["py.typed"]
 
+[tool.mypy]
+# Untyped third-party packages (torchvision, tensorflow, yaml, tqdm) are not errors — the same
+# rule the sibling training projects and the workspace-root run apply.
+disable_error_code = ["import-untyped"]
+warn_unused_configs = true
+
+# Optional-extra libraries CI does not install. CI runs `mypy .` HERE with only the extras its
+# install line names, so every module an extra-gated backend imports must be listed, or CI
+# fails on `import-not-found` while the workspace-root run (everything installed) passes —
+# measured 2026-09-28 before the first release. `mlx` cannot be installed on Linux at all.
+[[tool.mypy.overrides]]
+module = [
+    "fastai.*",
+    "jax.*",
+    "flax.*",
+    "optax.*",
+    "mlx.*",
+]
+ignore_missing_imports = true
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# --cov-branch is REQUIRED here, not a preference: `branch = true` below is read by the
+# pytest process only, while pytest-cov tells CHILD processes which mode to use through
+# COV_CORE_BRANCH, which it exports only when the flag is on the command line. The suite
+# spawns a real python child (test_cli_no_sys_path_pollution), which would otherwise write
+# statement data beside the parent's branch data, and the final combine refuses to merge
+# them — measured on matrainer's Linux CI 2026-09-27 (INTERNALERROR "Can't combine statement
+# coverage data with branch data"); it does not reproduce on macOS. See AGENTS.md.
+addopts = "--cov-branch"
 markers = [
     "slow: heavy end-to-end tests (e.g. a real RF-DETR train epoch); deselect with -m 'not slow'.",
 ]
