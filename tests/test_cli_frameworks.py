@@ -196,13 +196,19 @@ def test_the_default_backend_is_a_block_named_by_default_scopes() -> None:
 def test_every_framework_names_registrations_that_import() -> None:
     """A `registrations` module that does not import leaves every bare registered name
     unresolvable. `ultralytics` is best-effort by design — its module lives in the AGPL sibling
-    package, so it is only checked where that package is installed."""
+    package, so it is only checked where that package is installed.
+
+    The sibling installs as `raidar.ultralytics`, a subpackage of THIS package's name, so its
+    top-level name `raidar` always resolves: the check looks up the full dotted path (after the
+    top-level one, since `find_spec` imports a dotted name's parent and raises when that is
+    missing). Checking only the top level imported `raidar.ultralytics` on every machine without
+    the sibling — CI among them — and failed there with `No module named 'raidar.ultralytics'`."""
     import importlib
     import importlib.util
 
     for name, spec in FRAMEWORKS.items():
         for module in registration_modules(spec):
-            if importlib.util.find_spec(module.split(".")[0]) is None:
+            if importlib.util.find_spec(module.split(".")[0]) is None or importlib.util.find_spec(module) is None:
                 assert name == "ultralytics", f"{name}: registrations module {module!r} is not installed"
                 continue
             importlib.import_module(module)  # raises if the path is wrong
