@@ -1,0 +1,388 @@
+# One detection config, every training backend — cppe-5 (the "MNIST of HF object detection":
+# 1000 medical-PPE images, 5 classes — Coverall / Face_Shield / Gloves / Goggles / Mask —
+# COCO-format boxes).
+#
+#   raidar train    examples/train_cppe5.yaml
+#   recordstream run examples/train_cppe5.yaml   # generic runner, no verb
+#
+# ---------------------------------------------------------------------------
+# The shape of this file IS the demo
+# ---------------------------------------------------------------------------
+# Everything above the "framework-specific" divider is engine-agnostic: the dataset splits, the
+# batch/epoch knobs, the run identity. Only the keys below it change when the training engine
+# does.
+#
+# Every backend is a `!scope:framework=<name>` block that OVERRIDES only the framework-specific
+# keys (document order, last write wins), and `default_scopes:` names the one a bare run uses
+# (lightning), so this config runs as-is with no scope at all. `--framework <name>` picks
+# another, and it is the SAME flag on either runner:
+#
+#   raidar train    examples/train_cppe5.yaml --framework rfdetr
+#   recordstream run examples/train_cppe5.yaml --framework rfdetr
+#
+# The name must match a block below. `--framework lightnin` is an ERROR listing the backends this
+# file declares, not a silent fall-through to the default.
+
+# ===========================================================================
+# Shared — identical for every backend
+# ===========================================================================
+
+# The backend a bare `raidar train` / `recordstream run` uses. A `--framework <name>` wins over
+# it; the value must name a block below (a typo is the same error a typo'd flag gets); it is a
+# static list — never a `${...}` value.
+default_scopes: [framework=lightning]
+
+experiment_name: cppe5_detection
+run_name: cppe5
+
+# The dataset exposes `train` and `test` (no `validation`), so the held-out split is `test`. The
+# nested source needs the INSTANCE form — `!class:...()` WITH parens — or `Stream.source` stays a
+# deferred Class marker and iteration raises.
+#
+# `count:` caps both splits so the example runs in minutes; delete both lines (and raise the
+# epochs) to train on all 1000 rows. Both splits reach the op chain through
+# `ops: !ref:detection_ops`, and `!ref:` resolves against the MERGED document — so a backend that
+# overrides `detection_ops` moves train and validation together and they cannot drift.
+#
+# The id is the NAMESPACED form (`rishitdagli/cppe-5`): current huggingface_hub rejects the
+# legacy bare `cppe-5` (`HfUriError: Repository id must be 'namespace/name'`, measured
+# 2026-08-06) — a bare id only "works" by silently falling back to a stale local cache.
+train_set: !class:recordstream.core.stream.Stream
+  source: !class:recordstream.sources.huggingface.HuggingFaceSource()
+    path: rishitdagli/cppe-5
+    split: train
+    input_feature: image
+    target_feature: objects
+    count: 96                # the fast-demo cap — delete to train on all 1000 rows
+  ops: !ref:detection_ops
+
+val_set: !class:recordstream.core.stream.Stream
+  source: !class:recordstream.sources.huggingface.HuggingFaceSource()
+    path: rishitdagli/cppe-5
+    split: test               # only 29 rows — small enough to use whole, no cap needed
+    input_feature: image
+    target_feature: objects
+  ops: !ref:detection_ops
+
+# cppe-5 ships no third split, so the held-out set doubles as `test_set` — which is what lets
+# ONE config serve all three verbs (`raidar evaluate` runs the test loop; a fit also runs it
+# once at the end). A real evaluation points the model at a TRAINED checkpoint (e.g. a model
+# wrapper's `checkpoint_path`); run bare, this evaluates the pretrained-backbone/random-head
+# model, which is the wiring check rather than a score.
+test_set: !class:recordstream.core.stream.Stream
+  source: !class:recordstream.sources.huggingface.HuggingFaceSource()
+    path: rishitdagli/cppe-5
+    split: test
+    input_feature: image
+    target_feature: objects
+  ops: !ref:detection_ops
+
+batch_size: 2
+num_workers: 4
+max_epochs: 5
+
+# ===========================================================================
+# Framework-specific — the ONLY part a backend swap touches
+# ===========================================================================
+# The `runnable:` lives in each framework block below; the keys HERE are the torchvision-family
+# defaults every block inherits unless it overrides them.
+#
+# EVERY framework-specific key sits at THIS level — `model`, `detection_ops`, `num_classes`,
+# `class_names` — and a backend block overrides the ones it must. That flatness is not cosmetic:
+# a scope block replaces a KEY and takes its whole subtree with it, so a `model:` nested INSIDE
+# `runnable:` would vanish the moment a block swapped the runnable.
+#
+# ⚠️ THE label convention is the real semantic difference between the backends, and it is silent
+# when wrong:
+#   * torchvision (the lightning default) reserves BACKGROUND AT INDEX 0 — foreground ids are
+#     1..5, so `label_offset: 1` and `num_classes: 6` (5 foreground + background);
+#   * RF-DETR and ultralytics are 0-INDEXED (`0..K-1`, RF-DETR reserving background at index K) —
+#     `label_offset: 0` and `num_classes: 5`.
+# Each backend's block therefore restates `detection_ops` + `num_classes` — inheriting the
+# torchvision shift would train with every label off by one and nothing raising.
+
+# RAW torchvision builder, wired `!lazy:` so `initialize()` injects the resolved `num_classes` at
+# run time (confluid flows the builder FUNCTION with `num_classes=...`). The MobileNetV3-320
+# variant is the fast default; alternatives, from fast to accurate:
+#
+#   model: !lazy:torchvision.models.detection.fasterrcnn_resnet50_fpn      # 800px, slower
+#     weights_backbone: DEFAULT
+#
+# Hugging Face Hub detectors (D-FINE, RT-DETRv2, DETR, …) are a `model_name` STRING on the
+# huggingface BACKEND's block — the model computes its own loss, so it belongs to that engine's
+# scope block, not to this model slot.
+model: !lazy:torchvision.models.detection.fasterrcnn_mobilenet_v3_large_320_fpn
+  weights_backbone: DEFAULT
+
+detection_ops:
+  - !class:recordstream.ops.target.CocoToTorchVisionDetection
+    bbox_format: xywh        # cppe-5 boxes are COCO [x, y, w, h]
+    label_offset: 1          # 0..4 → 1..5; reserve class 0 for background (torchvision)
+  - !class:recordstream.ops.image.ConvertMode
+    mode: RGB                # cppe-5 mixes RGB/RGBA/grayscale — force 3-channel
+  - !class:recordstream.ops.numpy.Scale {}    # uint8 0..255 -> float32 0..1
+  - !class:recordstream.ops.torch.ToTensor {}  # HWC -> CHW
+
+# 5 foreground + background. Pinned so the one-time startup walk that would otherwise derive it
+# (decoding every train image) is skipped.
+num_classes: 6
+
+# The default — `default_scopes:` at the top of the file names it, so a bare `raidar train` runs
+# this block and `--framework lightning` names the same one. A typo'd `--framework lightnin` is
+# an error listing the backends this file declares — the typo check a backend SUBCOMMAND could
+# never do.
+lightning: !scope:framework=lightning
+  runnable: !class:raidar.LightningDetector
+    # torchvision's detection models fall back off Apple's MPS accelerator so hard that the GPU
+    # is ~30x SLOWER than the CPU here — measured on this exact model and data (Faster R-CNN
+    # MobileNet-320, batch 2): 1.04 s/step on cpu vs 32.9 s/step on mps, 2026-08-04. PL would
+    # pick mps by itself on Apple silicon, so the example pins cpu. **Delete the `lightning:`
+    # slot on a CUDA box**, where the GPU is both faster and correct. (Nested in the runnable —
+    # it is lightning-backend-specific, and a top-level sibling would collide with this block's
+    # own key name.)
+    lightning: !lazy:pytorch_lightning.Trainer
+      accelerator: cpu
+      max_epochs: !ref:max_epochs
+
+# --- torch: the control experiment ------------------------------------------
+# The SMALLEST block in the file, and that is the point. This backend removes the training
+# FRAMEWORK entirely — the loop is written out, `zero_grad`/`backward`/`step` in the open — and
+# the config still does not change: same dataset, same detection_ops, same model, same metrics,
+# same artifacts. What it does NOT have is honest rather than missing: no `lightning:` Trainer
+# slot and no framework loggers (tracking goes through `trackers:`, which every backend has), no
+# callback protocol, no distributed strategy.
+#
+# `device: cpu` for the SAME measured reason as the lightning block's accelerator pin — the
+# hand-written loop would pick mps via `auto`, and torchvision detection is ~30x slower there.
+torch: !scope:framework=torch
+  runnable: !class:raidar.TorchDetector
+    device: cpu
+
+# --- fastai: swap the LOOP and nothing else ----------------------------------
+# fastai runs on torch, so it reuses the same model, the same detection_ops and the same
+# torchmetrics set; what it brings is one-cycle scheduling. The native detection contract
+# computes loss INSIDE the model's forward, which fastai's Learner accommodates through the
+# no-op-loss bridge (see raidar/fastai_detector.py) — the recorded `valid_loss` is therefore a
+# meaningless 0 and validation quality comes from the same torchmetrics as the torch backend.
+fastai: !scope:framework=fastai
+  runnable: !class:raidar.FastaiDetector
+    one_cycle: true
+    learning_rate: 1e-4
+    device: cpu              # same measured reason as the other torch-family pins: fastai's own
+                             # TrainEvalCallback would move the model to mps (default_device()),
+                             # where torchvision detection is ~30x slower (1.0 -> 32.9 s/step)
+
+# --- huggingface: fine-tuning a Hub checkpoint -------------------------------
+# The only backend that swaps the MODEL as well as the loop, so its block carries its own
+# `model:` — ONE light generic wrapper, and the checkpoint is a STRING (any Hub object-detection
+# id: D-FINE, RT-DETRv2, DETR, Deformable-DETR, …). The model computes its own DETR-family loss
+# from `labels=`, so there is no loss to wire and nothing this backend registers.
+#
+# The ops only shape the TARGET (0-indexed labels, like rfdetr): images stay RAW — the
+# checkpoint's own image processor does the resize / pad / normalize AND the box conversion,
+# which is why no ToTensor appears here.
+huggingface: !scope:framework=huggingface
+  runnable: !class:raidar.HuggingFaceDetector
+    learning_rate: 5e-5      # a fine-tuning LR — we start from real weights
+    # D-FINE does not run on Apple's MPS accelerator AT ALL — its sinusoidal position embedding
+    # builds a float64 tensor and MPS has no float64 (measured 2026-08-05: "Cannot convert a MPS
+    # Tensor to float64"). `transformers.Trainer` picks mps by itself on Apple silicon, so the
+    # example pins cpu. **Delete this line on a CUDA box.**
+    training_arguments: !lazy:transformers.TrainingArguments
+      use_cpu: true
+  model: !lazy:raidar.HuggingFaceDetectionModel
+    model_name: ustc-community/dfine-small-coco
+  detection_ops:
+    - !class:recordstream.ops.target.CocoToTorchVisionDetection
+      bbox_format: xywh
+      label_offset: 0        # HF detectors are 0-indexed (no background slot) — do NOT +1
+  num_classes: 5
+
+# --- keras: the shared FCOS spec on Keras 3 ----------------------------------
+# The first non-torch training loop, and the reason the spec exists: torchvision / RF-DETR /
+# transformers are all torch-only, so the cross-engine comparison runs the spec's OWN tiny
+# detector (~110K params, from scratch — a wiring proof, not a score). Two structural changes:
+#   * the ops chain gains ResizeDetection (dense FCOS targets need ONE fixed grid) and ENDS in
+#     FcosTargets, which encodes each record's boxes into fixed-shape dense maps — that is what
+#     lets `collate_records` stack detection batches with no ragged tensors (the torch backends
+#     carry the variable-N Boxes columns collate_records leaves, read back by batch_boxes);
+#   * labels are 0-indexed (the class map has no background slot), like rfdetr/huggingface.
+# The image keeps the shared ToTensor (the RGB coercion for cppe-5's mixed-mode rows lives
+# there); the engine's channels-last layout is one transpose in the backend's batch adapter.
+# Scoring is the spec's numpy AP50 (torchmetrics is torch-only): val/map_50, val/precision,
+# val/recall. KERAS_BACKEND picks the engine; unset, recordstream selects the first installed.
+keras: !scope:framework=keras
+  runnable: !class:raidar.KerasDetector
+    learning_rate: 1.0e-3      # from scratch — a fine-tuning LR is too timid
+  model: !lazy:raidar.fcos.keras_fcos.KerasFcos
+    input_shape: [256, 256, 3]
+  detection_ops:
+    - !class:recordstream.ops.target.CocoToTorchVisionDetection
+      bbox_format: xywh
+      label_offset: 0          # the spec's class map is 0-indexed — no background channel
+    - !class:recordstream.ops.target.ResizeDetection
+      width: 256
+      height: 256
+    - !class:recordstream.ops.image.ConvertMode
+      mode: RGB
+    - !class:recordstream.ops.numpy.Scale {}
+    - !class:recordstream.ops.torch.ToTensor {}
+    - !class:raidar.fcos.targets.FcosTargets
+      num_classes: 5           # MUST match the model's resolved count
+      input_shape: [256, 256, 3]
+  num_classes: 5
+
+# --- tensorflow: the spec on a native tf.data + GradientTape loop ------------
+# The keras block's sibling — same spec, same dense-target chain, same numpy AP — owning only
+# what Keras 3 does not expose: tf.data prefetch, tf.function-traced steps (jit_compile/XLA is a
+# knob), the epoch loop, and the SavedModel export. The model here is the RAW tf.nn
+# implementation (TensorFlowFcos), so the comparison includes real TensorFlow rather than
+# Keras-on-TF standing in for it. NOTE: run in a FRESH process (Keras binds its engine at import
+# time; raidar's _tensorflow shim pins KERAS_BACKEND=tensorflow before anything imports keras).
+tensorflow: !scope:framework=tensorflow
+  runnable: !class:raidar.TensorFlowDetector
+    learning_rate: 1.0e-3
+  model: !lazy:raidar.fcos.tensorflow_fcos.TensorFlowFcos
+    input_shape: [256, 256, 3]
+  detection_ops:
+    - !class:recordstream.ops.target.CocoToTorchVisionDetection
+      bbox_format: xywh
+      label_offset: 0
+    - !class:recordstream.ops.target.ResizeDetection
+      width: 256
+      height: 256
+    - !class:recordstream.ops.image.ConvertMode
+      mode: RGB
+    - !class:recordstream.ops.numpy.Scale {}
+    - !class:recordstream.ops.torch.ToTensor {}
+    - !class:raidar.fcos.targets.FcosTargets
+      num_classes: 5
+      input_shape: [256, 256, 3]
+  num_classes: 5
+
+# --- jax: the spec on a jitted optax loop ------------------------------------
+# The TensorFlow block's sibling in the other functional programming model: nnx.value_and_grad
+# over a pure step, nnx.jit traced ONCE, explicit randomness (FlaxFcos's seed knob is real).
+# Same dense-target chain, same numpy AP scoring, same 0-indexed labels.
+jax: !scope:framework=jax
+  runnable: !class:raidar.JaxDetector
+    learning_rate: 1.0e-3
+  model: !lazy:raidar.fcos.flax_fcos.FlaxFcos
+    input_shape: [256, 256, 3]
+  detection_ops:
+    - !class:recordstream.ops.target.CocoToTorchVisionDetection
+      bbox_format: xywh
+      label_offset: 0
+    - !class:recordstream.ops.target.ResizeDetection
+      width: 256
+      height: 256
+    - !class:recordstream.ops.image.ConvertMode
+      mode: RGB
+    - !class:recordstream.ops.numpy.Scale {}
+    - !class:recordstream.ops.torch.ToTensor {}
+    - !class:raidar.fcos.targets.FcosTargets
+      num_classes: 5
+      input_shape: [256, 256, 3]
+  num_classes: 5
+
+# --- mlx: the spec on Apple's MLX (Apple silicon only) -----------------------
+# Unified memory (no device transfer at all), lazy arrays (the loop mx.evals per step), and
+# train/eval as module STATE. Same dense-target chain, same numpy AP, same 0-indexed labels.
+mlx: !scope:framework=mlx
+  runnable: !class:raidar.MlxDetector
+    learning_rate: 1.0e-3
+  model: !lazy:raidar.fcos.mlx_fcos.MlxFcos
+    input_shape: [256, 256, 3]
+  detection_ops:
+    - !class:recordstream.ops.target.CocoToTorchVisionDetection
+      bbox_format: xywh
+      label_offset: 0
+    - !class:recordstream.ops.target.ResizeDetection
+      width: 256
+      height: 256
+    - !class:recordstream.ops.image.ConvertMode
+      mode: RGB
+    - !class:recordstream.ops.numpy.Scale {}
+    - !class:recordstream.ops.torch.ToTensor {}
+    - !class:raidar.fcos.targets.FcosTargets
+      num_classes: 5
+      input_shape: [256, 256, 3]
+  num_classes: 5
+
+# --- rfdetr: RF-DETR's own PTL loop (Apache-2.0) -----------------------------
+# The framework-native backend: RFDETRModelModule + StreamRFDETRDataModule + build_trainer —
+# COCO-mAP eval, EMA, best-checkpoint saving, LR schedule. Fed IN-MEMORY from the same Streams
+# (no disk materialization). RF-DETR's dataset takes the PIL image straight from the source (it
+# applies its own resize + ImageNet-normalize), so the op chain only shapes the TARGET — no
+# ToTensor.
+rfdetr: !scope:framework=rfdetr
+  runnable: !class:raidar.RFDETRDetector
+    variant: nano            # nano | small | medium | large
+    epochs: 5
+    output_dir: ./runs/rfdetr_cppe5
+    # weights: ./runs/rfdetr_cppe5/checkpoint_best_total.pth   # required for `raidar evaluate`
+    # RF-DETR's TrainConfig.seed defaults to None — i.e. it seeds NOTHING, so two identical runs
+    # differ (measured 2026-08-06: mAP50:95 0.3156 then 0.3819). Its RFDETRModelModule calls
+    # seed_everything(seed + rank) at fit start WHEN the value is set, so pinning it here is the
+    # whole fix — no raidar code involved. Change the number to sample a different run.
+    train_config: { seed: 7 }
+    # Seeding makes this run reproducible ON CPU — two runs land identically on mAP50:95
+    # 0.355725. On mps (the default pick here) it still varies (0.29446 / 0.333115 with the same
+    # seed): that residual is Apple's MPS backend, not the config. mps is the faster option;
+    # uncomment the pin below when you need a run you can compare against itself.
+    # device: cpu
+  detection_ops:
+    - !class:recordstream.ops.target.CocoToTorchVisionDetection
+      bbox_format: xywh
+      label_offset: 0        # RF-DETR is 0-indexed (background at K) — do NOT +1
+  num_classes: 5             # 5 FOREGROUND classes (RF-DETR adds background at index 5)
+  class_names: { 0: Coverall, 1: Face_Shield, 2: Gloves, 3: Goggles, 4: Mask }
+
+# --- ultralytics: the AGPL sibling package -----------------------------------
+# Lives in raidar-ultralytics (`pip install raidar-ultralytics`) — the FRAMEWORKS row and this
+# block are all raidar carries; the dotted path below imports the sibling only when this scope is
+# selected. 0-indexed labels like rfdetr. TRAIN-ONLY for now: the sibling's trainer has no `task`
+# knob yet, so `raidar evaluate --framework ultralytics` raises (see raidar-ultralytics TASKS.md).
+ultralytics: !scope:framework=ultralytics
+  runnable: !class:raidar_ultralytics.ultralytics_trainer.UltralyticsTrainer
+    variant: n               # yolo26 n | s | m | l | x
+    epochs: 5
+    imgsz: 640
+    output_dir: ./runs/ultralytics_cppe5
+  detection_ops:
+    - !class:recordstream.ops.target.CocoToTorchVisionDetection
+      bbox_format: xywh
+      label_offset: 0
+  num_classes: 5
+  class_names: { 0: Coverall, 1: Face_Shield, 2: Gloves, 3: Goggles, 4: Mask }
+
+# ---------------------------------------------------------------------------
+# Metrics — the shared default, and how to add to one split
+# ---------------------------------------------------------------------------
+# Left unset, the lightning backend's `metrics:` defaults to COCO mAP
+# (`MeanAveragePrecision(iou_type="bbox")`). `val_metrics:` adds to VALIDATION only, merged over
+# the shared set by name. Two useful additions:
+#
+# val_metrics:
+#   # Per-class AP/AR — emits `[C]` vectors (map_per_class / mar_100_per_class), which are
+#   # reported through the trackers' TEXT channel as a table (set `plot_metrics: true` on the
+#   # runnable for a bar chart too; `class_names:` labels the rows).
+#   map: !lazy:torchmetrics.detection.MeanAveragePrecision { iou_type: bbox, class_metrics: true }
+#   # TP/FP/FN + precision/recall/F1 at fixed thresholds:
+#   confusion: !lazy:raidar.DetectionConfusionMatrix { iou_threshold: 0.5 }
+#
+# The rfdetr backend's metrics are its own loop's COCO-mAP callback — configure nothing here.
+
+# ---------------------------------------------------------------------------
+# Where the results go
+# ---------------------------------------------------------------------------
+# `trackers:` is the whole of a run's output wiring — there is no `logger:` slot. Each tracker IS
+# a metric sink (adapted to Lightning's logger interface on the lightning backend), and also
+# receives the git provenance, the resolved config and the run manifest. On the rfdetr backend
+# the trackers carry the run RECORD, while per-step curves stay with RF-DETR's own
+# `mlflow`/`tensorboard` knobs.
+#
+# trackers:
+#   - !class:matrainer.MlflowTracker
+#     experiment_name: !ref:experiment_name
+#   - !class:matrainer.TensorBoardTracker
