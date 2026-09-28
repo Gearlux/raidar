@@ -344,7 +344,7 @@ rfdetr: !scope:framework=rfdetr
 # selected. 0-indexed labels like rfdetr. TRAIN-ONLY for now: the sibling's trainer has no `task`
 # knob yet, so `raidar evaluate --framework ultralytics` raises (see raidar-ultralytics TASKS.md).
 ultralytics: !scope:framework=ultralytics
-  runnable: !class:raidar_ultralytics.ultralytics_trainer.UltralyticsTrainer
+  runnable: !class:raidar.ultralytics.ultralytics_trainer.UltralyticsTrainer
     variant: n               # yolo26 n | s | m | l | x
     epochs: 5
     imgsz: 640
