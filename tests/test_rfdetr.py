@@ -1,18 +1,18 @@
 """Tests for :class:`raidar.rfdetr.RFDETRModel` (torchvision-native).
 
 The native model returns a loss dict in train mode and a per-image
-predictions list in eval mode. The marainer-generic wrapper is exercised in
-:mod:`tests.test_rfdetr_marainer`.
+predictions list in eval mode — the only detection path (the matrainer-generic
+adapter wrappers were removed).
 """
 
-from typing import Dict, List
+from typing import Any, Dict, List, cast
 
 import pytest
 import torch
 from pydantic import ValidationError
 from torch import Tensor
 
-from raidar.rfdetr import RFDETRModel, _build_rfdetr_targets, _decode_rfdetr_predictions
+from raidar.rfdetr import RFDETRModel, _build_rfdetr_targets, _checkpoint_num_classes, _decode_rfdetr_predictions
 
 RESOLUTION = 128
 
@@ -90,6 +90,45 @@ def test_decode_rfdetr_predictions_filters_background_and_threshold() -> None:
 # --- RFDETRModel construction ----------------------------------------------
 
 
+class TestNumClassesIsBakedIntoTheCheckpoint:
+    """`checkpoint_path` alone must be enough (user ruling 2026-08-31: "only use checkpoint_path").
+
+    The head size travels in the checkpoint's own `class_embed` shape ([K+1, hidden] — the
+    no-object slot rides at index K), and the pretrained COCO detector's count is a known
+    constant — so `num_classes` stays unset unless the user is building a FRESH random head.
+    """
+
+    def test_an_rfdetr_style_checkpoint_derives_its_foreground_count(self, tmp_path: Any) -> None:
+        path = tmp_path / "checkpoint_best_total.pth"
+        torch.save({"model": {"class_embed.weight": torch.zeros(6, 256)}}, path)
+        assert _checkpoint_num_classes(str(path)) == 5
+
+    def test_a_lightning_prefixed_checkpoint_derives_too(self, tmp_path: Any) -> None:
+        path = tmp_path / "epoch=3.ckpt"
+        torch.save({"state_dict": {"model.detector.class_embed.weight": torch.zeros(6, 256)}}, path)
+        assert _checkpoint_num_classes(str(path)) == 5
+
+    def test_a_headless_or_missing_file_derives_nothing(self, tmp_path: Any) -> None:
+        headless = tmp_path / "other.pt"
+        torch.save({"model": {"backbone.weight": torch.zeros(2, 2)}}, headless)
+        assert _checkpoint_num_classes(str(headless)) is None
+        assert _checkpoint_num_classes(str(tmp_path / "absent.pth")) is None
+
+    def test_resolution_order_explicit_then_checkpoint_then_pretrained(self, tmp_path: Any) -> None:
+        path = tmp_path / "trained.pth"
+        torch.save({"model": {"class_embed.weight": torch.zeros(6, 256)}}, path)
+        explicit = RFDETRModel(num_classes=2, checkpoint_path=str(path))
+        assert explicit._resolve_num_classes() == 2, "an explicit value always wins"
+        derived = RFDETRModel(checkpoint_path=str(path))
+        assert derived._resolve_num_classes() == 5, "unset -> read off the checkpoint"
+        pretrained = RFDETRModel()
+        assert pretrained._resolve_num_classes() == 90, "unset, no checkpoint -> the COCO head's own count"
+
+    def test_no_head_to_read_from_is_a_clear_error(self) -> None:
+        with pytest.raises(ValueError, match="num_classes"):
+            RFDETRModel(pretrained_detector=False)._resolve_num_classes()
+
+
 def test_rfdetr_rejects_unknown_variant() -> None:
     # Confluid's ``@configurable`` now validates kwargs against the
     # auto-generated pydantic schema before the body runs. Since
@@ -153,10 +192,199 @@ def test_rfdetr_rejects_wrong_size_image(small_rfdetr: RFDETRModel) -> None:
 
 
 def test_rfdetr_class_embed_matches_num_classes(small_rfdetr: RFDETRModel) -> None:
-    assert small_rfdetr.detector.class_embed.out_features == small_rfdetr.num_classes + 1
-    assert small_rfdetr.detector.num_queries == 300
+    # `.backbone`, not `.detector`: the model builds lazily, so reading the raw slot would only
+    # work when an earlier test in this module happened to have run a forward pass first.
+    # `cast`: `class_embed` / `num_queries` are rfdetr's own attributes, not `nn.Module`'s.
+    detector = cast(Any, small_rfdetr.backbone)
+    assert small_rfdetr.num_classes is not None, "the fixture pins an explicit count"
+    assert detector.class_embed.out_features == small_rfdetr.num_classes + 1
+    assert detector.num_queries == 300
 
 
 def test_rfdetr_pretrained_detector_default_off() -> None:
     model = RFDETRModel(num_classes=2, variant="nano", pretrained_detector=False, resolution=RESOLUTION)
-    assert model.detector.class_embed.out_features == 3
+    assert cast(Any, model.backbone).class_embed.out_features == 3  # the property triggers the build
+
+
+# ---------------------------------------------------------------------------
+# lazy construction (Partial-Init / Zero-Arg mandate)
+# ---------------------------------------------------------------------------
+
+
+def test_construction_materializes_nothing_and_does_not_import_the_library() -> None:
+    """Building the wrapper must be free — no parameters, and no ``rfdetr`` import.
+
+    Before this was made lazy the constructor allocated 30.1M parameters and read the
+    pretrained checkpoint from ``~/.roboflow`` (measured: 2.1 s), so merely asking this class
+    for its schema paid for a whole network. The IMPORT is part of the cost the constructor
+    must not pay either — it is the only reason the normalization buffers are registered in
+    ``solidify()`` rather than ``__init__``, which is easy to "tidy" back without noticing the
+    half-second it puts on every first construction.
+    """
+    import subprocess
+    import sys
+
+    # A subprocess, because `rfdetr` may already be in sys.modules from an earlier test.
+    source = (
+        "import sys;"
+        "from raidar.rfdetr import RFDETRModel;"
+        "m = RFDETRModel(num_classes=2, variant='nano', pretrained_detector=False);"
+        "print(sum(p.numel() for p in m.parameters()), 'rfdetr.detr' in sys.modules)"
+    )
+    result = subprocess.run([sys.executable, "-c", source], capture_output=True, text=True, check=True)
+
+    assert result.stdout.strip().endswith("0 False"), result.stdout
+
+
+def test_solidify_builds_once_and_keeps_the_normalization_buffers_in_the_state_dict() -> None:
+    """The buffers moved into ``solidify()``; a built model's checkpoint must be unchanged."""
+    model = RFDETRModel(num_classes=2, variant="nano", pretrained_detector=False, resolution=RESOLUTION)
+
+    built = model.solidify()
+
+    assert model.solidify() is built, "the build must be cached, not repeated"
+    assert model.backbone is built, "the property and solidify() share one cache"
+    assert sum(p.numel() for p in model.parameters()) > 0
+    state = model.state_dict()
+    assert "_mean" in state and "_std" in state
+    assert model.resolution == RESOLUTION
+
+
+# ---------------------------------------------------------------------------
+# checkpoint_path: RF-DETR's own files load through RF-DETR's own loader
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(scope="module")
+def saved_checkpoints(tmp_path_factory: Any) -> Dict[str, Any]:
+    """One trained detector saved in every shape ``checkpoint_path`` accepts.
+
+    RF-DETR writes TWO shapes of its own: the older ``{model, optimizer, lr_scheduler, epoch,
+    args}`` and the current one (rfdetr 1.9: ``model`` + ``args`` + a Lightning-style
+    ``state_dict`` whose keys carry RF-DETR's own ``model.`` prefix). The other two are what
+    this project writes: the lightning backend's ``.ckpt`` (the wrapper under ``model.``) and a
+    plain ``state_dict()`` of the wrapper. The weights are perturbed so no fresh build can match
+    them by accident.
+    """
+    import argparse
+
+    source = RFDETRModel(num_classes=2, variant="nano", pretrained_detector=False, resolution=RESOLUTION)
+    detector = cast(Any, source.backbone)
+    torch.manual_seed(7)
+    with torch.no_grad():
+        for parameter in detector.parameters():
+            parameter.add_(torch.randn_like(parameter))
+    weights = {k: v.detach().clone() for k, v in detector.state_dict().items()}
+
+    folder = tmp_path_factory.mktemp("checkpoints")
+    files = {
+        "older_rfdetr": folder / "rf-detr-older.pth",
+        "current_rfdetr": folder / "checkpoint_best_total.pth",
+        "lightning": folder / "epoch=4.ckpt",
+        "plain": folder / "weights.pt",
+    }
+    torch.save(
+        {"model": weights, "optimizer": {}, "lr_scheduler": {}, "epoch": 3, "args": argparse.Namespace(num_classes=2)},
+        files["older_rfdetr"],
+    )
+    torch.save(
+        {"model": weights, "args": {"num_classes": 2}, "state_dict": {f"model.{k}": v for k, v in weights.items()}},
+        files["current_rfdetr"],
+    )
+    torch.save({"state_dict": {f"model.{k}": v for k, v in source.state_dict().items()}}, files["lightning"])
+    torch.save(source.state_dict(), files["plain"])
+    return {"weights": weights, "files": {kind: str(path) for kind, path in files.items()}}
+
+
+def _load(path: str, **overrides: Any) -> RFDETRModel:
+    return RFDETRModel(
+        **{
+            "variant": "nano",
+            "pretrained_detector": False,
+            "resolution": RESOLUTION,
+            "checkpoint_path": path,
+            **overrides,
+        }
+    )
+
+
+@pytest.mark.parametrize("kind", ["older_rfdetr", "current_rfdetr", "lightning", "plain"])
+def test_every_checkpoint_shape_loads_every_weight(saved_checkpoints: Dict[str, Any], kind: str) -> None:
+    """The older RF-DETR shape used to land 1 of 465 tensors with only an INFO line to show for it.
+
+    Measured 2026-09-27 on ``rf-detr-nano.pth``: the generic loader found no ``state_dict`` key,
+    took the five top-level entries AS the state dict, matched none of them, and the run carried
+    on with random weights. The other three shapes already loaded; they are here so the fix
+    cannot trade one shape for another.
+    """
+    live = cast(Any, _load(saved_checkpoints["files"][kind]).backbone).state_dict()
+    expected = saved_checkpoints["weights"]
+
+    differing = [k for k, v in expected.items() if not torch.equal(live[k].cpu(), v)]
+
+    assert not differing, f"{kind}: {len(differing)} of {len(expected)} tensors not loaded, e.g. {differing[:3]}"
+
+
+@pytest.mark.parametrize(
+    "kind, generic", [("older_rfdetr", False), ("current_rfdetr", False), ("lightning", True), ("plain", True)]
+)
+def test_rfdetr_files_go_to_the_library_and_the_rest_to_the_generic_loader(
+    saved_checkpoints: Dict[str, Any], kind: str, generic: bool, monkeypatch: Any
+) -> None:
+    """User ruling 2026-09-27: RF-DETR's format is loaded by RF-DETR's own loader, in THIS wrapper.
+
+    The generic loader in the tracking library is not taught per-library shapes; a file with a
+    top-level ``model`` mapping is RF-DETR's and never reaches it. The lightning backend's
+    ``.ckpt`` and a plain state dict have no such entry and keep the generic path, which is the
+    one that knows the wrapper's ``model.``/``detector.`` prefixes.
+    """
+    import raidar.rfdetr as module
+
+    calls: List[str] = []
+    real = module.load_lightning_checkpoint
+
+    def recording(model: Any, path: str, *args: Any, **kwargs: Any) -> None:
+        calls.append(path)
+        real(model, path, *args, **kwargs)
+
+    monkeypatch.setattr(module, "load_lightning_checkpoint", recording)
+
+    _load(saved_checkpoints["files"][kind]).solidify()
+
+    assert bool(calls) is generic, f"{kind}: generic loader calls = {calls}"
+
+
+@pytest.mark.parametrize("kind", ["older_rfdetr", "current_rfdetr"])
+def test_an_explicit_count_the_file_disagrees_with_fails_loudly(saved_checkpoints: Dict[str, Any], kind: str) -> None:
+    """An explicit ``num_classes`` wins, and a checkpoint that disagrees fails the load (2026-08-31).
+
+    RF-DETR's own loader would instead re-size the head quietly — a behaviour this wrapper never
+    had: before the routing, the current shape failed on the head's size mismatch and the older
+    one loaded nothing. So the disagreement is refused before the library is asked, naming both
+    counts and the fix.
+    """
+    with pytest.raises(RuntimeError, match=r"num_classes=3 .* 2-class head"):
+        _load(saved_checkpoints["files"][kind], num_classes=3).solidify()
+
+
+def test_only_a_top_level_model_mapping_marks_an_rfdetr_file(tmp_path: Any) -> None:
+    """The rule is the file's own shape: a ``model`` MAPPING. Everything else is not RF-DETR's.
+
+    An Ultralytics ``.pt`` also has a top-level ``model`` — but it holds a live ``nn.Module``,
+    which the generic loader already reads, so the check is on the mapping, not on the key.
+    """
+    from raidar.rfdetr import _is_rfdetr_checkpoint
+
+    cases = {
+        "rfdetr.pth": {"model": {"class_embed.weight": torch.zeros(3, 4)}},
+        "ultralytics.pt": {"model": torch.nn.Linear(2, 2)},
+        "lightning.ckpt": {"state_dict": {"model.detector.x": torch.zeros(1)}},
+        "plain.pt": {"detector.x": torch.zeros(1)},
+    }
+    for name, payload in cases.items():
+        torch.save(payload, tmp_path / name)
+
+    verdicts = {name: _is_rfdetr_checkpoint(str(tmp_path / name)) for name in cases}
+
+    assert verdicts == {"rfdetr.pth": True, "ultralytics.pt": False, "lightning.ckpt": False, "plain.pt": False}
+    assert _is_rfdetr_checkpoint(str(tmp_path / "absent.pth")) is False, "a missing file is the loader's error to raise"

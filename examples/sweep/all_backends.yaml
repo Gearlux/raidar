@@ -1,0 +1,78 @@
+# The backend-sweep OVERLAY — `examples/train_cppe5.yaml` plus what a sweep needs, and only
+# that: a `tracker` dimension. Run it through the declarative driver:
+#
+#   matrainer sweep backends examples/sweep/sweep.yaml
+#
+# (`sweep.yaml` beside this file is the MATRIX — which backends, what each needs installed;
+# the machinery is matrainer's, and each cell runs `matrainer train <this file> --framework F
+# --tracker T …`.)
+#
+# WHY AN OVERLAY, NOT A SECOND CONFIG: the sweep's claim is that the example IS the program —
+# every cell is the SAME document with two flags changed. `include:` deep-merges MAPPINGS, so
+# everything below ADDS to the example; a `!scope:` block REPLACES the key it lands on and
+# takes its whole subtree, which is why each tracker block restates its complete `trackers:`
+# list rather than patching one field.
+#
+# The example already declares the ONE pair every tracker block needs — `experiment_name:` /
+# `run_name:` at its top level — and the sweep driver OVERRIDES both per cell
+# (`--experiment_name <date>_<n> --run_name <framework>`), which the `!ref:`s below carry into
+# each tracker. That indirection is load-bearing: a `!class:` in a LIST stays a deferred marker
+# that `_live_trackers()` flows WITHOUT the document, so top-level broadcasting never reaches
+# it — the `!ref:` is what does.
+#
+# No metric vocabulary section, unlike the sibling projects' overlays: the detection fleet
+# already records the canonical `<split>/map_50` / `<split>/map` names on every backend, so
+# there is nothing to align.
+
+include: ../train_cppe5.yaml
+
+# ---------------------------------------------------------------------------
+# The tracker dimension — pick one with `--tracker <name>` (the sweep driver does)
+# ---------------------------------------------------------------------------
+mlflow: !scope:tracker=mlflow
+  trackers:
+    - !class:matrainer.MlflowTracker
+      experiment_name: !ref:experiment_name
+      run_name: !ref:run_name
+      # The workspace's own server (`aisland mlflow start`). Unset it and MLflow falls back to
+      # the ambient MLFLOW_TRACKING_URI, then to a local ./mlruns directory.
+      tracking_uri: http://127.0.0.1:5005
+      # Off for a sweep: each run would start a sampler thread and a subprocess monitor, and
+      # nine of those in a row measure the sweep more than the model.
+      log_system_metrics: false
+
+tensorboard: !scope:tracker=tensorboard
+  trackers:
+    - !class:matrainer.TensorBoardTracker
+      experiment_name: !ref:experiment_name
+      run_name: !ref:run_name
+      save_dir: ./runs/tensorboard
+
+csv: !scope:tracker=csv
+  trackers:
+    - !class:matrainer.CsvTracker
+      experiment_name: !ref:experiment_name
+      run_name: !ref:run_name
+      save_dir: ./runs/csv
+
+aim: !scope:tracker=aim
+  trackers:
+    - !class:matrainer.AimTracker
+      experiment_name: !ref:experiment_name
+      run_name: !ref:run_name
+      save_dir: ./runs/aim
+
+clearml: !scope:tracker=clearml
+  trackers:
+    - !class:matrainer.ClearMLTracker
+      experiment_name: !ref:experiment_name
+      run_name: !ref:run_name
+      # No server and no credentials — the runs land on disk for the UI to import.
+      offline: true
+
+wandb: !scope:tracker=wandb
+  trackers:
+    - !class:matrainer.WandbTracker
+      experiment_name: !ref:experiment_name
+      run_name: !ref:run_name
+      save_dir: ./runs/wandb

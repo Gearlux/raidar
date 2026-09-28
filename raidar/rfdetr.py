@@ -18,24 +18,28 @@ flow through naturally.
 Image preprocessing: assumes all images are already
 ``[3, resolution, resolution]`` in ``[0, 1]`` float range. ImageNet
 normalisation is applied internally.
-
-Marainer-generic flow (``DetectionStepOutput`` + ``compute_val_loss``) lives
-in :mod:`raidar.rfdetr_marainer`.
 """
 
+import os
+from collections.abc import Mapping
 from types import SimpleNamespace
 from typing import Any, Dict, List, Literal, Optional, Union, cast
 
 import torch
 import torch.nn as nn
 from confluid import configurable
-from logflow import get_logger
-from marainer.outputs import DetectionOutput
+from loggair import get_logger
+from matrainer.torch import load_lightning_checkpoint
+from matrainer.uri import ModelRef, file_model_ref
+from recordstream import DetectionOutput
 from torch import Tensor
 
-from raidar.checkpoint import load_lightning_checkpoint
-
 logger = get_logger(__name__)
+
+#: Scheme naming the RF-DETR zoo in a model reference. The library downloads a variant's
+#: COCO-pretrained checkpoint from its own release assets, so the variant IS the identifier and
+#: there is no repository page to link — see :attr:`RFDETRModel.model_refs`.
+RFDETR_URI_PREFIX = "rfdetr://"
 
 _VARIANT_CLASSES: Dict[str, str] = {
     "nano": "RFDETRNano",
@@ -50,14 +54,23 @@ def _build_rfdetr(
     num_classes: int,
     pretrained_detector: bool,
     resolution: Optional[int],
+    weights_file: Optional[str] = None,
 ) -> Any:
-    """Instantiate a high-level ``RFDETR`` variant and return it."""
+    """Instantiate a high-level ``RFDETR`` variant and return it.
+
+    ``weights_file`` names one of RF-DETR's OWN checkpoints to build from instead of the COCO
+    weights — the library's ``pretrain_weights`` route, which reads both of its checkpoint
+    shapes and aligns the head. It wins over ``pretrained_detector``: the file replaces every
+    weight the COCO checkpoint would have supplied.
+    """
     import rfdetr
 
     cls_name = _VARIANT_CLASSES[variant]
     rfdetr_cls = getattr(rfdetr, cls_name)
     kwargs: Dict[str, Any] = {"num_classes": int(num_classes)}
-    if not pretrained_detector:
+    if weights_file is not None:
+        kwargs["pretrain_weights"] = weights_file
+    elif not pretrained_detector:
         kwargs["pretrain_weights"] = None
     if resolution is not None:
         kwargs["resolution"] = int(resolution)
@@ -68,7 +81,12 @@ def _build_criterion_args(model_config: Any, device: Any) -> SimpleNamespace:
     """Build a minimal namespace for :func:`build_criterion_and_postprocessors`."""
     return SimpleNamespace(
         num_classes=model_config.num_classes,
-        cls_loss_coef=model_config.cls_loss_coef,
+        # A LITERAL, like the other loss coefficients below, because rfdetr 1.9.0 moved this off
+        # ModelConfig — `rfdetr/_namespace.py` now calls TrainConfig "its sole owner" (default 1.0).
+        # Reading it from `model_config` raised `AttributeError: 'RFDETRNanoConfig' object has no
+        # attribute 'cls_loss_coef'` at criterion-build time; this function is handed only a model
+        # config, so the default belongs here beside `bbox_loss_coef` / `giou_loss_coef`.
+        cls_loss_coef=1.0,
         dec_layers=model_config.dec_layers,
         two_stage=model_config.two_stage,
         group_detr=model_config.group_detr,
@@ -88,6 +106,9 @@ def _build_criterion_args(model_config: Any, device: Any) -> SimpleNamespace:
         use_position_supervised_loss=False,
         mask_ce_loss_coef=5.0,
         mask_dice_loss_coef=5.0,
+        # `build_criterion_and_postprocessors` reads `args.mask_point_sample_ratio`; the old spelling
+        # here matched nothing and survived only because it is reached solely on a segmentation head,
+        # which this detection path never sets.
         mask_point_sample_ratio=16,
     )
 
@@ -121,7 +142,7 @@ def _decode_rfdetr_predictions(
     score_threshold: float,
 ) -> List[DetectionOutput]:
     """Convert RF-DETR's ``PostProcess`` output into per-image
-    :class:`~marainer.outputs.DetectionOutput` dicts. Drops the no-object
+    :class:`~recordstream.DetectionOutput` dicts. Drops the no-object
     slot at index ``num_classes`` and filters by ``score_threshold``.
     """
     predictions: List[DetectionOutput] = []
@@ -140,10 +161,65 @@ def _decode_rfdetr_predictions(
     return predictions
 
 
-@configurable(category="detection_model")
+#: The pretrained RF-DETR checkpoints are COCO-trained — 90 foreground classes. Resolving an
+#: unset ``num_classes`` to this is what lets the DEFAULT node detect out of the box instead of
+#: silently re-heading the checkpoint to a random 1-class head (measured 2026-08-31: the library
+#: itself warns "Checkpoint has 90 classes but model is configured for 1").
+_PRETRAINED_NUM_CLASSES = 90
+
+
+def _checkpoint_num_classes(path: str) -> Optional[int]:
+    """The FOREGROUND class count baked into a checkpoint — its ``class_embed`` rows minus one.
+
+    RF-DETR's head is ``[K + 1, hidden]`` (the no-object slot rides at index K). The state dict
+    is unwrapped from the containers both training routes write (``state_dict`` for a Lightning
+    ``.ckpt``, ``model`` for RF-DETR's own ``checkpoint_best_total.pth``) and the key is
+    suffix-matched, so ``model.``/``detector.`` prefixes resolve too. ``None`` when the file is
+    absent (the loader owns that error) or carries no such head.
+    """
+    if not os.path.exists(path):
+        return None
+    raw: Any = torch.load(path, map_location="cpu", weights_only=False)
+    state = raw
+    for container in ("state_dict", "model"):
+        if isinstance(state, dict) and isinstance(state.get(container), dict):
+            state = state[container]
+    if isinstance(state, dict):
+        for key, value in state.items():
+            if (
+                isinstance(key, str)
+                and (key == "class_embed.weight" or key.endswith(".class_embed.weight"))
+                and hasattr(value, "shape")
+            ):
+                return int(value.shape[0]) - 1
+    return None
+
+
+def _is_rfdetr_checkpoint(path: str) -> bool:
+    """Whether ``path`` is one of RF-DETR's OWN checkpoints — a top-level ``model`` MAPPING.
+
+    RF-DETR writes two shapes and both carry it: the older ``{model, optimizer, lr_scheduler,
+    epoch, args}`` and rfdetr 1.9's ``{model, args, state_dict, ...}``. What this project
+    writes carries none — the lightning backend's ``.ckpt`` keeps the wrapper under
+    ``state_dict``, and a plain ``state_dict()`` is keyed ``detector.*`` — and an Ultralytics
+    ``.pt``'s ``model`` is a live ``nn.Module``, not a mapping. ``False`` for a missing file:
+    the loader that runs next owns that error.
+
+    Why it matters (measured 2026-09-27): matrainer's generic loader reads the older shape as
+    a five-key state dict and lands 1 of 465 tensors, with only its INFO lines to show for it;
+    ``rfdetr``'s own loader lands all 465. Teaching the generic loader RF-DETR's shapes was
+    ruled out — a library's format is loaded by the wrapper that owns the library.
+    """
+    if not os.path.exists(path):
+        return False
+    raw: Any = torch.load(path, map_location="cpu", weights_only=False)
+    return isinstance(raw, Mapping) and isinstance(raw.get("model"), Mapping)
+
+
+@configurable(task="detection", role="model")
 class RFDETRModel(nn.Module):
     """Torchvision-native RF-DETR wrapper for
-    :class:`~raidar.lightning_trainer.LightningDetectionTrainer`.
+    :class:`~raidar.lightning_detector.LightningDetector`.
 
     Forward contract:
 
@@ -151,55 +227,160 @@ class RFDETRModel(nn.Module):
     * **Eval**: ``forward(images) → List[Dict]`` of per-image predictions.
 
     Args:
-        num_classes: Foreground class count. Internally an extra
-            ``num_classes`` slot is reserved for the no-object class and any
-            prediction with that label is dropped during decode.
+        num_classes: Foreground class count. ``None`` (the default) reads it
+            off ``checkpoint_path``'s own head when one is set, else uses the
+            pretrained COCO detector's 90 — set it only to build a fresh random
+            head. Internally an extra slot is reserved for the no-object class
+            and any prediction with that label is dropped during decode.
         variant: ``"nano"`` (default), ``"small"``, ``"medium"``, ``"large"``.
         pretrained_detector: Load full COCO-pretrained RF-DETR weights.
         resolution: Square input size in pixels. Must be a positive integer
             divisible by 32. ``None`` uses the variant's default resolution.
         score_threshold: Eval-time confidence cutoff applied after
             background-class filtering.
-        checkpoint_path / checkpoint_strict: Optional Lightning ``.ckpt`` load.
+        checkpoint_path: Optional trained-checkpoint load (a Lightning ``.ckpt``, RF-DETR's
+            own ``.pth`` in either of its shapes, or a plain state dict); its values win over
+            the pretrained ones. RF-DETR's own files load through ``rfdetr``'s loader, the
+            rest through matrainer's generic one.
     """
 
     def __init__(
         self,
-        num_classes: int = 1,
+        num_classes: Optional[int] = None,
         variant: Literal["nano", "small", "medium", "large"] = "nano",
         pretrained_detector: bool = True,
         resolution: Optional[int] = None,
         score_threshold: float = 0.5,
         checkpoint_path: Optional[str] = None,
-        checkpoint_strict: bool = False,
     ) -> None:
-        from rfdetr.detr import RFDETR
-        from rfdetr.models.lwdetr import build_criterion_and_postprocessors
-
         super().__init__()
         if variant not in _VARIANT_CLASSES:
             raise ValueError(f"variant must be one of {sorted(_VARIANT_CLASSES)}, got {variant!r}.")
-        self.num_classes = int(num_classes)
+        self.num_classes = None if num_classes is None else int(num_classes)
         self.variant = variant
         self.score_threshold = float(score_threshold)
+        # Kept so the model can name its own weight artifacts (`model_refs`) — a value the
+        # run record needs cannot be one the constructor consumes and forgets.
+        self.pretrained_detector = bool(pretrained_detector)
+        self.checkpoint_path = checkpoint_path
+        # Partial: store config only. Building here allocated 30.1M parameters AND read the
+        # pretrained checkpoint off disk (~/.roboflow) at CONSTRUCTION — 2.1 s before this
+        # object could even be asked what its parameters are named, which the Partial-Init /
+        # Zero-Arg mandate forbids. Everything the build derives is resolved in solidify().
+        self._requested_resolution = resolution
+        self._resolution: Optional[int] = None
+        self._resolved_num_classes: Optional[int] = None
+        self.detector: Optional[nn.Module] = None
+        self.postprocess: Optional[Any] = None
+        self.criterion: Optional[nn.Module] = None
 
-        rfdetr = _build_rfdetr(
-            variant=variant,
-            num_classes=self.num_classes,
-            pretrained_detector=pretrained_detector,
-            resolution=resolution,
+    def solidify(self) -> nn.Module:
+        """Build (once) and return the live detector — confluid's ``flow()``-time hook.
+
+        Resolves everything the eager constructor used to derive from the built model: the
+        detector itself, its postprocessor, the EFFECTIVE resolution (which the library picks
+        from the variant when none was requested) and the criterion. Idempotent; ``flow()``
+        calls it, so ``self.parameters()`` is populated before an optimizer reads it, and
+        :meth:`forward` calls it for a directly constructed instance. The checkpoint's values win
+        over the pretrained ones: RF-DETR's own file is handed to the library AS the weights to
+        build from, any other file is loaded after the build — the same order the eager
+        constructor had.
+        """
+        if self._resolved_num_classes is None:
+            self._resolved_num_classes = self._resolve_num_classes()
+        if self.detector is None:
+            from rfdetr.detr import RFDETR
+            from rfdetr.models.lwdetr import build_criterion_and_postprocessors
+
+            # The ImageNet normalization constants are the LIBRARY's. Registering the buffers
+            # HERE rather than in __init__ is what keeps construction free of the `rfdetr`
+            # import itself — measured at 0.3-0.5 s for the first instance in a process, which
+            # a schema read of this class should not pay. They land before the checkpoint load
+            # below, so a `.ckpt` carrying them still wins.
+            self.register_buffer("_mean", torch.tensor(RFDETR.means).view(1, 3, 1, 1))
+            self.register_buffer("_std", torch.tensor(RFDETR.stds).view(1, 3, 1, 1))
+            rfdetr_file = self._rfdetr_checkpoint()
+            rfdetr = _build_rfdetr(
+                variant=self.variant,
+                num_classes=self._resolved_num_classes,
+                pretrained_detector=self.pretrained_detector,
+                resolution=self._requested_resolution,
+                weights_file=rfdetr_file,
+            )
+            self.detector = rfdetr.model.model
+            self.postprocess = rfdetr.model.postprocess
+            self._resolution = int(rfdetr.model_config.resolution)
+            criterion_args = _build_criterion_args(rfdetr.model_config, rfdetr.model.device)
+            criterion, _ = build_criterion_and_postprocessors(criterion_args)
+            self.criterion = criterion
+            if self.checkpoint_path and rfdetr_file is None:
+                load_lightning_checkpoint(self, self.checkpoint_path)
+        return cast(nn.Module, self.detector)
+
+    def _rfdetr_checkpoint(self) -> Optional[str]:
+        """``checkpoint_path`` when it is RF-DETR's own file, checked against an explicit head size.
+
+        An explicit ``num_classes`` wins and a checkpoint that disagrees fails the load (the
+        2026-08-31 ruling). ``rfdetr``'s loader would instead re-size the head quietly, so the
+        disagreement is refused HERE, before the library is asked.
+        """
+        if not self.checkpoint_path or not _is_rfdetr_checkpoint(self.checkpoint_path):
+            return None
+        if self.num_classes is not None:
+            baked = _checkpoint_num_classes(self.checkpoint_path)
+            if baked is not None and baked != self.num_classes:
+                raise RuntimeError(
+                    f"RFDETRModel: num_classes={self.num_classes} but {self.checkpoint_path!r} carries a "
+                    f"{baked}-class head — leave num_classes unset to use the checkpoint's own count."
+                )
+        logger.info(f"RFDETRModel: loading RF-DETR checkpoint {self.checkpoint_path} through rfdetr's own loader")
+        return self.checkpoint_path
+
+    def _resolve_num_classes(self) -> int:
+        """The head size this build uses — explicit, else BAKED INTO the weights being loaded.
+
+        Order (user ruling 2026-08-31, "only use checkpoint_path"): an explicit ``num_classes``
+        wins; unset, a ``checkpoint_path``'s own ``class_embed`` shape answers; unset with only
+        the pretrained COCO detector, its known 90 — so the checkpoint loads WITHOUT the silent
+        random re-head. Reads config + at most one file; never builds.
+        """
+        if self.num_classes is not None:
+            return self.num_classes
+        if self.checkpoint_path:
+            derived = _checkpoint_num_classes(self.checkpoint_path)
+            if derived is not None:
+                return derived
+            logger.warning(
+                f"RFDETRModel: could not read the class count from {self.checkpoint_path!r} "
+                f"(no class_embed head found) — falling back to the pretrained default."
+            )
+        if self.pretrained_detector:
+            return _PRETRAINED_NUM_CLASSES
+        raise ValueError(
+            "RFDETRModel: num_classes is not set and there is no checkpoint_path or pretrained "
+            "detector to read it from — set num_classes to build a fresh head."
         )
-        self.detector = rfdetr.model.model
-        self.postprocess = rfdetr.model.postprocess
-        self.resolution = int(rfdetr.model_config.resolution)
-        criterion_args = _build_criterion_args(rfdetr.model_config, rfdetr.model.device)
-        criterion, _ = build_criterion_and_postprocessors(criterion_args)
-        self.criterion = criterion
-        self.register_buffer("_mean", torch.tensor(RFDETR.means).view(1, 3, 1, 1))
-        self.register_buffer("_std", torch.tensor(RFDETR.stds).view(1, 3, 1, 1))
 
-        if checkpoint_path:
-            load_lightning_checkpoint(self, checkpoint_path, strict=checkpoint_strict)
+    @property
+    def backbone(self) -> nn.Module:
+        """The live detector, built on first access.
+
+        ``flow()`` never touches property getters (confluid's lazy-init rule 3), which is why
+        :meth:`solidify` exists as a method as well; this is what makes a directly constructed,
+        never-flowed instance usable.
+        """
+        return self.solidify()
+
+    @property
+    def resolution(self) -> int:
+        """The EFFECTIVE square input size, which only the built model knows.
+
+        ``resolution=None`` (the default) lets the library choose per variant, so this cannot be
+        answered from stored config alone — reading it builds. Callers that only want to know
+        what was REQUESTED read ``_requested_resolution`` instead and get no build.
+        """
+        self.solidify()
+        return cast(int, self._resolution)
 
     def _preprocess(self, images: List[Tensor]) -> Tensor:
         """Stack images and apply ImageNet normalization on-device."""
@@ -215,8 +396,11 @@ class RFDETRModel(nn.Module):
         return (stacked - mean) / std
 
     def _criterion_loss(self, outputs: Dict[str, Any], targets_detr: List[Dict[str, Tensor]]) -> Tensor:
-        loss_dict = self.criterion(outputs, targets_detr)
-        weight_dict = self.criterion.weight_dict
+        # Built alongside the detector in solidify(); only ever reached from forward(), which
+        # solidifies first — the cast documents that rather than re-checking it here.
+        criterion = cast(Any, self.criterion)
+        loss_dict = criterion(outputs, targets_detr)
+        weight_dict = criterion.weight_dict
         device = outputs["pred_logits"].device
         zero = torch.zeros((), device=device)
         total: Tensor = sum(
@@ -225,28 +409,46 @@ class RFDETRModel(nn.Module):
         )
         return total
 
+    @property
+    def model_refs(self) -> List[ModelRef]:
+        """The weight artifacts this detector loads — see :mod:`matrainer.uri`.
+
+        A variant names one COCO-pretrained checkpoint the library fetches from its own release
+        assets; there is no repository URL to open, so none is invented.
+        """
+        refs: List[ModelRef] = []
+        if self.pretrained_detector and self.variant:
+            refs.append(ModelRef(uri=f"{RFDETR_URI_PREFIX}{self.variant}"))
+        if self.checkpoint_path:
+            refs.append(file_model_ref(self.checkpoint_path))
+        return refs
+
     def forward(
         self,
         images: List[Tensor],
         targets: Optional[List[Dict[str, Tensor]]] = None,
     ) -> Union[Dict[str, Tensor], List[DetectionOutput]]:
+        # Build up front rather than relying on `_preprocess` happening to read the
+        # resolution property first — this is the one call that must not be order-sensitive.
+        detector = self.solidify()
+
         if self.training:
             if targets is None:
                 raise ValueError("RFDETRModel in train mode requires targets.")
             normalised = self._preprocess(images)
             targets_detr = _build_rfdetr_targets(targets, self.resolution, normalised.device)
-            outputs = self.detector(normalised, targets_detr)
+            outputs = detector(normalised, targets_detr)
             loss_total = self._criterion_loss(outputs, targets_detr)
             return {"loss": loss_total}
 
         normalised = self._preprocess(images)
-        outputs = self.detector(normalised)
+        outputs = detector(normalised)
         target_sizes = torch.tensor(
             [[self.resolution, self.resolution]] * normalised.shape[0],
             device=normalised.device,
         )
-        results = self.postprocess(outputs, target_sizes)
-        predictions = _decode_rfdetr_predictions(results, self.num_classes, self.score_threshold)
+        results = cast(Any, self.postprocess)(outputs, target_sizes)
+        predictions = _decode_rfdetr_predictions(results, cast(int, self._resolved_num_classes), self.score_threshold)
         return predictions
 
 

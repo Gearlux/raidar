@@ -1,0 +1,46 @@
+# The raidar backend sweep — the MATRIX, declaratively. The project's FIRST sweep: the fleet's
+# own tracking-parity history shows why one matters — a backend read ALONE looks perfect (it
+# prints its mAP and writes its sidecar), and the one real blank-row bug here was found only by
+# porting a check from a sibling project's sweep table.
+#
+#   matrainer sweep backends examples/sweep/sweep.yaml                 # every installed backend
+#   matrainer sweep backends examples/sweep/sweep.yaml --tracker csv   # …into the CSV backend
+#   matrainer sweep trackers examples/sweep/sweep.yaml                 # every tracker, one framework
+#   matrainer sweep all      examples/sweep/sweep.yaml                 # frameworks × trackers
+#   matrainer sweep backends examples/sweep/sweep.yaml --dry-run       # print the commands only
+#
+# NINE cells, one per framework, and NO model dimension — deliberately, matching the example:
+# the shared FCOS spec is wired UNCONDITIONALLY inside the four non-torch framework blocks
+# (each pairs its implementation with the `FcosTargets` dense-target op), and the torch-family
+# blocks run the torchvision zoo. There is no `!scope:model=` dimension in the example to flag.
+# `ultralytics` stays out: the AGPL sibling install is absent on a default checkout, and its
+# trainer is train-only besides.
+#
+# Two per-row facts a reader should know before comparing:
+# * `rfdetr` paces itself from its own `train_config` (its `TrainConfig.seed`/epochs knobs ride
+#   that pass-through), so `--epochs` does not shorten it — the broadcast `max_epochs` key is
+#   not one of its constructor knobs. Budget accordingly, or `--only` it away for smoke runs.
+# * `huggingface` (D-FINE) runs on CPU by the example's own pin (`use_cpu: true` — its backward
+#   does not run on MPS, measured), so its seconds column is not comparing the same silicon.
+
+config: all_backends.yaml
+epochs: 5
+
+frameworks:
+  - name: lightning
+    requires: [pytorch_lightning]
+  - name: torch
+  - name: fastai
+  - name: huggingface
+    requires: [transformers]
+  - name: rfdetr
+  - name: keras
+  - name: tensorflow
+  - name: jax
+    requires: [flax]
+  - name: mlx
+
+trackers: [mlflow, csv]
+
+tracker_setup:
+  mlflow: [aisland, mlflow, start]
