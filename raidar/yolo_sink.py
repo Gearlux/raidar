@@ -23,7 +23,7 @@ and the source); each run rewrites only its own ``images/<split>`` /
 (and appends to ``metadata.jsonl``), so the splits accumulate without clobbering
 each other.
 
-Compared to the in-memory ``raidar_ultralytics.stream_yolo_dataset.StreamYOLODataset``
+Compared to the in-memory ``raidar.ultralytics.stream_yolo_dataset.StreamYOLODataset``
 (which recomputes spectrograms every epoch from the IQ source), the on-disk
 dataset trades startup cost for faster epochs and lets third-party tools
 (FiftyOne, pycocotools, ultralytics' own CLI) consume the same data.

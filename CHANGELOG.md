@@ -4,6 +4,13 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the versioning is
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+- `--framework ultralytics` loads the separate Ultralytics package as the `raidar.ultralytics`
+  subpackage, and `examples/train_cppe5.yaml` names its trainer
+  `raidar.ultralytics.ultralytics_trainer.UltralyticsTrainer`.
+
 ## [0.1.0a1] — 2026-09-28
 
 First public pre-release. The surface it ships:

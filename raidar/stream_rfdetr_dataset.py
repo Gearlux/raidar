@@ -5,7 +5,7 @@ datasets via ``build_dataset(split, ns, resolution)`` — which reads a COCO/YOL
 directory off disk. This module supplies the *in-memory* counterpart so the
 native ``RFDETRModelModule`` / ``build_trainer`` stack can train/eval straight
 from a :class:`recordstream.Stream` with **no disk materialization** — the analogue of
-``raidar_ultralytics.stream_yolo_dataset.StreamYOLODataset`` for RF-DETR.
+``raidar.ultralytics.stream_yolo_dataset.StreamYOLODataset`` for RF-DETR.
 
 How it stays byte-faithful to the disk path: rfdetr's ``CocoDetection.__getitem__``
 does ``img(PIL), target = ConvertCoco(img, coco_target)`` then
