@@ -207,8 +207,9 @@ huggingface: !scope:framework=huggingface
 #     lets `collate_records` stack detection batches with no ragged tensors (the torch backends
 #     carry the variable-N Boxes columns collate_records leaves, read back by batch_boxes);
 #   * labels are 0-indexed (the class map has no background slot), like rfdetr/huggingface.
-# The image keeps the shared ToTensor (the RGB coercion for cppe-5's mixed-mode rows lives
-# there); the engine's channels-last layout is one transpose in the backend's batch adapter.
+# The image keeps the shared chain (`ConvertMode` coerces cppe-5's mixed-mode rows to RGB,
+# `ToTensor` makes it CHW); the engine's channels-last layout is one transpose in the backend's
+# batch adapter.
 # Scoring is the spec's numpy AP50 (torchmetrics is torch-only): val/map_50, val/precision,
 # val/recall. KERAS_BACKEND picks the engine; unset, recordstream selects the first installed.
 keras: !scope:framework=keras

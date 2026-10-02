@@ -11,8 +11,8 @@ Detection is the family's odd member, and every oddity is a task fact:
 * **The batch stacks DENSE MAPS, not ragged boxes** — a detection config's ops chain ends in
   :class:`raidar.fcos.targets.FcosTargets`, which encodes each record's boxes through the
   spec's numpy assignment into fixed-shape per-cell maps. :meth:`_to_arrays` only READS them
-  (and transposes the image: the chain keeps the shared CHW ``ToTensor`` — the RGB coercion
-  lives there — so the engine's channels-last layout is ONE transpose here).
+  (and transposes the image: the chain keeps the shared CHW ``ToTensor``, so the engine's
+  channels-last layout is ONE transpose here).
 * **There is no ``loss:`` slot** — the spec model and its loss are one design, exactly as an
   HF detector's loss lives inside its forward. :meth:`_compiled_loss` hands ``compile()`` the
   spec's three per-output functions positionally, and the TensorFlow concrete's traced step

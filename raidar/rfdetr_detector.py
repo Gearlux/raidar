@@ -363,7 +363,9 @@ class RFDETRDetector(TorchRunner, ProgressReporting):
 
         Measured 2026-08-06: with ``train_config: {seed: 7}`` pinned and nothing else changed, two
         runs still gave mAP50:95 0.3595 / 0.3406 on mps AND 0.3777 / 0.3453 on cpu — so the device
-        was not the cause (that hypothesis was tested and rejected); the model init was.
+        alone was not the cause; the model init was. With the seed applied here, cpu reproduces
+        (two runs, 0.355725) while mps still varies (0.29446 / 0.333115 with the same seed) —
+        Apple's MPS backend, a residual no seed reaches.
 
         ``seed_everything(..., workers=True)`` matches upstream's own call exactly, including the
         worker seeding. No configured seed = no call, so an unpinned run behaves as it always did.

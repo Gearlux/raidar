@@ -31,7 +31,7 @@ def test_categories_enumerable_via_registry() -> None:
 
 def test_yolo_sink_tagged() -> None:
     """``YoloSink`` carries ``category="sink"`` so StreamStudio surfaces it as a ``DatasetProcessor``
-    sink node (``RECORDSTREAM_OBJECT:sink``) — ``matrainer convert`` streams a detection Stream into it on a
+    sink node (``RECORDSTREAM_OBJECT:sink``) — ``recordstream run`` streams a detection Stream into it on a
     canvas just as the YAML config does."""
     from raidar.yolo_sink import YoloSink
 

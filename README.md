@@ -84,11 +84,12 @@ A typo'd backend is an error, not a silent fall-through: `--framework lightnin` 
 
 ## The torch-family backends — lightning, torch, fastai
 
-`raidar.LightningDetector` is one self-contained standard `pytorch_lightning.LightningModule` —
-its own detection step functions, `configure_optimizers`, and a `run()` that builds the loaders +
-`pl.Trainer` and dispatches on the `task` knob (`fit`/`evaluate`/`test`/`predict`; the CLI verb
-wins over the YAML's `task:`). There is **no adapter layer**: it talks to native detection models
-and raw `torchmetrics` metrics directly.
+`raidar.LightningDetector` is a standard `pytorch_lightning.LightningModule` built on matrainer's
+`LightningRunnable` — the loaders, the deferred `pl.Trainer`, the tracking, and a `run()` that
+dispatches on the `task` knob (`fit`/`evaluate`/`test`/`predict`; the CLI verb wins over the YAML's
+`task:`) — plus the detection task hooks shared by the torch-family backends. What the class adds
+is its own native detection step functions. There is **no adapter layer**: it talks to native
+detection models and raw `torchmetrics` metrics directly.
 
 The native model contract is the shape torchvision detectors already speak:
 

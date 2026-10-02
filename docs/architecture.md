@@ -51,9 +51,11 @@ rfdetr: !scope:framework=rfdetr                  # `raidar train cfg.yaml --fram
 ```
 
 **What you may change.** Add a backend by writing `raidar/<name>_detector.py` (a merged runnable
-with a `task` knob) and a `FRAMEWORKS` row, then declaring its scope block in the example config
-— nothing else. What you may NOT do: reintroduce a per-backend binary or subcommand, or nest a
-framework-specific key inside `runnable:`.
+with a `task` knob) and a `FRAMEWORKS` row, then declaring its scope block in the example config.
+The fleet tests name the rest: an entry point in `pyproject.toml`, rows in `BACKENDS` and
+`METRIC_BRIDGES` in `tests/test_tracking_parity.py`, and a row in `examples/sweep/sweep.yaml`. What
+you may NOT do: reintroduce a per-backend binary or subcommand, or nest a framework-specific key
+inside `runnable:`.
 
 ---
 
@@ -189,7 +191,9 @@ beside the target instead of replacing it.
 detection_ops:
   - !class:recordstream.ops.target.CocoToTorchVisionDetection { bbox_format: xywh, label_offset: 0 }
   - !class:recordstream.ops.target.ResizeDetection { width: 256, height: 256 }
-  - !class:recordstream.ops.torch.ToTensor { mode: RGB, normalize: true }
+  - !class:recordstream.ops.image.ConvertMode { mode: RGB }
+  - !class:recordstream.ops.numpy.Scale {}
+  - !class:recordstream.ops.torch.ToTensor {}
   - !class:raidar.fcos.targets.FcosTargets { num_classes: 5, input_shape: [256, 256, 3] }
 ```
 

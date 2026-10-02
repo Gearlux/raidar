@@ -100,7 +100,7 @@ huggingface = [
 # jax), and `recordstream.keras` (which `raidar/_keras.py` imports through) selects whichever is
 # installed. This extra names bare `torch` TWICE over: as the engine Keras runs on here, and
 # because the detection target chain is torch-shaped (`CocoToTorchVisionDetection` emits torch
-# boxes; the shared `ToTensor` carries the RGB coercion). NOT raidar[torch]: the torchvision zoo,
+# boxes; the shared `ToTensor` emits a CHW torch tensor). NOT raidar[torch]: the torchvision zoo,
 # torchmetrics and pycocotools belong to the torch backends — a Keras config wires the shared
 # FCOS spec and scores with the spec's own numpy AP.
 keras = [
