@@ -252,8 +252,8 @@ riding `_fit_scores`/`_evaluate_split`. The seeded spec cells reproduced their c
 BIT-EXACTLY through every new base (keras 2.30023455619812, tensorflow 2.3113211567203202,
 jax 2.1331496040026345, mlx 1.953120619058609) — the strongest refactor evidence the fleet
 records. (The keras canonical later moved to 2.285114049911499 — matrainer's `shuffle=False`
-fix of 2026-08-08, which made the cell tracker-neutral; see the AGENTS canonical-numbers
-mandate and matrainer `docs/architecture.md` record 9 amendment 6.)
+fix of 2026-08-08, which made the cell tracker-neutral; see record 8 and matrainer
+`docs/architecture.md` record 9 amendment 6.)
 
 **What you may change.** Hook implementations and task state freely; the concrete signature
 (it is the config surface). What you may not do: shadow the inherited machinery
@@ -375,3 +375,96 @@ Pins: `tests/test_rfdetr.py` (`test_every_checkpoint_shape_loads_every_weight`,
 `test_rfdetr_files_go_to_the_library_and_the_rest_to_the_generic_loader`,
 `test_an_explicit_count_the_file_disagrees_with_fails_loudly`,
 `test_only_a_top_level_model_mapping_marks_an_rfdetr_file`).
+
+---
+
+## 8. Every random draw that shapes the network is seeded before the build (2026-08-06, extended 2026-08-09)
+
+**Context.** A backend that cannot reproduce itself cannot confirm a refactor, and six of
+them could not:
+
+- The keras FCOS cell had no seed. Three runs of the identical config gave final train/loss
+  2.27, 2.18 and 2.12.
+- `huggingface` and `rfdetr` did seed, but too late. `transformers.Trainer` applies
+  `TrainingArguments.seed` when training starts, and RF-DETR's module seeds in `on_fit_start`.
+  Both happen after the wrapper has built the network and randomly initialized its
+  `num_classes` head. The data order was seeded and the weights were not. Two runs of one
+  config gave:
+
+  | backend | run 1 | run 2 |
+  |---|---|---|
+  | rfdetr, mAP50:95 | 0.3156 | 0.3819 |
+  | huggingface, val/map_50 | 0.0685 | 0.1302 |
+
+- The torchvision builders re-initialize their head on every build, and no framework covered
+  that draw. Identical sweeps moved train/loss: torch 0.5115 → 0.5143, lightning
+  0.5366 → 0.5246, fastai 0.5181 → 0.5430.
+
+**Decision.** Seed at BUILD time, in each framework's own idiom, and do not restore the RNG
+afterwards. This is a run-level seed applied at the earliest useful moment, so it also covers
+the loader shuffle.
+
+| what | knob | applied |
+|---|---|---|
+| each FCOS implementation | `seed: int = 0` | before its build: `torch.manual_seed`, `keras.utils.set_random_seed` (Keras has no per-layer seed), per-initializer `stateless_uniform` (raw TF), `nnx.Rngs`, `mx.random.seed` |
+| lightning · torch · fastai | `seed: int = 0` on each flat constructor | once, in `DetectionTorchHooks.initialize()`, before the task base builds the model |
+| huggingface | `seed: int = 42` (the transformers default) | `transformers.set_seed` before the build; the same value joins the `TrainingArguments` floor |
+| rfdetr | `train_config: {seed: …}` (RF-DETR defaults it to `None`) | `seed_everything(seed, workers=True)` at the top of both fit paths; no seed, no call |
+
+The FCOS seed and the torchvision-family seed are separate on purpose: the first binds the
+architecture comparison, the second binds the run.
+
+**Consequences.**
+
+- **Runs reproduce.** Paired 1-epoch runs of torch, lightning and fastai matched on every
+  metric. torch at 5 epochs landed on train/loss 0.5018 / val/map_50 0.3485 twice, with
+  `metrics.csv` identical. huggingface landed on train/loss 40.41484375 twice.
+- **rfdetr reproduces on cpu only.** Seeded, two cpu runs gave mAP50:95 0.355725 both times;
+  two mps runs gave 0.29446 and 0.333115. That residual is Apple's MPS backend, not the seed.
+  Pin `device: cpu` on the rfdetr block for a run you will compare against itself.
+- **Seed first, then vary the device.** A cpu-vs-mps comparison made before the seeding fix
+  cannot isolate the device, because the unseeded head dominates both arms. One such
+  comparison (0.3777 / 0.3453 on cpu) was briefly read as clearing the device. The seeded runs
+  above show mps does add variance.
+- **The FCOS cells are bit-comparable across a refactor.** The seeded sweep of the example
+  config (5 epochs, the 96-row cppe-5 slice), 2026-08-06; the keras row as re-measured
+  2026-08-08, identical under the csv and mlflow trackers and across reruns:
+
+  | engine | final train/loss | final val/map_50 |
+  |---|---|---|
+  | keras | 2.285114049911499 | 0.00020625352105024217 |
+  | tensorflow | 2.3113211567203202 | 0.001234 |
+  | jax | 2.1331496040026345 | 0.001068 |
+  | mlx | 1.953120619058609 | 0.002274 |
+
+  tensorflow, jax and mlx reproduced these through the whole base migration (record 5). The
+  keras number was 2.30023455619812 until matrainer's Keras base stopped letting Keras
+  shuffle batch order through Python's global `random` (`shuffle=False`; matrainer
+  `docs/architecture.md` record 9, amendment 6). A tracker that drew from that global RNG had
+  shifted the order. Keras numbers from before that change are not comparable with later ones.
+
+**Example.**
+
+```yaml
+lightning: !scope:framework=lightning
+  runnable: !class:raidar.LightningDetector
+    seed: 0                          # the default; torch.manual_seed before the model is built
+keras: !scope:framework=keras
+  model: !lazy:raidar.fcos.keras_fcos.KerasFcos
+    input_shape: [256, 256, 3]
+    seed: 7                          # a different initialization of the same network
+rfdetr: !scope:framework=rfdetr
+  runnable: !class:raidar.RFDETRDetector
+    train_config: { seed: 7 }        # without it RF-DETR seeds nothing
+    device: cpu                      # reproducible; mps is faster but not reproducible
+```
+
+**What you may change.** You may add `seed` to a new backend or model whose build draws random
+numbers, applied before the build in that framework's own idiom. Do not restore the RNG after
+the build, do not move the torchvision-family seed out of the shared hook, and do not add a
+seed to a wrapper that only loads weights. Pins:
+- `tests/test_fcos_spec.py::test_every_implementation_is_SEEDED`
+- `tests/test_fcos_spec.py::test_the_keras_seed_actually_reproduces_the_weights`
+- `tests/test_torch_detector.py::TestTheSeedCoversTheModelBuild`
+- `tests/test_huggingface_detector.py::TestTheRunIsSeeded`
+- `tests/test_rfdetr_detector.py::TestTheSeedCoversTheMODEL`
