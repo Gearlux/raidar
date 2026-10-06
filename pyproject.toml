@@ -255,9 +255,11 @@ testpaths = ["tests"]
 # statement data beside the parent's branch data, and the final combine refuses to merge
 # them — measured on matrainer's Linux CI 2026-09-27 (INTERNALERROR "Can't combine statement
 # coverage data with branch data"); it does not reproduce on macOS. See AGENTS.md.
-addopts = "--cov-branch"
+# `-m 'not slow'`: plain `pytest` is the fast run, `pytest -m slow` the slow run, `pytest -m ''`
+# both (root AGENTS.md "Two Test Runs").
+addopts = "--cov-branch -m 'not slow'"
 markers = [
-    "slow: heavy end-to-end tests (e.g. a real RF-DETR train epoch); deselect with -m 'not slow'.",
+    "slow: heavy end-to-end tests (e.g. a real RF-DETR train epoch) — the slow run (`pytest -m slow`); CI runs it.",
 ]
 
 [tool.coverage.run]
