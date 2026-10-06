@@ -49,7 +49,9 @@ def test_example_config_loads_and_flows_to_a_runnable(config_path: Path) -> None
         runnable = flow(runnable)  # imports the !class:/!lazy: target — dangling paths raise here
 
     assert callable(getattr(runnable, "run", None)), f"{config_path.name}: runnable has no run() method"
-    # The merged LightningDetector (runnable: root) dispatches on a `task`; assert it is valid.
-    if root_key == "runnable":
+    # The merged LightningDetector (runnable: root) dispatches on a `task`; assert it is valid. A
+    # dataset-processing example (`DatasetProcessor`, merge_yolo.yaml) is a `runnable:` too — the one
+    # config shape — but carries no `task`: only a runnable that has one is held to the vocabulary.
+    if root_key == "runnable" and hasattr(runnable, "task"):
         task = getattr(runnable, "task", None)
         assert task in VALID_TASKS, f"{config_path.name}: invalid task {task!r} (expected one of {VALID_TASKS})"

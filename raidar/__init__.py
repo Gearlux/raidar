@@ -66,6 +66,7 @@ _BACKEND_NAMES = {
     # The on-disk YOLO-layout sink is numpy/PIL/yaml only — no framework — but it stays lazy so
     # `import raidar` imports NOTHING. Its "extra" is the core install itself.
     "YoloSink": ("raidar.yolo_sink", ""),
+    "YoloSource": ("raidar.yolo_source", ""),
 }
 
 __all__ = [*_BACKEND_NAMES]

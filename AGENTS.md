@@ -63,6 +63,24 @@ hooks, model wrappers, the FCOS spec, registrations and configs.
   `train_config:` merges verbatim over the floor; `fit` finishes its manifest with
   `capture_log_file(..., status="success")`; Stream mode is drift-guarded by the gated
   `::test_stream_train_smoke`.
+- The RF-DETR variants are ONE table, `raidar.rfdetr._VARIANT_CLASSES`, and the two Literals are
+  read off it: `VariantName` (the backend, every entry — the `seg-*` models train from the box
+  dataset on disk, a box label read as its four-corner polygon) and the four detection names on
+  `RFDETRModel`, which builds box targets and no masks. A new variant is a table row
+  (`tests/test_rfdetr.py::TestTheVariantTable`).
+- `YoloSink.layout` is the only difference between the Ultralytics folder (`images/<split>`) and
+  RF-DETR's (`<split>/images`, the COCO sidecar at `<split>/_annotations.coco.json`); the default
+  stays `ultralytics`. (`tests/test_yolo_sink.py::test_the_rfdetr_layout_is_what_rfdetr_reads_and_the_default_is_not`)
+- `YoloSink.mode`: `replace` (default) wipes the split, `append` continues it after the last stem and
+  refuses a vocabulary that disagrees id for id BEFORE writing; `facts` lists distinct record entries
+  in `data.yaml` (mixed picture scales are recorded, never refused — user ruling 2026-10-06).
+  (`tests/test_yolo_sink.py`, the "append mode and facts" block)
+- `YoloSource` is the sink's mirror and reads both layouts; class ids are remapped by NAME to the
+  vocabulary given and an unknown name is refused, never renumbered; construction touches no disk.
+  Merging folders is readers + `ConcatSource` + the sink in `append` (`examples/merge_yolo.yaml`).
+  (`tests/test_yolo_source.py`)
+- A dataset-processing example (`DatasetProcessor`) is a `runnable:` without a `task`; `tests/
+  test_examples_load.py` holds only a runnable that has one to the task vocabulary.
 - Spec engines (keras, tensorflow, jax, mlx) have no `loss:` slot and score with
   `spec.average_precision_50` over `spec.decode_predictions` (`<split>/map_50`, `/precision`,
   `/recall`). jax and mlx `initialize()` call `solidify()` explicitly. jax jits its steps once;

@@ -6,6 +6,23 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+- **`YoloSink(mode="append")`** continues a split after its last record — the index, `metadata.jsonl`
+  and the COCO sidecar grow; a vocabulary that disagrees id for id is refused before anything is
+  written. `replace`, the default, wipes the split first as before.
+- **`YoloSink(facts=[...])`** lists the distinct values of the named record entries in `data.yaml`
+  (a picture's scale: a folder of mixed scales is recorded, never refused).
+- **`raidar.YoloSource`** reads one split of a YOLO folder back as records — either layout, the
+  labels scaled by the picture, the `metadata.jsonl` row re-attached, class ids remapped by name to a
+  vocabulary — and `examples/merge_yolo.yaml` merges folders with it (readers → the sink in `append`).
+- **`YoloSink(layout="rfdetr")`** writes the folder RF-DETR's own reader accepts — `<split>/images`,
+  `<split>/labels`, the COCO sidecar at `<split>/_annotations.coco.json` — beside the default
+  Ultralytics layout (`images/<split>`), which is unchanged.
+- **The segmentation variants** `seg-nano` / `seg-small` / `seg-medium` / `seg-large` / `seg-xlarge`
+  on the `rfdetr` backend (`RFDETRDetector`): RF-DETR's instance-segmentation models, trained from a
+  box dataset on disk (`dataset_file: yolo`, a box label read as its four-corner polygon). One table,
+  `raidar.rfdetr._VARIANT_CLASSES`, names every variant; `RFDETRModel` keeps the four detectors.
+
 ### Changed
 - `--framework ultralytics` loads the separate Ultralytics package as the `raidar.ultralytics`
   subpackage, and `examples/train_cppe5.yaml` names its trainer

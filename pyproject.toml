@@ -218,6 +218,7 @@ raidar-mlx = "raidar.mlx_detector"
 # torchvision detection builder FUNCTIONS (lazy, `register`-ed).
 raidar-torchvision-detection = "raidar.torchvision_detection"
 raidar-yolo-sink = "raidar.yolo_sink"
+raidar-yolo-source = "raidar.yolo_source"   # the folder reader beside the sink (merging = read + append)
 
 [tool.setuptools.packages.find]
 where = ["."]

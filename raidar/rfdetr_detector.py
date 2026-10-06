@@ -43,13 +43,16 @@ from matrainer.tracking.provenance import capture_log_file, log_run_context
 from recordstream import RecordSource, ensure_materialized
 from recordstream.runnable import ProgressReporting, TorchRunner, entrypoint, run_entrypoint
 
+from raidar.rfdetr import VariantName
+
 logger = get_logger(__name__)
 
 #: Which entry point :meth:`RFDETRDetector.run` dispatches to. No ``predict``: RF-DETR's loop has
 #: no prediction-sink path — prediction runs through the lightning backend + ``RFDETRModel``.
 RFDETRTask = Literal["fit", "evaluate", "test"]
 
-_VariantName = Literal["nano", "small", "medium", "large"]
+#: Every variant the table in :mod:`raidar.rfdetr` names — the detectors and the ``seg-*`` models.
+_VariantName = VariantName
 
 #: Built when ``num_classes`` is omitted in disk mode — RF-DETR's ``train()`` re-aligns the head
 #: to the dataset's category count, so the initial value is a placeholder the native loop
@@ -120,7 +123,10 @@ class RFDETRDetector(TorchRunner, ProgressReporting):
     Args:
         data: Disk-mode dataset directory (COCO/YOLO/Roboflow). Mutually exclusive with
             ``train_set``/``val_set``.
-        variant: ``"nano"`` (default) / ``"small"`` / ``"medium"`` / ``"large"``.
+        variant: ``"nano"`` (default) / ``"small"`` / ``"medium"`` / ``"large"``, or an instance-
+            segmentation model ``"seg-nano"`` / ``"seg-small"`` / ``"seg-medium"`` / ``"seg-large"`` /
+            ``"seg-xlarge"`` — trained from the same box dataset on disk (``dataset_file: yolo``: a box
+            label is read as its four-corner polygon).
         pretrained: Start from RF-DETR's COCO-pretrained weights on a fit.
         weights: Trained checkpoint to EVALUATE (``task="evaluate"``/``"test"``) — loaded via
             RF-DETR's own ``model_config.pretrain_weights`` path, which handles head re-sizing.

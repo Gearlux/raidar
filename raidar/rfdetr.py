@@ -41,16 +41,28 @@ logger = get_logger(__name__)
 #: there is no repository page to link — see :attr:`RFDETRModel.model_refs`.
 RFDETR_URI_PREFIX = "rfdetr://"
 
+#: Every RF-DETR class a config may ask for, by the name the ``variant`` knob takes: the four detectors
+#: and the five instance-segmentation models (``seg-*``), which train on the same box dataset — RF-DETR's
+#: own reader turns a box label into its four-corner polygon — through the ``rfdetr`` backend
+#: (``RFDETRDetector``). The Literals below are read off this table.
+VariantName = Literal[
+    "nano", "small", "medium", "large", "seg-nano", "seg-small", "seg-medium", "seg-large", "seg-xlarge"
+]
 _VARIANT_CLASSES: Dict[str, str] = {
     "nano": "RFDETRNano",
     "small": "RFDETRSmall",
     "medium": "RFDETRMedium",
     "large": "RFDETRLarge",
+    "seg-nano": "RFDETRSegNano",
+    "seg-small": "RFDETRSegSmall",
+    "seg-medium": "RFDETRSegMedium",
+    "seg-large": "RFDETRSegLarge",
+    "seg-xlarge": "RFDETRSegXLarge",
 }
 
 
 def _build_rfdetr(
-    variant: Literal["nano", "small", "medium", "large"],
+    variant: VariantName,
     num_classes: int,
     pretrained_detector: bool,
     resolution: Optional[int],
@@ -454,6 +466,7 @@ class RFDETRModel(nn.Module):
 
 __all__ = [
     "RFDETRModel",
+    "VariantName",
     "_build_rfdetr_targets",
     "_decode_rfdetr_predictions",
 ]

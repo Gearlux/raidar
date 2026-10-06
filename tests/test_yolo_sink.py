@@ -239,3 +239,140 @@ def test_rejects_invalid_jpeg_quality_on_open(tmp_path: Path) -> None:
     sink = YoloSink(output_dir=str(tmp_path), class_names={1: "x"}, jpeg_quality=120)
     with pytest.raises(ValueError, match="jpeg_quality"):
         sink.open()
+
+
+# --- the rfdetr layout (2026-10-06) ---------------------------------------
+#
+# Measured before the knob existed, with RF-DETR 1.9.3's own reader on three real windows written
+# by this sink: ``is_valid_yolo_dataset(images/<split> layout) -> False``,
+# ``is_valid_yolo_dataset(<split>/images layout) -> True``. The default layout is what
+# Ultralytics reads and stays as it was; ``layout: rfdetr`` writes the second one.
+
+
+def test_rfdetr_layout_puts_each_split_in_its_own_folder(tmp_path: Path) -> None:
+    out = tmp_path / "out"
+    _convert(_train_stream(), out, layout="rfdetr")
+    assert (out / "train" / "images" / "000000.png").exists()
+    assert (out / "train" / "labels" / "000000.txt").read_text().strip() == "1 0.375000 0.375000 0.250000 0.250000"
+    coco = json.loads((out / "train" / "_annotations.coco.json").read_text())
+    assert len(coco["images"]) == 2 and len(coco["annotations"]) == 2
+    assert not (out / "images").exists() and not (out / "labels").exists() and not (out / "annotations").exists()
+    data = yaml.safe_load((out / "data.yaml").read_text())
+    assert data["train"] == "train/images" and data["names"] == {0: "background", 1: "drone-signal"}
+    meta = [json.loads(line) for line in (out / "metadata.jsonl").read_text().splitlines()]
+    assert meta[0]["image"] == "train/images/000000.png" and meta[0]["label"] == "train/labels/000000.txt"
+
+
+def test_rfdetr_layout_second_split_merges_and_a_rerun_is_idempotent(tmp_path: Path) -> None:
+    out = tmp_path / "out"
+    _convert(_train_stream(), out, layout="rfdetr")
+    _convert(Stream(source=[_make_record(boxes_xyxy=[[0, 0, 40, 40]], labels=[1])]), out, split="val", layout="rfdetr")
+    _convert(_train_stream(), out, layout="rfdetr")
+    data = yaml.safe_load((out / "data.yaml").read_text())
+    assert data["train"] == "train/images" and data["val"] == "val/images"
+    assert sorted(p.name for p in (out / "train" / "images").iterdir()) == ["000000.png", "000001.png"]
+    assert sorted(p.name for p in (out / "val" / "images").iterdir()) == ["000000.png"]
+    meta = [json.loads(line) for line in (out / "metadata.jsonl").read_text().splitlines()]
+    assert [m["split"] for m in meta] == ["val", "train", "train"]
+
+
+def test_the_rfdetr_layout_is_what_rfdetr_reads_and_the_default_is_not(tmp_path: Path) -> None:
+    yolo = pytest.importorskip("rfdetr.datasets.yolo")
+    for layout in ("ultralytics", "rfdetr"):
+        out = tmp_path / layout
+        _convert(_train_stream(), out, layout=layout)
+        _convert(
+            Stream(source=[_make_record(boxes_xyxy=[[0, 0, 40, 40]], labels=[1])]), out, split="val", layout=layout
+        )
+    assert yolo.is_valid_yolo_dataset(str(tmp_path / "rfdetr")) is True
+    assert yolo.is_valid_yolo_dataset(str(tmp_path / "ultralytics")) is False
+
+
+def test_an_unknown_layout_is_refused(tmp_path: Path) -> None:
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError, match="ultralytics"):  # the Literal, checked at construction by confluid
+        YoloSink(output_dir=str(tmp_path / "out"), class_names={0: "x"}, layout="coco")  # type: ignore[arg-type]
+    sink = YoloSink(output_dir=str(tmp_path / "out"), class_names={0: "x"})
+    sink.layout = "coco"  # type: ignore[assignment]  # set after construction: open() refuses it too
+    with pytest.raises(ValueError, match="layout"):
+        sink.open()
+
+
+# --- append mode and facts (2026-10-06) ------------------------------------
+#
+# Today a rerun of a split wipes it and restarts the index at 0 (the `replace` mode, kept as the
+# default). `append` continues a folder: the next source lands after the last stem, the metadata
+# and the COCO sidecar grow, and `facts` lists the distinct values of chosen entries (a record's
+# picture scale) in data.yaml, so a folder of mixed scales says which it holds.
+
+
+def _scaled_stream(khz: float, n: int = 2) -> Stream:
+    return Stream(
+        source=[
+            _make_record(
+                boxes_xyxy=[[10, 10, 50, 50]], labels=[1], metadata={"scale": {"khz_per_px": khz, "us_per_px": 19.5}}
+            )
+            for _ in range(n)
+        ]
+    )
+
+
+def test_append_continues_the_index_and_grows_the_sidecars(tmp_path: Path) -> None:
+    out = tmp_path / "out"
+    _convert(_train_stream(), out, layout="rfdetr")
+    _convert(_scaled_stream(78.1), out, layout="rfdetr", mode="append", facts=["scale"])
+    names = sorted(p.name for p in (out / "train" / "images").iterdir())
+    assert names == ["000000.png", "000001.png", "000002.png", "000003.png"]
+    meta = [json.loads(line) for line in (out / "metadata.jsonl").read_text().splitlines()]
+    assert [m["index"] for m in meta] == [0, 1, 2, 3]
+    coco = json.loads((out / "train" / "_annotations.coco.json").read_text())
+    assert [img["id"] for img in coco["images"]] == [0, 1, 2, 3]
+    assert [ann["id"] for ann in coco["annotations"]] == [0, 1, 2, 3] and coco["annotations"][3]["image_id"] == 3
+
+
+def test_facts_list_the_distinct_values_across_appends(tmp_path: Path) -> None:
+    out = tmp_path / "out"
+    _convert(_scaled_stream(78.1), out, layout="rfdetr", facts=["scale"])
+    _convert(_scaled_stream(78.1), out, layout="rfdetr", mode="append", facts=["scale"])
+    _convert(_scaled_stream(39.1), out, layout="rfdetr", mode="append", facts=["scale"])
+    data = yaml.safe_load((out / "data.yaml").read_text())
+    assert data["facts"] == {
+        "scale": [{"khz_per_px": 78.1, "us_per_px": 19.5}, {"khz_per_px": 39.1, "us_per_px": 19.5}]
+    }
+    assert sorted(p.name for p in (out / "train" / "images").iterdir()) == [f"{i:06d}.png" for i in range(6)]
+
+
+def test_a_record_without_the_fact_adds_nothing(tmp_path: Path) -> None:
+    out = tmp_path / "out"
+    _convert(_train_stream(), out, facts=["scale"])
+    data = yaml.safe_load((out / "data.yaml").read_text())
+    assert data["facts"] == {"scale": []}
+
+
+def test_append_refuses_a_different_vocabulary(tmp_path: Path) -> None:
+    out = tmp_path / "out"
+    _convert(_train_stream(), out)
+    with pytest.raises(ValueError, match="drone-signal.*other"):
+        _convert(_train_stream(), out, mode="append", class_names={0: "background", 1: "other"})
+    assert sorted(p.name for p in (out / "images" / "train").iterdir()) == ["000000.png", "000001.png"]
+
+
+def test_append_on_an_empty_folder_is_a_plain_write(tmp_path: Path) -> None:
+    out = tmp_path / "out"
+    _convert(_train_stream(), out, mode="append")
+    assert sorted(p.name for p in (out / "images" / "train").iterdir()) == ["000000.png", "000001.png"]
+
+
+def test_replace_still_wipes_the_split(tmp_path: Path) -> None:
+    out = tmp_path / "out"
+    _convert(_train_stream(), out)
+    _convert(Stream(source=[_make_record(boxes_xyxy=[[0, 0, 40, 40]], labels=[1])]), out)
+    assert sorted(p.name for p in (out / "images" / "train").iterdir()) == ["000000.png"]
+
+
+def test_an_unknown_mode_is_refused(tmp_path: Path) -> None:
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError, match="replace"):
+        YoloSink(output_dir=str(tmp_path / "out"), class_names={0: "x"}, mode="merge")  # type: ignore[arg-type]

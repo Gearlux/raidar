@@ -247,7 +247,7 @@ model: !lazy:raidar.fcos.keras_fcos.KerasFcos { input_shape: [256, 256, 3], seed
 runnable: !class:raidar.RFDETRDetector
   data: /data/my_coco_dataset
   dataset_file: roboflow
-  variant: small                   # nano | small | medium | large
+  variant: small                   # nano | small | medium | large — or seg-nano | seg-small | seg-medium | seg-large | seg-xlarge
   epochs: 50
 ```
 
@@ -279,12 +279,83 @@ runnable: !class:raidar.RFDETRDetector
 Seeded, two runs land identically **on cpu**. On mps they still differ — that residual is Apple's
 MPS backend rather than the config, so mps is the faster option and cpu is the reproducible one.
 
+**A segmentation variant trains from the same boxes.** `variant: seg-nano` … `seg-xlarge` build
+RF-DETR's instance-segmentation models; in disk mode with `dataset_file: yolo` RF-DETR reads a box
+label as its four-corner polygon, so a box dataset is enough (a label line with ≥ 3 points is read
+as that polygon). Stream mode hands RF-DETR boxes only, so a `seg-*` variant takes `data:`. The
+`RFDETRModel` wrapper (the lightning backend) offers the four detection variants: it builds box
+targets and no masks.
+
 `raidar evaluate --framework rfdetr` runs RF-DETR's native validation/test loop over a trained
 checkpoint (`weights:`). The wired `trackers:` receive the run's **record** (provenance, config,
 manifest, log file, final-metrics sidecar); RF-DETR's own per-step curves stay with its native
 `mlflow:` / `tensorboard:` knobs. There is no `predict` here — prediction runs through the
 lightning backend with `raidar.RFDETRModel` (the native model module, which also loads RF-DETR
 checkpoints for evaluation under `LightningDetector`).
+
+### Writing a detection Stream to disk (`raidar.YoloSink`)
+
+A `DataSink` for `recordstream run`: `DatasetProcessor(stream=…, sink=YoloSink(…))` writes each
+record's image and its `{boxes, labels}` target to a YOLO dataset folder, one split per run into the
+SAME `output_dir` (the sink merges `data.yaml` and appends `metadata.jsonl`). `layout` chooses whose
+folder it is:
+
+| `layout` | folder | reader |
+|---|---|---|
+| `ultralytics` (default) | `images/<split>/`, `labels/<split>/`, `annotations/<split>.json` | `YOLO.train(data=<output_dir>/data.yaml)` |
+| `rfdetr` | `<split>/images/`, `<split>/labels/`, `<split>/_annotations.coco.json` | `RFDETRDetector(data=<output_dir>, train_config={dataset_file: yolo})` |
+
+Measured with RF-DETR 1.9.3's own `is_valid_yolo_dataset`: the default layout answers `False` (it
+wants `train/` and `val/` folders holding `images` and `labels`), the `rfdetr` layout `True`.
+
+```yaml
+runnable: !class:recordstream.processing.DatasetProcessor
+  stream: !ref:detection_stream              # records with an image and a {boxes xyxy-px, labels} target
+  sink: !class:raidar.YoloSink
+    output_dir: /data/my_dataset
+    split: train                              # run once per split: train, then val
+    class_names: {0: signal}
+    layout: rfdetr
+    mode: replace                             # replace (default): wipe this split first | append: continue it
+    facts: [scale]                            # list the distinct values of these record entries in data.yaml
+```
+
+| `mode` | what a run does to a split that exists |
+|---|---|
+| `replace` (default) | wipes the split's folders first, so a rerun is idempotent |
+| `append` | continues it: the index goes on after the last picture, `metadata.jsonl` and the COCO sidecar grow, `data.yaml` must already name every class the same way (`class 0 is 'drone-signal' in the folder and 'other' here` is refused before anything is written) |
+
+`facts` names record entries whose DISTINCT values `data.yaml` lists under `facts:` — a picture's
+scale, for instance: a folder of mixed scales is recorded, never refused. Every record's entries
+ride `metadata.jsonl` regardless.
+
+#### Reading a folder back — `raidar.YoloSource`
+
+The sink's mirror: one split of a folder as records of `image` (HWC uint8) and `target` (`Boxes` in
+pixels, the folder's names as `classes`), each record's `metadata.jsonl` row re-attached (its
+`source_metadata` entries become record entries) plus `yolo_source: {root, split, image}`. Both
+layouts are read; a polygon label is read as its box; `classes:` remaps the ids by NAME to a
+vocabulary and refuses a name it lacks. Indexable, so `ConcatSource` / `DatasetSplit` /
+`RangeSource` wrap it — which is how two folders merge, `examples/merge_yolo.yaml`:
+
+```yaml
+source: !class:recordstream.sources.concat.ConcatSource
+  sources:
+    - !class:raidar.YoloSource {root: ./runs/dataset_a, split: train, classes: {0: signal, 1: ignore}}
+    - !class:raidar.YoloSource {root: ./runs/dataset_b, split: train, classes: {0: signal, 1: ignore}}
+runnable: !class:recordstream.processing.DatasetProcessor
+  stream: !class:recordstream.core.stream.Stream {source: !ref:source}
+  sink: !class:raidar.YoloSink {output_dir: ./runs/dataset_merged, split: train, class_names: {0: signal, 1: ignore}, layout: rfdetr, mode: append, facts: [scale]}
+```
+
+```bash
+recordstream run examples/merge_yolo.yaml               # then --scope val into the same folder
+```
+
+Measured: a folder of 3 pictures named `drone-signal` / `ignore` and one of 6 named `signal` /
+`ignore`, merged under `{0: drone-signal, 1: ignore, 2: signal}` → 9 pictures, 44 / 2 / 71 boxes
+by class, the union of both folders' picture scales in `data.yaml`, each record's origin folder in
+`metadata.jsonl`.
 
 ## Detector catalogue
 
