@@ -6,7 +6,8 @@ feeds ``YoloSink(mode="append")``. The reader takes either layout the sink write
 class names from ``data.yaml``, scales each label line back up by its picture, re-attaches the
 record's ``metadata.jsonl`` row (its ``source_metadata`` entries become plain record entries, so a
 picture's scale or its provenance survives a merge) and, given a target vocabulary, remaps class
-ids by NAME — a name the vocabulary lacks is refused rather than renumbered.
+ids by NAME — a name the vocabulary lacks is refused rather than renumbered. A YOLO-seg line (a
+polygon) comes back as the instance's polygon, so a merge of folders keeps every mask.
 """
 
 from __future__ import annotations
@@ -20,6 +21,8 @@ import yaml
 from confluid import configurable
 from PIL import Image as PILImage
 from recordstream import Boxes, Image, Record
+
+from raidar.yolo_sink import POLYGONS
 
 #: The split folders the sink writes.
 YoloSplit = Literal["train", "val", "test"]
@@ -37,8 +40,14 @@ def _names_of(data: Dict[str, Any], path: Path) -> Dict[int, str]:
     raise ValueError(f"YoloSource: {path} carries no usable 'names' (a mapping id -> name, or a list)")
 
 
-def _parse_label_line(line: str, width: int, height: int) -> Optional[Tuple[int, List[float]]]:
-    """One YOLO label line → ``(class_id, [x0, y0, x1, y1] px)``; a polygon (≥ 3 points) → its box."""
+def _parse_label_line(
+    line: str, width: int, height: int
+) -> Optional[Tuple[int, List[float], Optional[List[List[float]]]]]:
+    """One YOLO label line → ``(class_id, [x0, y0, x1, y1] px, ring)``.
+
+    A box line has no ring (``None``). A polygon line (≥ 3 points) gives its box — the ring's bounding
+    box — and the ring itself, ``[[x, y], ...]`` in pixels, the polygon the sink wrote for the instance.
+    """
     values = line.split()
     if not values:
         return None
@@ -46,10 +55,12 @@ def _parse_label_line(line: str, width: int, height: int) -> Optional[Tuple[int,
     numbers = [float(v) for v in values[1:]]
     if len(numbers) == 4:
         cx, cy, w, h = numbers
-        return class_id, [(cx - w / 2) * width, (cy - h / 2) * height, (cx + w / 2) * width, (cy + h / 2) * height]
+        box = [(cx - w / 2) * width, (cy - h / 2) * height, (cx + w / 2) * width, (cy + h / 2) * height]
+        return class_id, box, None
     if len(numbers) >= 6 and len(numbers) % 2 == 0:
         xs, ys = numbers[0::2], numbers[1::2]
-        return class_id, [min(xs) * width, min(ys) * height, max(xs) * width, max(ys) * height]
+        box = [min(xs) * width, min(ys) * height, max(xs) * width, max(ys) * height]
+        return class_id, box, [[x * width, y * height] for x, y in zip(xs, ys)]
     raise ValueError(
         f"YoloSource: a label line holds {len(numbers)} numbers; 4 (a box) or an even count ≥ 6 (a polygon)"
     )
@@ -64,6 +75,12 @@ class YoloSource:
     ``metadata.jsonl`` row's ``source_metadata`` (a picture ``scale``, a provenance), and
     ``yolo_source`` — the folder, the split and the picture's path. Indexable, so
     ``ConcatSource`` / ``DatasetSplit`` / ``RangeSource`` wrap it. Construction touches no disk.
+
+    A YOLO-seg line (a polygon) is read as the instance's mask: its box is the polygon's bounding
+    box and ``target.extras["polygons"]`` (:data:`~raidar.yolo_sink.POLYGONS`, the contract the sink
+    documents) holds, per instance, ``[ring]`` — the one ring the line carries, ``[[x, y], ...]`` in
+    pixels, bridges and all — or ``[]`` for an instance read from a box line. A record with no polygon
+    line has no ``polygons`` entry at all.
 
     Args:
         root: The dataset folder — the one holding ``data.yaml``.
@@ -164,19 +181,21 @@ class YoloSource:
         remap = self._remap()
         boxes: List[List[float]] = []
         labels: List[int] = []
+        polygons: List[List[List[List[float]]]] = []
         label_path = labels_dir / f"{path.stem}.txt"
         if label_path.is_file():
             for line in label_path.read_text().splitlines():
                 parsed = _parse_label_line(line, width, height)
                 if parsed is None:
                     continue
-                class_id, box = parsed
+                class_id, box, ring = parsed
                 if remap is not None:
                     if class_id not in remap:
                         raise ValueError(f"YoloSource: {label_path} names class {class_id}, which data.yaml does not")
                     class_id = remap[class_id]
                 boxes.append(box)
                 labels.append(class_id)
+                polygons.append([ring] if ring is not None else [])
         rel = str(path.relative_to(root))
         record: Record = {}
         row = rows.get(rel)
@@ -189,6 +208,7 @@ class YoloSource:
             boxes=np.asarray(boxes, dtype=np.float32).reshape(-1, 4),
             labels=np.asarray(labels, dtype=np.int64),
             canvas=(height, width),
+            extras={POLYGONS: polygons} if any(polygons) else {},
             classes=self._vocabulary(),
         )
         record["yolo_source"] = {"root": str(root), "split": self.split, "image": rel}

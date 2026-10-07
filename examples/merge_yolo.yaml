@@ -9,6 +9,8 @@
 # `mode: append` continues the merged folder after its last record; `facts: [scale]` lists the
 # distinct picture scales the merged folder holds in its data.yaml — mixed scales are allowed and
 # recorded, never refused. Folders written with `facts: [scale]` carry the scale per record.
+# A folder of instance masks (polygon lines) merges with its masks: the reader returns each line's ring
+# as the instance's polygon and the sink writes it back as a ring.
 
 first: ./runs/dataset_a
 second: ./runs/dataset_b

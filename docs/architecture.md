@@ -472,3 +472,78 @@ seed to a wrapper that only loads weights. Pins:
 - `tests/test_torch_detector.py::TestTheSeedCoversTheModelBuild`
 - `tests/test_huggingface_detector.py::TestTheRunIsSeeded`
 - `tests/test_rfdetr_detector.py::TestTheSeedCoversTheMODEL`
+
+---
+
+## 9. An instance's mask is ONE bridged ring, and a split holds one label form (2026-10-07)
+
+**Context.** A producer that knows an instance's shape hands the sink its polygons, and an
+instance can be several separate pieces. The two targets the folder must feed hold less:
+
+- A YOLO-seg label line is `class x1 y1 x2 y2 ...` — ONE polygon per line.
+- Ultralytics 8.4.126 refuses a label file that mixes the two forms (`labels mix segment and
+  detection rows`) and a segment model refuses a dataset with fewer segments than boxes
+  (`Segment dataset requires equal numbers of boxes and segments`).
+- RF-DETR 1.9.3's YOLO reader tells a box line (5 fields) from a polygon line (7 or more) line by
+  line, rasterizes a polygon with `ImageDraw.polygon(fill=1)` and reads a box line as its
+  four-corner polygon; its COCO reader decodes a list of polygons per instance to their union.
+
+Writing one line per piece would turn one instance into several: the count, the class
+statistics and every metric that matches instances to predictions would change with it. Writing
+only COCO would leave the YOLO folder without masks.
+
+**Decision.** Per instance, ONE ring. Several polygons are joined by zero-width bridges: walk the
+first polygon round from the vertex nearest its closest neighbour and back to that vertex, cross
+to the neighbour's nearest vertex, walk it round and back, and so on, each next polygon being the
+one nearest the vertex the walk stands on; then retrace the bridge vertices in reverse to the
+start. A bridge is walked once each way, so it encloses no area under even-odd or non-zero fill.
+The COCO sidecar needs no such trick and keeps the polygons apart, with `area` their summed
+shoelace area. An instance without polygons is its box's four corners, in both. The form is
+decided for the SPLIT, not the record: as soon as one record carries a polygon, every line (and
+every COCO annotation) becomes a ring when the sink flushes, the earlier box-only records and the
+ones an `append` continues included. Nothing is written to `data.yaml` — neither reader asks for a
+marker. The ring code is written for this sink; it copies no Ultralytics code (AGPL).
+
+**Consequences.**
+
+- **The bridges light a pixel line.** Measured with RF-DETR's YOLO reader on two rectangles with
+  one bridge: 302 pixels in the union of the rectangles, 311 in the ring's mask — nothing lost,
+  9 pixels along the bridge. The COCO reader's mask of the same instance is exactly the polygons'
+  `area`, 256 pixels, with no bridge.
+- **A round trip keeps the ring, not the pieces.** `YoloSource` returns the ring as the instance's one
+  polygon, so a merge writes COCO `segmentation` as that one ring. Its `area` is unchanged (the bridges
+  add none); the pieces are not recoverable from the YOLO folder.
+- **Coordinates are six decimals**, like a box line; RF-DETR clips polygon points to the picture.
+- **An `append` reads the split's label files at flush** to learn whether the earlier records are
+  rings. A `replace` run without polygons reads none and writes what it always wrote.
+
+**Example.**
+
+```python
+from raidar import POLYGONS
+from recordstream import Boxes
+
+target = Boxes(
+    boxes=[[2, 2, 56, 28], [44, 2, 60, 10]],
+    labels=[1, 0],
+    extras={POLYGONS: [
+        [[[2, 2], [10, 2], [10, 10], [2, 10]], [[40, 16], [56, 16], [56, 28], [40, 28]]],  # two pieces
+        [],                                                                              # its box
+    ]},
+)
+# 64 x 32 picture, labels/<split>/000000.txt:
+# 1 0.156250 0.312500 0.031250 0.312500 0.031250 0.062500 0.156250 0.062500 0.156250 0.312500 0.625000 0.500000 0.875000 0.500000 0.875000 0.875000 0.625000 0.875000 0.625000 0.500000
+# 0 0.687500 0.062500 0.937500 0.062500 0.937500 0.312500 0.687500 0.312500
+```
+
+**What you may change.** You may pick the bridge vertices and the order of the pieces differently,
+as long as the ring stays closed, its first point is not repeated, every bridge is walked twice
+and the polygons' union is what it fills. Do not write one line per piece, do not leave a box line
+in a split that holds a ring, do not add a `data.yaml` marker or a sink knob for it, and do not
+change what a record without the key writes. Pins:
+- `tests/test_yolo_sink.py::TestBoxOnlyRecordsAreUnchanged`
+- `tests/test_yolo_sink.py::TestSeveralPolygonsOfOneInstance`
+- `tests/test_yolo_sink.py::TestOneFormPerSplit`
+- `tests/test_yolo_sink.py::TestRfdetrReadsTheFolderAsSegmentation`
+- `tests/test_yolo_source.py::TestPolygons`
+- `tests/test_yolo_source.py::TestMasksSurviveTheRoundTrip`

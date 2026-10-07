@@ -7,6 +7,14 @@ All notable changes to this project are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- **Instance masks through `YoloSink`.** A record's `Boxes` target may carry each instance's
+  polygons in `extras["polygons"]` (`raidar.POLYGONS` names the key; per box a list of non-overlapping
+  polygons of `[x, y]` pixel points, `[]` for a box with no mask of its own). The sink writes the
+  YOLO-seg line `class x1 y1 x2 y2 ...` — one ring per instance, several polygons joined by
+  zero-width bridges — and the COCO sidecar's `segmentation` (the polygons apart) and `area` (their
+  shoelace sum); a split holding any ring holds no box line. `raidar.YoloSource` reads a ring back
+  as the instance's polygon, so a merge keeps the masks. RF-DETR's own YOLO reader yields the masks
+  and its COCO reader decodes the sidecar. Records without the key are written as before.
 - **`YoloSink(mode="append")`** continues a split after its last record — the index, `metadata.jsonl`
   and the COCO sidecar grow; a vocabulary that disagrees id for id is refused before anything is
   written. `replace`, the default, wipes the split first as before.

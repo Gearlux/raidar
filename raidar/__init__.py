@@ -67,6 +67,8 @@ _BACKEND_NAMES = {
     # `import raidar` imports NOTHING. Its "extra" is the core install itself.
     "YoloSink": ("raidar.yolo_sink", ""),
     "YoloSource": ("raidar.yolo_source", ""),
+    # The key a producer puts each instance's polygons under in `Boxes.extras` (a constant, not a class).
+    "POLYGONS": ("raidar.yolo_sink", ""),
 }
 
 __all__ = [*_BACKEND_NAMES]

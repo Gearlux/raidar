@@ -20,15 +20,17 @@ from recordstream import Record
 from recordstream.core import Stream
 from recordstream.sources.concat import ConcatSource
 
-from raidar.yolo_sink import YoloSink
+from raidar.yolo_sink import POLYGONS, YoloSink
 from raidar.yolo_source import YoloSource
 
 
-def _record(boxes: Any, labels: Any, height: int = 64, width: int = 96, **extra: Any) -> Record:
+def _record(boxes: Any, labels: Any, height: int = 64, width: int = 96, polygons: Any = None, **extra: Any) -> Record:
     record: Record = {
         "image": SFImage((torch.rand(3, height, width) * 255).to(torch.uint8).numpy(), layout="CHW"),
         "target": Boxes(
-            boxes=torch.as_tensor(boxes, dtype=torch.float32), labels=torch.as_tensor(labels, dtype=torch.int64)
+            boxes=torch.as_tensor(boxes, dtype=torch.float32),
+            labels=torch.as_tensor(labels, dtype=torch.int64),
+            extras={} if polygons is None else {POLYGONS: polygons},
         ),
     }
     record.update(extra)
@@ -153,3 +155,121 @@ class TestTheRoundTrip:
         ]
         data = yaml.safe_load((merged / "data.yaml").read_text())
         assert data["facts"] == {"scale": [{"khz_per_px": 78.1}, {"khz_per_px": 39.1}]}
+
+
+# --- instance masks: a ring read back as `extras["polygons"]` (2026-10-07) ------------------------
+#
+# The sink writes one ring per instance (the contract is in raidar.yolo_sink); the reader returns
+# that ring as the instance's ONE polygon, so a merge of two folders keeps every mask.
+
+# A 64 x 32 canvas, so every coordinate below normalises to an exact 6-decimal number.
+TRIANGLE = [[8.0, 4.0], [40.0, 4.0], [24.0, 28.0]]
+RECTS = [
+    [[2.0, 2.0], [10.0, 2.0], [10.0, 10.0], [2.0, 10.0]],
+    [[20.0, 3.0], [30.0, 3.0], [30.0, 12.0], [20.0, 12.0]],
+]
+
+
+def _seg_record() -> Record:
+    """Instance 0 a triangle, instance 1 two rectangles (one ring), instance 2 no mask of its own."""
+    return _record(
+        [[8.0, 4.0, 40.0, 28.0], [2.0, 2.0, 30.0, 12.0], [44.0, 2.0, 60.0, 10.0]],
+        [0, 1, 1],
+        height=32,
+        width=64,
+        polygons=[[TRIANGLE], RECTS, []],
+    )
+
+
+@pytest.fixture()
+def seg_folder(tmp_path: Path) -> Path:
+    out = tmp_path / "seg"
+    _write(
+        out, [_seg_record(), _record([[0.0, 0.0, 16.0, 8.0]], [0], height=32, width=64)], class_names={0: "a", 1: "b"}
+    )
+    return out
+
+
+class TestPolygons:
+    def test_a_ring_comes_back_as_the_instances_one_polygon_and_its_box_is_the_rings(self, seg_folder: Path) -> None:
+        target = YoloSource(root=str(seg_folder))[0]["target"]
+        polygons = target.extras[POLYGONS]
+        assert len(polygons) == 3
+        assert polygons[0] == [TRIANGLE]  # one ring, in pixels
+        assert (
+            len(polygons[1]) == 1 and len(polygons[1][0]) == 5 + 5
+        )  # each rectangle walked round and back to the bridge's end
+        assert polygons[2] == [[[44.0, 2.0], [60.0, 2.0], [60.0, 10.0], [44.0, 10.0]]]  # the box's own ring
+        np.testing.assert_allclose(
+            np.asarray(target.boxes),
+            [[8.0, 4.0, 40.0, 28.0], [2.0, 2.0, 30.0, 12.0], [44.0, 2.0, 60.0, 10.0]],
+            atol=1e-3,
+        )
+        assert np.asarray(target.labels).tolist() == [0, 1, 1]
+
+    def test_a_box_line_beside_a_ring_has_no_polygon_of_its_own(self, tmp_path: Path) -> None:
+        out = tmp_path / "mixed"
+        _write(out, [_record([[0.0, 0.0, 16.0, 8.0]], [0], height=32, width=64)], class_names={0: "a"})
+        (out / "train" / "labels" / "000000.txt").write_text(
+            "0 0.125000 0.125000 0.625000 0.125000 0.375000 0.875000\n0 0.250000 0.250000 0.500000 0.500000"
+        )
+        target = YoloSource(root=str(out))[0]["target"]
+        assert target.extras[POLYGONS] == [[TRIANGLE], []]
+        np.testing.assert_allclose(np.asarray(target.boxes)[1], [0.0, 0.0, 32.0, 16.0], atol=1e-3)
+
+    def test_a_box_only_record_carries_no_polygons_entry(self, folder: Path) -> None:
+        for record in YoloSource(root=str(folder)):
+            assert POLYGONS not in record["target"].extras
+
+    def test_a_record_without_instances_in_a_seg_folder_carries_none_either(self, seg_folder: Path) -> None:
+        (seg_folder / "train" / "labels" / "000001.txt").write_text("")
+        assert POLYGONS not in YoloSource(root=str(seg_folder))[1]["target"].extras
+
+    def test_the_vocabulary_remap_leaves_the_polygons_alone(self, seg_folder: Path) -> None:
+        target = YoloSource(root=str(seg_folder), classes={0: "b", 1: "a"})[0]["target"]
+        assert np.asarray(target.labels).tolist() == [1, 0, 0] and target.extras[POLYGONS][0] == [TRIANGLE]
+
+
+class TestMasksSurviveTheRoundTrip:
+    def test_sink_source_sink_writes_the_same_lines_and_polygons(self, seg_folder: Path, tmp_path: Path) -> None:
+        out = tmp_path / "again"
+        _write(out, YoloSource(root=str(seg_folder)), class_names={0: "a", 1: "b"})
+        for name in ("000000.txt", "000001.txt"):
+            first = (seg_folder / "train" / "labels" / name).read_text().split()
+            again = (out / "train" / "labels" / name).read_text().split()
+            assert [float(x) for x in first] == pytest.approx([float(x) for x in again], abs=1e-5)
+        sidecar = json.loads((out / "train" / "_annotations.coco.json").read_text())
+        assert all(a["segmentation"] for a in sidecar["annotations"])  # the box-only record's too: one form per split
+
+    def test_two_folders_merge_with_their_masks(self, seg_folder: Path, tmp_path: Path) -> None:
+        other = tmp_path / "other"
+        _write(other, [_record([[0.0, 0.0, 16.0, 8.0]], [0], height=32, width=64)], class_names={0: "a"})
+        merged = tmp_path / "merged"
+        readers = ConcatSource(
+            sources=[YoloSource(root=str(seg_folder)), YoloSource(root=str(other), classes={0: "a", 1: "b"})]
+        )
+        _write(merged, Stream(source=readers), class_names={0: "a", 1: "b"}, mode="append")
+        lines = [
+            line.split()
+            for path in sorted((merged / "train" / "labels").glob("*.txt"))
+            for line in path.read_text().splitlines()
+        ]
+        assert len(lines) == 3 + 1 + 1 and all(
+            len(line) > 5 for line in lines
+        )  # the box-only folder's line is a ring too
+
+    def test_rfdetr_reads_the_merged_masks(self, seg_folder: Path, tmp_path: Path) -> None:
+        yolo = pytest.importorskip("rfdetr.datasets.yolo")
+        out = tmp_path / "again"
+        _write(out, YoloSource(root=str(seg_folder)), class_names={0: "a", 1: "b"})
+
+        def masks(root: Path) -> np.ndarray:
+            dataset = yolo.YoloDetection(
+                img_folder=str(root / "train" / "images"),
+                lb_folder=str(root / "train" / "labels"),
+                data_file=str(root / "data.yaml"),
+                include_masks=True,
+            )
+            return np.asarray(dataset[0][1]["masks"].numpy())
+
+        assert (masks(seg_folder) == masks(out)).all()

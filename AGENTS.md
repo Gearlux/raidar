@@ -64,8 +64,8 @@ hooks, model wrappers, the FCOS spec, registrations and configs.
   `capture_log_file(..., status="success")`; Stream mode is drift-guarded by the gated
   `::test_stream_train_smoke`.
 - The RF-DETR variants are ONE table, `raidar.rfdetr._VARIANT_CLASSES`, and the two Literals are
-  read off it: `VariantName` (the backend, every entry — the `seg-*` models train from the box
-  dataset on disk, a box label read as its four-corner polygon) and the four detection names on
+  read off it: `VariantName` (the backend, every entry — the `seg-*` models train from the dataset
+  on disk, a box label read as its four-corner polygon, a polygon line as that polygon) and the four detection names on
   `RFDETRModel`, which builds box targets and no masks. A new variant is a table row
   (`tests/test_rfdetr.py::TestTheVariantTable`).
 - `YoloSink.layout` is the only difference between the Ultralytics folder (`images/<split>`) and
@@ -79,6 +79,15 @@ hooks, model wrappers, the FCOS spec, registrations and configs.
   vocabulary given and an unknown name is refused, never renumbered; construction touches no disk.
   Merging folders is readers + `ConcatSource` + the sink in `append` (`examples/merge_yolo.yaml`).
   (`tests/test_yolo_source.py`)
+- Instance masks ride `Boxes.extras[raidar.POLYGONS]`: per box a LIST of non-overlapping polygons
+  (≥ 3 `[x, y]` pixel points, first point not repeated), `[]`/`None` meaning the box rectangle; the
+  contract is `yolo_sink`'s module docstring. `YoloSink` writes ONE YOLO-seg ring per instance (YOLO-seg
+  holds one polygon a line; several are joined by zero-width bridges, each walked once each way) and
+  COCO `segmentation` as the polygons apart; a split holding any ring holds NO box line, rewritten at
+  `flush` (an `append` too), because Ultralytics refuses a file that mixes the forms; nothing goes
+  in `data.yaml`; no key → byte-identical to the box-only output; `YoloSource` reads a ring back as
+  `[ring]`. §9. (`tests/test_yolo_sink.py::TestBoxOnlyRecordsAreUnchanged`, `::TestSeveralPolygonsOfOneInstance`,
+  `::TestOneFormPerSplit`, `::TestRfdetrReadsTheFolderAsSegmentation`; `tests/test_yolo_source.py::TestPolygons`)
 - A dataset-processing example (`DatasetProcessor`) is a `runnable:` without a `task`; `tests/
   test_examples_load.py` holds only a runnable that has one to the task vocabulary.
 - Spec engines (keras, tensorflow, jax, mlx) have no `loss:` slot and score with

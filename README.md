@@ -282,7 +282,8 @@ MPS backend rather than the config, so mps is the faster option and cpu is the r
 **A segmentation variant trains from the same boxes.** `variant: seg-nano` … `seg-xlarge` build
 RF-DETR's instance-segmentation models; in disk mode with `dataset_file: yolo` RF-DETR reads a box
 label as its four-corner polygon, so a box dataset is enough (a label line with ≥ 3 points is read
-as that polygon). Stream mode hands RF-DETR boxes only, so a `seg-*` variant takes `data:`. The
+as that polygon — `YoloSink` writes such lines when a record's target carries
+`extras["polygons"]`, below). Stream mode hands RF-DETR boxes only, so a `seg-*` variant takes `data:`. The
 `RFDETRModel` wrapper (the lightning backend) offers the four detection variants: it builds box
 targets and no masks.
 
@@ -329,14 +330,79 @@ runnable: !class:recordstream.processing.DatasetProcessor
 scale, for instance: a folder of mixed scales is recorded, never refused. Every record's entries
 ride `metadata.jsonl` regardless.
 
+#### Instance masks — `Boxes.extras["polygons"]`
+
+A record's target is a `recordstream.Boxes` (`boxes` `[N, 4]` xyxy pixels, `labels` `[N]`). A
+producer MAY add each instance's polygons under `target.extras["polygons"]` — `raidar.POLYGONS`
+names the key — and the sink then writes masks, which RF-DETR's `seg-*` models train on:
+
+```python
+from raidar import POLYGONS
+from recordstream import Boxes
+
+target = Boxes(
+    boxes=[[2, 2, 56, 28], [44, 2, 60, 10]],
+    labels=[1, 0],
+    extras={POLYGONS: [
+        [[[2, 2], [10, 2], [10, 10], [2, 10]], [[40, 16], [56, 16], [56, 28], [40, 28]]],  # instance 0: two polygons
+        [],                                                                              # instance 1: no mask of its own
+    ]},
+)
+```
+
+The contract: a list of length N; element `i` is the LIST of polygons of box `i`; each polygon is a
+list of `[x, y]` pixel points — at least 3, a closed ring, the first point not repeated. The
+polygons of one instance do not overlap (they may touch). `[]` or `None` means the instance has no
+mask of its own, and its mask is its box rectangle. A list of the wrong length, or a polygon of
+fewer than 3 points, is refused naming the record. Without the key — or with one that holds no
+polygon at all — the sink writes exactly what it wrote before.
+
+On a 64 x 32 picture, the target above writes:
+
+| file | before (box lines only) | with the polygons |
+|---|---|---|
+| `labels/<split>/000000.txt` | `1 0.453125 0.468750 0.843750 0.812500`<br>`0 0.812500 0.187500 0.250000 0.250000` | `1 0.156250 0.312500 0.031250 0.312500 0.031250 0.062500 0.156250 0.062500 0.156250 0.312500 0.625000 0.500000 0.875000 0.500000 0.875000 0.875000 0.625000 0.875000 0.625000 0.500000`<br>`0 0.687500 0.062500 0.937500 0.062500 0.937500 0.312500 0.687500 0.312500` |
+| COCO `segmentation` / `area` of instance 0 | `[]` / `1404.0` (its box) | `[[2,2,10,2,10,10,2,10], [40,16,56,16,56,28,40,28]]` / `256.0` (the polygons' summed area) |
+| COCO `segmentation` of instance 1 | `[]` | `[[44,2,60,2,60,10,44,10]]` (its box as a polygon) |
+
+- **One ring per instance.** The YOLO-seg line, `class x1 y1 x2 y2 ...` (normalised by the picture,
+  six decimals like a box line), has room for one polygon, so several are joined into one ring by
+  zero-width bridges: the ring walks the first polygon round from the vertex nearest the next
+  polygon, crosses to that polygon's nearest vertex, walks it round, and so on, then retraces the
+  same bridge vertices back to its start. Each bridge is walked once each way, so it encloses no
+  area under even-odd or non-zero fill; the next polygon is always the one nearest the vertex the
+  walk stands on. In the line above, the ring runs `(10,10)` round R1 and back to `(10,10)`, across
+  to `(40,16)`, round R3 and back to `(40,16)`, and closes along the same bridge. An instance without
+  polygons is its box's four corners as a ring.
+- **COCO keeps the polygons apart.** `segmentation` holds one flat `[x1, y1, x2, y2, ...]` list per
+  polygon, in pixels, and `area` their summed shoelace area.
+- **A split of masks has no box line.** Ultralytics 8.4.126 refuses a label file that mixes the two
+  forms (`labels mix segment and detection rows`) and a segment model refuses a dataset with fewer
+  segments than boxes (`Segment dataset requires equal numbers of boxes and segments`). As soon as any
+  record of a split carries polygons, the sink writes every line of the split as a ring when it
+  flushes — the box-only records before it, and (with `mode: append`) the records an earlier run
+  left — and gives every COCO annotation a polygon. Nothing about this is written to `data.yaml`:
+  RF-DETR's YOLO reader tells a box line from a polygon line line by line, and an Ultralytics
+  segment model asks for the segments.
+- **RF-DETR reads it as a segmentation dataset.** Measured with RF-DETR 1.9.3 over the target
+  above. Its YOLO reader (`YoloDetection(..., include_masks=True)`) gives instance 0 the two
+  rectangles as `ImageDraw.polygon` fills them (302 pixels, none lost) plus 9 pixels along the
+  bridge — a line one pixel wide, which is what a doubled edge fills — and gives instance 1 its box
+  rectangle. Its COCO reader (`ConvertCoco(include_masks=True)`) decodes the sidecar's
+  `segmentation` to 256 pixels for instance 0, exactly the polygons' `area` and no bridge, and 128
+  for instance 1.
+
 #### Reading a folder back — `raidar.YoloSource`
 
 The sink's mirror: one split of a folder as records of `image` (HWC uint8) and `target` (`Boxes` in
 pixels, the folder's names as `classes`), each record's `metadata.jsonl` row re-attached (its
 `source_metadata` entries become record entries) plus `yolo_source: {root, split, image}`. Both
-layouts are read; a polygon label is read as its box; `classes:` remaps the ids by NAME to a
-vocabulary and refuses a name it lacks. Indexable, so `ConcatSource` / `DatasetSplit` /
-`RangeSource` wrap it — which is how two folders merge, `examples/merge_yolo.yaml`:
+layouts are read; `classes:` remaps the ids by NAME to a vocabulary and refuses a name it lacks. A
+polygon line is read as the instance's mask: its box is the ring's bounding box and
+`target.extras["polygons"]` holds `[ring]` for it (the one bridged ring, in pixels) and `[]` for an
+instance read from a box line; a record with no polygon line has no `polygons` entry. So the masks
+survive a merge. Indexable, so `ConcatSource` / `DatasetSplit` / `RangeSource` wrap it — which is
+how two folders merge, `examples/merge_yolo.yaml`:
 
 ```yaml
 source: !class:recordstream.sources.concat.ConcatSource
