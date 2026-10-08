@@ -319,6 +319,8 @@ runnable: !class:recordstream.processing.DatasetProcessor
     layout: rfdetr
     mode: replace                             # replace (default): wipe this split first | append: continue it
     facts: [scale]                            # list the distinct values of these record entries in data.yaml
+    image_mode: rgb                           # rgb (default) | grey: one channel a picture whose three are equal
+    image_threads: 4                          # threads encoding and writing the pictures (the files are the same)
 ```
 
 | `mode` | what a run does to a split that exists |
@@ -329,6 +331,18 @@ runnable: !class:recordstream.processing.DatasetProcessor
 `facts` names record entries whose DISTINCT values `data.yaml` lists under `facts:` — a picture's
 scale, for instance: a folder of mixed scales is recorded, never refused. Every record's entries
 ride `metadata.jsonl` regardless.
+
+`image_mode: grey` stores a grey picture (its three channels equal, a spectrogram's grey scale) as
+ONE channel: measured on 60 spectrogram pictures of 1024 x 1024, 12.5 ms and 0.52 MB a picture
+against 27.6 ms and 0.80 MB in RGB. The readers turn it back into the same three channels — RF-DETR's
+YOLO reader and `YoloSource` call `convert("RGB")`, Ultralytics reads with OpenCV's colour flag — so
+`data.yaml` keeps `channels: 3`. A picture whose channels differ is refused, naming its record:
+`YoloSink: image_mode 'grey' writes one channel, and the picture of record 1 has three that differ —
+write this folder with image_mode: rgb`.
+
+The pictures are encoded on `image_threads` threads (PIL's encoder runs outside Python's lock: 60
+PNGs took 1.74 s on one thread, 0.23 s on eight), each under the index its record was given, so the
+folder is the one a single thread writes; a write that fails stops the run.
 
 #### Instance masks — `Boxes.extras["polygons"]`
 

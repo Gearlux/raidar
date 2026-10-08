@@ -7,17 +7,19 @@ exercise it directly (and through a Stream) since that's the same write path.
 """
 
 import json
+import re
 from pathlib import Path
-from typing import Any, Dict, List, Literal
+from typing import Any, Dict, List, Literal, Tuple
 
 import numpy as np
 import pytest
 import torch
 import yaml
 from PIL import Image, ImageDraw
+from pydantic import ValidationError
 from recordstream import Boxes
 from recordstream import Image as SFImage
-from recordstream import Record
+from recordstream import Record, item_data
 from recordstream.core import Stream
 
 from raidar.yolo_sink import POLYGONS, YoloSink, _bridged_ring, _jsonable_metadata, _to_uint8_hwc, _yolo_lines
@@ -748,3 +750,171 @@ class TestRfdetrReadsTheFolderAsSegmentation:
         assert int(masks[1].sum()) == 8 * 8 + 10 * 9 + 16 * 12 == annotations[1]["area"]  # the union of the three
         assert int(masks[2].sum()) == 16 * 8 == annotations[2]["area"]  # the box without a mask
         assert abs(int(masks[0].sum()) - annotations[0]["area"]) <= 40  # the triangle, up to its edge pixels
+
+
+# --- grey pictures, pictures written on threads, the ring at scale (2026-10-08) -----------------------
+#
+# A spectrogram picture is grey: its three channels are equal. `image_mode: grey` stores the one channel (a third of
+# the pixels to compress); every reader of the folder turns it back into three (`convert("RGB")`, OpenCV's colour read),
+# so a model sees what it saw. The pictures are encoded on `image_threads` threads — the encoder runs outside Python's
+# lock — each under the index its record was given, in order.
+
+
+def _grey_record(level: float = 0.5, height: int = 32, width: int = 48) -> Record:
+    """A record whose picture is grey ([3, H, W], the three channels equal), a gradient around ``level``."""
+    ramp = np.clip(level + np.linspace(-0.2, 0.2, width, dtype=np.float32)[None, :] * np.ones((height, 1)), 0, 1)
+    return {
+        "image": SFImage(np.repeat(ramp[None].astype(np.float32), 3, axis=0), layout="CHW"),
+        "target": Boxes(boxes=torch.tensor([[4.0, 4.0, 20.0, 20.0]]), labels=torch.tensor([1])),
+    }
+
+
+def item_pixels(record: Record) -> np.ndarray:
+    """The [3, H, W] float pixels of a record built by :func:`_grey_record`."""
+    return np.asarray(item_data(record["image"]))
+
+
+class TestGreyPictures:
+    def test_a_grey_picture_is_one_channel_that_reads_back_as_the_rgb_picture(self, tmp_path: Path) -> None:
+        records = [_grey_record(0.3), _grey_record(0.7)]
+        _convert(Stream(source=records), tmp_path / "rgb")
+        _convert(Stream(source=records), tmp_path / "grey", image_mode="grey")
+        for stem in ("000000", "000001"):
+            rgb = Image.open(tmp_path / "rgb" / "images" / "train" / f"{stem}.png")
+            grey = Image.open(tmp_path / "grey" / "images" / "train" / f"{stem}.png")
+            assert (rgb.mode, grey.mode) == ("RGB", "L")
+            assert np.array_equal(np.asarray(grey.convert("RGB")), np.asarray(rgb))
+        assert (tmp_path / "grey" / "labels" / "train" / "000000.txt").read_text() == (
+            tmp_path / "rgb" / "labels" / "train" / "000000.txt"
+        ).read_text()
+        assert yaml.safe_load((tmp_path / "grey" / "data.yaml").read_text())["channels"] == 3  # what a reader makes
+
+    def test_a_two_dimensional_picture_is_written_grey(self, tmp_path: Path) -> None:
+        record = _grey_record()
+        record["image"] = SFImage(item_pixels(record)[0], layout="HW")
+        _convert(Stream(source=[record]), tmp_path / "out", image_mode="grey")
+        assert Image.open(tmp_path / "out" / "images" / "train" / "000000.png").mode == "L"
+
+    def test_a_grey_jpg_is_one_channel_too(self, tmp_path: Path) -> None:
+        _convert(Stream(source=[_grey_record()]), tmp_path / "out", image_mode="grey", image_format="jpg")
+        assert Image.open(tmp_path / "out" / "images" / "train" / "000000.jpg").mode == "L"
+
+    def test_a_coloured_picture_is_refused_naming_its_record(self, tmp_path: Path) -> None:
+        records = [_grey_record(), _make_record(height=32, width=48)]  # the second: three random channels
+        message = (
+            "YoloSink: image_mode 'grey' writes one channel, and the picture of record 1 has three that differ — "
+            "write this folder with image_mode: rgb"
+        )
+        with pytest.raises(ValueError, match=f"^{re.escape(message)}$"):
+            _convert(Stream(source=records), tmp_path / "out", image_mode="grey")
+
+    def test_an_unknown_image_mode_is_refused(self, tmp_path: Path) -> None:
+        with pytest.raises(ValidationError, match="grey"):  # the Literal, checked at construction by confluid
+            YoloSink(
+                output_dir=str(tmp_path / "out"), class_names={0: "x"}, image_mode="gray"  # type: ignore[arg-type]
+            )
+        sink = YoloSink(output_dir=str(tmp_path / "out"), class_names={0: "x"})
+        sink.image_mode = "gray"  # type: ignore[assignment]  # set after construction: open() refuses it too
+        with pytest.raises(ValueError, match=r"^YoloSink: image_mode must be one of \['rgb', 'grey'\]; got 'gray'\.$"):
+            sink.open()
+
+    def test_rfdetr_reads_a_grey_folder_as_the_rgb_one(self, tmp_path: Path) -> None:
+        yolo = pytest.importorskip("rfdetr.datasets.yolo")
+        records = [_grey_record(0.4)]
+        pixels = []
+        for mode in ("rgb", "grey"):
+            out = tmp_path / mode
+            _convert(Stream(source=records), out, class_names={0: "a", 1: "b"}, layout="rfdetr", image_mode=mode)
+            dataset = yolo.YoloDetection(
+                img_folder=str(out / "train" / "images"),
+                lb_folder=str(out / "train" / "labels"),
+                data_file=str(out / "data.yaml"),
+            )
+            pixels.append(np.asarray(dataset[0][0]))
+        assert pixels[0].shape == pixels[1].shape and np.array_equal(pixels[0], pixels[1])
+
+
+class TestPicturesWrittenOnThreads:
+    def test_every_picture_lands_under_its_own_records_index(self, tmp_path: Path) -> None:
+        records = [_grey_record(level=i / 30.0) for i in range(24)]
+        _convert(Stream(source=records), tmp_path / "out", image_threads=4)
+        for i in range(24):
+            written = np.asarray(Image.open(tmp_path / "out" / "images" / "train" / f"{i:06d}.png"))
+            assert np.array_equal(written, _to_uint8_hwc(item_pixels(records[i]))), i
+
+    def test_the_files_are_the_same_on_one_thread_and_on_several(self, tmp_path: Path) -> None:
+        records = [_grey_record(level=i / 12.0) for i in range(12)]
+        _convert(Stream(source=records), tmp_path / "one", image_threads=1)
+        _convert(Stream(source=records), tmp_path / "four", image_threads=4)
+        one = sorted((tmp_path / "one").rglob("*.png"))
+        assert len(one) == 12
+        for path in one:
+            assert path.read_bytes() == (tmp_path / "four" / path.relative_to(tmp_path / "one")).read_bytes()
+
+    def test_a_picture_that_fails_to_write_stops_the_run(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        save = Image.Image.save
+        calls = []
+
+        def failing(self: Image.Image, fp: Any, *args: Any, **kwargs: Any) -> None:
+            calls.append(fp)
+            if len(calls) == 3:
+                raise OSError("No space left on device")
+            save(self, fp, *args, **kwargs)
+
+        monkeypatch.setattr(Image.Image, "save", failing)
+        with pytest.raises(OSError, match="^No space left on device$"):
+            _convert(Stream(source=[_grey_record() for _ in range(6)]), tmp_path / "out", image_threads=2)
+
+    def test_fewer_than_one_thread_is_refused(self, tmp_path: Path) -> None:
+        with pytest.raises(ValidationError, match="greater than or equal to 1"):  # the range mark, at construction
+            YoloSink(output_dir=str(tmp_path / "out"), class_names={0: "x"}, image_threads=0)
+        sink = YoloSink(output_dir=str(tmp_path / "out"), class_names={0: "x"})
+        sink.image_threads = 0  # set after construction: open() refuses it too
+        with pytest.raises(ValueError, match=r"^YoloSink: image_threads must be >= 1; got 0\.$"):
+            sink.open()
+
+
+def _walked_ring(polygons: List[np.ndarray]) -> np.ndarray:
+    """The ring by its description, one polygon pair at a time (the oracle :func:`_bridged_ring` is held to): from
+    polygon 0's vertex nearest its closest neighbour, each next polygon the remaining one (lowest index on a tie) with a
+    vertex nearest the vertex the walk stands on, entered there (first vertex on a tie); then the bridge vertices back.
+    """
+
+    def nearest(a: np.ndarray, b: np.ndarray) -> Tuple[int, int, float]:
+        distance = np.linalg.norm(a[:, None, :] - b[None, :, :], axis=2)
+        i, j = np.unravel_index(int(np.argmin(distance)), distance.shape)
+        return int(i), int(j), float(distance[i, j])
+
+    if len(polygons) == 1:
+        return np.asarray(polygons[0], dtype=np.float64)
+    remaining = list(range(1, len(polygons)))
+    first = min(remaining, key=lambda k: nearest(polygons[0], polygons[k])[2])
+    start, entry, _ = nearest(polygons[0], polygons[first])
+    order, entries = [0, first], [start, entry]
+    remaining.remove(first)
+    while remaining:
+        here = polygons[order[-1]][entries[-1]][None, :]
+        following = min(remaining, key=lambda k: nearest(here, polygons[k])[2])
+        order.append(following)
+        entries.append(nearest(here, polygons[following])[1])
+        remaining.remove(following)
+    ring: List[np.ndarray] = []
+    for k, vertex in zip(order, entries):
+        walk = np.roll(polygons[k], -vertex, axis=0)
+        ring.extend(walk)
+        ring.append(walk[0])
+    for k, vertex in reversed(list(zip(order, entries))[1:-1]):
+        ring.append(polygons[k][vertex])
+    return np.asarray(ring, dtype=np.float64)
+
+
+@pytest.mark.parametrize("seed", range(40))
+def test_the_ring_is_the_walk_its_description_gives_ties_included(seed: int) -> None:
+    """Up to 12 polygons of 3-9 vertices on a small integer grid — distances tie often — joined exactly as the walk
+    described polygon pair by polygon pair joins them, vertex for vertex."""
+    rng = np.random.default_rng(seed)
+    polygons = [
+        rng.integers(0, 24, size=(int(rng.integers(3, 10)), 2)).astype(np.float64)
+        for _ in range(int(rng.integers(1, 13)))
+    ]
+    assert np.array_equal(_bridged_ring(polygons), _walked_ring(polygons))

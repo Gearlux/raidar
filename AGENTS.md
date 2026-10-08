@@ -217,6 +217,14 @@ hooks, model wrappers, the FCOS spec, registrations and configs.
 ## YoloSink
 
 - `_jsonable_metadata` must never raise (`tests/test_yolo_sink.py::test_jsonable_metadata_*`).
+- `image_mode: grey` writes ONE channel only for a picture whose three are equal, and refuses any
+  other (never reduces colour); `data.yaml` keeps `channels: 3`, what every reader turns it into.
+  Pictures are written on `image_threads` threads under the index their record got in `write()`, at most
+  `2 × image_threads` waiting; `flush()` drains them before any sidecar. The files equal a one-thread
+  run's. (`tests/test_yolo_sink.py::TestGreyPictures`, `::TestPicturesWrittenOnThreads`)
+- `_bridged_ring` is held vertex for vertex to the walk its docstring describes, ties included
+  (`tests/test_yolo_sink.py::test_the_ring_is_the_walk_its_description_gives_ties_included`); a faster
+  form changes how the distances are gathered, never the walk.
 
 ## Packaging, release, tests
 

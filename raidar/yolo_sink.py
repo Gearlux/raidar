@@ -73,17 +73,32 @@ exactly what it always wrote. With polygons:
   or an earlier one an ``append`` continues. Nothing is recorded in ``data.yaml``: RF-DETR 1.9.3's
   YOLO reader tells a box line (5 fields) from a polygon line (7 or more) line by line and builds
   masks when the model asks for them, and Ultralytics decides per label file.
+
+**Grey pictures.** ``image_mode: grey`` writes a picture whose three channels are equal (a spectrogram's
+grey scale) as ONE channel — a PNG mode ``L``, a third of the pixels to compress (measured on 60
+spectrogram pictures of 1024 x 1024: 27.6 ms and 0.80 MB a picture as RGB, 12.5 ms and 0.52 MB grey). Every
+reader of the folder turns it back into the same three channels: RF-DETR's YOLO reader and this
+package's source call ``convert("RGB")``, Ultralytics reads with OpenCV's colour flag — so ``data.yaml``
+keeps ``channels: 3``, what the model sees. A picture whose channels differ is refused, never reduced.
+
+**Writer threads.** The pictures are encoded and written on ``image_threads`` threads — PIL's encoder runs
+outside Python's lock (60 PNGs: 1.74 s on one thread, 0.23 s on eight) — each under the index its record
+was given when it arrived, so the files are the ones a single thread writes. At most twice as many
+pictures as threads wait at once; a write that fails stops the run at the next record or at ``flush``.
 """
 
 from __future__ import annotations
 
 import json
 import shutil
+from collections import deque
+from concurrent.futures import Future, ThreadPoolExecutor
 from pathlib import Path
-from typing import Any, Dict, List, Literal, Optional, Sequence, Tuple, get_args
+from typing import Annotated, Any, Deque, Dict, List, Literal, Optional, Sequence, Tuple, get_args
 
 import numpy as np
 import yaml
+from annotated_types import Interval
 from confluid import configurable
 from loggair import get_logger
 from PIL import Image
@@ -98,6 +113,10 @@ YoloLayout = Literal["ultralytics", "rfdetr"]
 #: What a run does to a split that already exists: ``replace`` wipes it first (a rerun is idempotent),
 #: ``append`` continues it after its last record (a second source joins the folder).
 YoloMode = Literal["replace", "append"]
+#: How a picture's pixels are stored: ``rgb`` three channels, ``grey`` one (a picture whose channels are equal).
+ImageMode = Literal["rgb", "grey"]
+#: How many threads encode and write the pictures.
+ImageThreads = Annotated[int, Interval(ge=1)]
 #: The key of ``Boxes.extras`` (or of a dict target) under which a producer hands the sink each
 #: instance's polygons — the contract is in the module docstring. A producer imports this name rather
 #: than spelling the string.
@@ -244,34 +263,64 @@ def _bridged_ring(polygons: Sequence[np.ndarray]) -> np.ndarray:
     bridges. The first polygon is walked round from the vertex nearest its closest neighbour and
     back to that vertex, a bridge crosses to the neighbour's nearest vertex, that polygon is walked
     round and back, and so on — each next polygon is the one with a vertex nearest the vertex the
-    walk stands on (greedy, so every bridge is short). The ring then retraces the bridge vertices
+    walk stands on (greedy, so every bridge is short; on a tie the polygon listed first, entered at its
+    first such vertex). The ring then retraces the bridge vertices
     in reverse to its first point, which the closing edge of the ring reaches: every bridge is walked
     once each way and so encloses no area, under even-odd and non-zero fill alike. The first point is
     not repeated at the end. A lone polygon is its own ring.
+
+    Each step measures the distance from the vertex the walk stands on to EVERY vertex at once and
+    takes each polygon's nearest by ``np.minimum.reduceat`` — the same distances, element for element, as
+    measuring polygon by polygon (an instance of hundreds of bursts took 7.6 ms a picture that way, 0.7 ms
+    this way, every ring identical;
+    ``tests/test_yolo_sink.py::test_the_ring_is_the_walk_its_description_gives_ties_included``).
 
     Written for this sink from the shape of the problem; it copies no library's code.
     """
     if len(polygons) == 1:
         return np.asarray(polygons[0], dtype=np.float64)
-    remaining = list(range(1, len(polygons)))
-    first = min(remaining, key=lambda k: _nearest_vertices(polygons[0], polygons[k])[2])
-    start, entry, _ = _nearest_vertices(polygons[0], polygons[first])
+    shapes = [np.asarray(polygon, dtype=np.float64) for polygon in polygons]
+    counts = np.array([len(shape) for shape in shapes])
+    starts = np.concatenate([[0], np.cumsum(counts)[:-1]])
+    vertices = np.concatenate(shapes)
+    remaining = list(range(1, len(shapes)))
+    # the first bridge: polygon 0's vertices against every vertex, each polygon's nearest pair
+    from_first = np.linalg.norm(shapes[0][:, None, :] - vertices[None, :, :], axis=2).min(axis=0)
+    first = remaining[int(np.argmin(np.minimum.reduceat(from_first, starts)[remaining]))]
+    start, entry, _ = _nearest_vertices(shapes[0], shapes[first])
     order, entries = [0, first], [start, entry]
     remaining.remove(first)
     while remaining:
-        here = polygons[order[-1]][entries[-1]][None, :]
-        following = min(remaining, key=lambda k: _nearest_vertices(here, polygons[k])[2])
+        here = shapes[order[-1]][entries[-1]]
+        distance = np.linalg.norm(here[None, None, :] - vertices[None, :, :], axis=2)[0]
+        following = remaining[int(np.argmin(np.minimum.reduceat(distance, starts)[remaining]))]
         order.append(following)
-        entries.append(_nearest_vertices(here, polygons[following])[1])
+        entries.append(int(np.argmin(distance[starts[following] : starts[following] + counts[following]])))
         remaining.remove(following)
     ring: List[np.ndarray] = []
     for k, vertex in zip(order, entries):
-        walk = np.roll(polygons[k], -vertex, axis=0)  # the polygon from its bridge vertex ...
+        walk = np.roll(shapes[k], -vertex, axis=0)  # the polygon from its bridge vertex ...
         ring.extend(walk)
         ring.append(walk[0])  # ... round, and back to that vertex
     for k, vertex in reversed(list(zip(order, entries))[1:-1]):
-        ring.append(polygons[k][vertex])  # the bridge vertices again, last polygon to first
+        ring.append(shapes[k][vertex])  # the bridge vertices again, last polygon to first
     return np.asarray(ring, dtype=np.float64)
+
+
+def _grey(image: np.ndarray, record: int) -> np.ndarray:
+    """The one channel of a ``[H, W, 3]`` picture whose channels are equal; a picture whose channels differ is
+    refused, naming its record."""
+    if not (np.array_equal(image[..., 0], image[..., 1]) and np.array_equal(image[..., 0], image[..., 2])):
+        raise ValueError(
+            f"YoloSink: image_mode 'grey' writes one channel, and the picture of record {record} has three that "
+            "differ — write this folder with image_mode: rgb"
+        )
+    return np.ascontiguousarray(image[..., 0])
+
+
+def _save_picture(pixels: np.ndarray, path: Path, save_kwargs: Dict[str, Any]) -> None:
+    """Encode and write one picture (run on a writer thread)."""
+    Image.fromarray(pixels).save(path, **save_kwargs)
 
 
 def _holds_a_ring(path: Path) -> bool:
@@ -451,6 +500,9 @@ class YoloSink(Storage):
         write_coco: Also write ``annotations/<split>.json`` in COCO format alongside the YOLO-txt labels.
         input_key: Record key carrying the input image (default ``"image"``).
         target_key: Record key carrying the detection target ``Boxes`` (default ``"target"``).
+        image_mode: ``"rgb"`` (default) three channels a picture, or ``"grey"`` one — for pictures whose three
+            channels are equal; every reader turns it back into three.
+        image_threads: How many threads encode and write the pictures (default 4); the files are the same at any count.
     """
 
     def __init__(
@@ -467,8 +519,10 @@ class YoloSink(Storage):
         layout: YoloLayout = "ultralytics",
         mode: YoloMode = "replace",
         facts: Optional[List[str]] = None,
+        image_mode: ImageMode = "rgb",
+        image_threads: ImageThreads = 4,
     ) -> None:
-        # Partial / zero-arg: store config only; validate + create dirs in open().
+        # Partial / zero-arg: store config only; validate + create dirs (and the writer threads) in open().
         self.output_dir = output_dir
         self.layout: YoloLayout = layout
         self.mode: YoloMode = mode
@@ -482,7 +536,11 @@ class YoloSink(Storage):
         self.write_coco = bool(write_coco)
         self.input_key = str(input_key)
         self.target_key = str(target_key)
+        self.image_mode: ImageMode = image_mode
+        self.image_threads = image_threads
         # Per-run state (populated in open()).
+        self._writer: Optional[ThreadPoolExecutor] = None
+        self._writing: Deque["Future[None]"] = deque()
         self._root: Optional[Path] = None
         self._images_dir: Optional[Path] = None
         self._labels_dir: Optional[Path] = None
@@ -506,6 +564,13 @@ class YoloSink(Storage):
             raise ValueError(f"YoloSink: layout must be one of {list(get_args(YoloLayout))}; got {self.layout!r}.")
         if self.mode not in get_args(YoloMode):
             raise ValueError(f"YoloSink: mode must be one of {list(get_args(YoloMode))}; got {self.mode!r}.")
+        if self.image_mode not in get_args(ImageMode):
+            raise ValueError(
+                f"YoloSink: image_mode must be one of {list(get_args(ImageMode))}; got {self.image_mode!r}."
+            )
+        # confluid refuses a count under 1 when the sink is BUILT; this catches one set later.
+        if int(self.image_threads) < 1:
+            raise ValueError(f"YoloSink: image_threads must be >= 1; got {self.image_threads}.")
 
         self._root = Path(self.output_dir).expanduser()
         self._images_dir = self._root / self._images_rel()
@@ -548,6 +613,9 @@ class YoloSink(Storage):
         self._meta_lines = []
         self._segmentation = False
         self._fact_values = {key: [] for key in self.facts}
+        self._close_writer()
+        self._writer = ThreadPoolExecutor(max_workers=int(self.image_threads), thread_name_prefix="YoloSink")
+        self._writing = deque()
         return self
 
     def _next_index(self) -> int:
@@ -578,9 +646,11 @@ class YoloSink(Storage):
 
     def write(self, record: Record) -> None:
         assert self._images_dir is not None and self._labels_dir is not None, "YoloSink.write before open()"
+        assert self._writer is not None, "YoloSink.write before open()"
         idx = self._counter
         image = _to_uint8_hwc(_record_image(record, self.input_key))
         h, w = int(image.shape[0]), int(image.shape[1])
+        pixels = _grey(image, idx) if self.image_mode == "grey" else image
         stem = f"{idx:0{self.index_padding}d}"
         image_filename = f"{stem}.{self.image_format}"
 
@@ -590,7 +660,9 @@ class YoloSink(Storage):
         self._segmentation = self._segmentation or polygons is not None
 
         save_kwargs: Dict[str, Any] = {"quality": self.jpeg_quality} if self.image_format == "jpg" else {}
-        Image.fromarray(image).save(self._images_dir / image_filename, **save_kwargs)
+        self._writing.append(self._writer.submit(_save_picture, pixels, self._images_dir / image_filename, save_kwargs))
+        while len(self._writing) > 2 * int(self.image_threads):  # a bounded number of pictures held at once
+            self._writing.popleft().result()
 
         lines = _yolo_lines(target, h, w, polygons)
         (self._labels_dir / f"{stem}.txt").write_text("\n".join(lines))
@@ -619,6 +691,8 @@ class YoloSink(Storage):
 
     def flush(self) -> None:
         assert self._root is not None, "YoloSink.flush before open()"
+        while self._writing:  # every picture on disk (a failed write raises here) before the sidecars name them
+            self._writing.popleft().result()
         self._write_one_form_per_split()
         if self.write_coco:
             sidecar = self._coco_sidecar()
@@ -638,8 +712,15 @@ class YoloSink(Storage):
         logger.info(f"[{self.split}] wrote {self._counter} images to {self._images_dir}")
 
     def close(self) -> None:
-        # flush() does the finalisation; nothing extra to release.
-        pass
+        # flush() does the finalisation; close() releases the writer threads (a run stopped by an error cancels
+        # the pictures not started yet).
+        self._close_writer()
+
+    def _close_writer(self) -> None:
+        if self._writer is not None:
+            self._writer.shutdown(wait=True, cancel_futures=True)
+            self._writer = None
+        self._writing = deque()
 
     # ------------------------------------------------------------------
 

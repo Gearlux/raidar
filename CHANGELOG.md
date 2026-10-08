@@ -7,6 +7,11 @@ All notable changes to this project are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- **`YoloSink(image_mode="grey")`** writes a grey picture (three equal channels) as one channel — 2.2x
+  faster to encode and a third smaller; every reader turns it back into the same three channels, and a
+  picture whose channels differ is refused.
+- **`YoloSink(image_threads=4)`** encodes and writes the pictures on threads, each under its record's
+  index — the same files as one thread writes.
 - **Instance masks through `YoloSink`.** A record's `Boxes` target may carry each instance's
   polygons in `extras["polygons"]` (`raidar.POLYGONS` names the key; per box a list of non-overlapping
   polygons of `[x, y]` pixel points, `[]` for a box with no mask of its own). The sink writes the
