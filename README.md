@@ -265,7 +265,17 @@ runnable: !class:raidar.RFDETRDetector
 Beyond the ergonomic knobs, **`train_config:` reaches every RF-DETR parameter**: the mapping is
 handed verbatim to RF-DETR's own config builder, whose pydantic `TrainConfig` validates it — so
 any knob an RF-DETR release adds is immediately configurable with no raidar edit. Raidar-derived
-values are a FLOOR; a key you pin wins.
+values are a FLOOR; a key you pin wins. **`model_config:` is the same pass-through for the MODEL's
+settings, which are fixed when it is built** (`group_detr`, `num_queries`, …); `num_classes`,
+`resolution` and the weights have parameters of their own and are refused there:
+
+```yaml
+runnable: !class:raidar.RFDETRDetector
+  variant: seg-medium
+  model_config: { group_detr: 8 }   # default 13; the mask loss's memory scales with it
+```
+
+A lower `group_detr` loads the published weights only partly (the dropped groups' tensors are skipped).
 
 **Pin a seed if you want a run you can compare against itself** — RF-DETR's `TrainConfig.seed`
 defaults to `None`, i.e. it seeds nothing:

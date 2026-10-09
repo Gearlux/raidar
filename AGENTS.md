@@ -60,7 +60,7 @@ hooks, model wrappers, the FCOS spec, registrations and configs.
 - rfdetr: no `predict` (prediction is `LightningDetector` + `RFDETRModel`); the run-name knob is
   `run_name`, never `run`, which would shadow `run()`
   (`tests/test_rfdetr_detector.py::test_run_name_does_not_shadow_run_method`);
-  `train_config:` merges verbatim over the floor; `fit` finishes its manifest with
+  `train_config:` merges verbatim over the floor, `model_config:` is the same pass-through to the model's build-time settings (`group_detr`, …; keys with a parameter of their own are refused: `tests/test_rfdetr_detector.py::test_model_config_refuses_a_key_with_its_own_parameter`); `fit` finishes its manifest with
   `capture_log_file(..., status="success")`; Stream mode is drift-guarded by the gated
   `::test_stream_train_smoke`.
 - The RF-DETR variants are ONE table, `raidar.rfdetr._VARIANT_CLASSES`, and the two Literals are

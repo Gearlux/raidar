@@ -67,6 +67,7 @@ def _build_rfdetr(
     pretrained_detector: bool,
     resolution: Optional[int],
     weights_file: Optional[str] = None,
+    model_config: Optional[Dict[str, Any]] = None,
 ) -> Any:
     """Instantiate a high-level ``RFDETR`` variant and return it.
 
@@ -79,7 +80,11 @@ def _build_rfdetr(
 
     cls_name = _VARIANT_CLASSES[variant]
     rfdetr_cls = getattr(rfdetr, cls_name)
-    kwargs: Dict[str, Any] = {"num_classes": int(num_classes)}
+    taken = sorted({"num_classes", "resolution", "pretrain_weights"} & set(model_config or {}))
+    if taken:
+        raise ValueError(f"model_config must not set {taken}: each has a parameter of its own")
+    kwargs: Dict[str, Any] = dict(model_config or {})
+    kwargs["num_classes"] = int(num_classes)
     if weights_file is not None:
         kwargs["pretrain_weights"] = weights_file
     elif not pretrained_detector:

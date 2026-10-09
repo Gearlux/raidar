@@ -151,6 +151,11 @@ class RFDETRDetector(TorchRunner, ProgressReporting):
             OVER the floor this class derives and handed verbatim to
             ``rf.get_train_config(**…)`` / ``rf.train(**…)``, where RF-DETR's own pydantic
             ``TrainConfig`` validates it. A key pinned here WINS over the floor.
+        model_config: The pass-through to RF-DETR's MODEL settings, fixed when the model is built
+            (``group_detr``, ``num_queries``, …) — validated by RF-DETR's own config. ``num_classes``,
+            ``resolution`` and the weights have parameters of their own and are refused here. A
+            lower ``group_detr`` than the variant's default shrinks a segmentation run's mask
+            memory (it scales with the groups) and loads the published weights only partly.
         trackers: matrainer trackers — one or a list. RF-DETR's loop is upstream-owned, so they
             receive the run's PROVENANCE (git state, resolved config, hyperparameters, manifest,
             log file); RF-DETR's own logger knobs (via ``train_config``) keep the per-step curves.
@@ -181,6 +186,7 @@ class RFDETRDetector(TorchRunner, ProgressReporting):
         num_classes: Optional[int] = None,
         class_names: Optional[Dict[int, str]] = None,
         train_config: Optional[Dict[str, Any]] = None,
+        model_config: Optional[Dict[str, Any]] = None,
         trackers: Optional[Union[Partial[Tracker], List[Partial[Tracker]]]] = None,
         metric_names: Optional[Partial[MetricNames]] = None,
         metrics_sidecar_path: Optional[str] = None,
@@ -204,6 +210,7 @@ class RFDETRDetector(TorchRunner, ProgressReporting):
         self.num_classes = int(num_classes) if num_classes is not None else None
         self.class_names = dict(class_names) if class_names else None
         self.train_config = dict(train_config) if train_config else {}
+        self.model_config = dict(model_config) if model_config else {}
         # Stored VERBATIM (lazy-init mandate); `_live_trackers()` normalizes + flows at run time.
         self.trackers: Optional[Union[Partial[Tracker], List[Partial[Tracker]]]] = trackers
         self.metric_names: Optional[Partial[MetricNames]] = metric_names
@@ -357,6 +364,7 @@ class RFDETRDetector(TorchRunner, ProgressReporting):
             num_classes=num_classes,
             pretrained_detector=pretrained,
             resolution=self.resolution,
+            model_config=self.model_config,
         )
 
     def _seed_before_the_model_is_built(self) -> None:
