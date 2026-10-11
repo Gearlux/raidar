@@ -302,7 +302,8 @@ checkpoint (`weights:`). The wired `trackers:` receive the run's **record** (pro
 manifest, log file, final-metrics sidecar); RF-DETR's own per-step curves stay with its native
 `mlflow:` / `tensorboard:` knobs. There is no `predict` here — prediction runs through the
 lightning backend with `raidar.RFDETRModel` (the native model module, which also loads RF-DETR
-checkpoints for evaluation under `LightningDetector`).
+checkpoints for evaluation under `LightningDetector`), or, for a checkpoint this backend trained —
+a `seg-*` one included, masks and all — through `raidar.RFDETRPredictor` (below).
 
 ### Writing a detection Stream to disk (`raidar.YoloSink`)
 
@@ -454,6 +455,7 @@ by class, the union of both folders' picture scales in `data.yaml`, each record'
 | `torchvision.models.detection.fasterrcnn_*` / `retinanet_*` / `fcos_*` / `ssd*` | Used **raw** — they conform to the native forward contract directly. Registered as `detection_model` builders (below). |
 | `raidar.TorchVisionDetectionModel` | The same torchvision zoo behind ONE configured wrapper — pretrained `weights` as a plain value, an eval-time `score_threshold`, a `label_indexing` knob, and a `checkpoint_path` to load a trained model back for inference (below). |
 | `raidar.RFDETRModel` | RF-DETR family as a native torchvision-style model module. |
+| `raidar.RFDETRPredictor` | Prediction from one of RF-DETR's own checkpoint files — any variant, the model rebuilt from what the file records; boxes, and instance masks for a `seg-*` model (below). |
 | `raidar.HuggingFaceDetectionModel` | ONE light wrapper — `model_name:` reaches any Hub object-detection checkpoint (D-FINE, RT-DETRv2, DETR, Deformable-DETR, …). |
 | `raidar.fcos.*` | The shared spec's five native implementations (above). |
 
@@ -507,6 +509,36 @@ variant's zoo does not publish logs a warning and builds with random init instea
 constructor already refuses names outside the declared set). Training still works through the
 wrapper (the loss dict passes through untouched), but the example config deliberately keeps
 the raw builders for that role.
+
+### Predicting from an RF-DETR checkpoint — `RFDETRPredictor`
+
+A checkpoint the rfdetr backend wrote (`checkpoint_best_total.pth`, `checkpoint_best_ema.pth`) records
+the model it is: the variant, the resolution, the query groups (`group_detr`), the head and its class
+names. `raidar.RFDETRPredictor` rebuilds the model from that record (rfdetr's own
+`RFDETR.from_checkpoint`), so the checkpoint path is the only thing a config states — a seg model
+trained with `model_config: {group_detr: 4}` loads without the setting repeated (a model built from
+the variant's own defaults has 13 groups and refuses those weights):
+
+```yaml
+model: !class:raidar.rfdetr.RFDETRPredictor
+  checkpoint_path: runs/seg_medium/checkpoint_best_total.pth
+  score_threshold: 0.3          # a detection scoring at or below this is dropped
+```
+
+It answers the torchvision eval contract the prediction ops call — `eval()`, `to(device)`,
+`model(images) -> [{boxes, scores, labels}]` — plus `masks` for a `seg-*` model:
+
+| key | shape | meaning |
+|---|---|---|
+| `boxes` | `[N, 4]` float | xyxy in the INPUT picture's pixels (any size: RF-DETR resizes to its resolution and back) |
+| `scores` | `[N]` float | confidence |
+| `labels` | `[N]` int64 | 0-based into `predictor.class_names` (the checkpoint's own names); RF-DETR's no-object slot is dropped |
+| `masks` | `[N, H, W]` bool | each instance's mask at the input picture's size — a `seg-*` checkpoint only |
+
+A picture is `[3, H, W]` floats in `[0, 1]`, an `H x W x 3` uint8 array, or a grey one (`[H, W]`,
+`[1, H, W]`) read as its three equal channels — what training's reader made of a one-channel PNG.
+The file is read on the first prediction, not at construction. It predicts only: training goes
+through the rfdetr backend, or `RFDETRModel` under the lightning backend.
 
 ## Discovery
 

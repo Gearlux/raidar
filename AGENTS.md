@@ -57,7 +57,8 @@ hooks, model wrappers, the FCOS spec, registrations and configs.
   the `device:` knob writes the private `dataloaders._device` on purpose.
 - huggingface: no loss slot, `registrations` is `None`, and `transformers` objects stay deferred
   dotted strings (`tests/test_huggingface_detector.py::test_transformers_stays_a_deferred_dotted_target`).
-- rfdetr: no `predict` (prediction is `LightningDetector` + `RFDETRModel`); the run-name knob is
+- rfdetr: no `predict` (prediction is `LightningDetector` + `RFDETRModel`, or `RFDETRPredictor` for one of
+  RF-DETR's own checkpoint files); the run-name knob is
   `run_name`, never `run`, which would shadow `run()`
   (`tests/test_rfdetr_detector.py::test_run_name_does_not_shadow_run_method`);
   `train_config:` merges verbatim over the floor, `model_config:` is the same pass-through to the model's build-time settings (`group_detr`, …; keys with a parameter of their own are refused: `tests/test_rfdetr_detector.py::test_model_config_refuses_a_key_with_its_own_parameter`); `fit` finishes its manifest with
@@ -68,6 +69,12 @@ hooks, model wrappers, the FCOS spec, registrations and configs.
   on disk, a box label read as its four-corner polygon, a polygon line as that polygon) and the four detection names on
   `RFDETRModel`, which builds box targets and no masks. A new variant is a table row
   (`tests/test_rfdetr.py::TestTheVariantTable`).
+- `RFDETRPredictor` predicts only, from RF-DETR's own checkpoint file, and takes NO architecture setting: the variant,
+  resolution, `group_detr`, head and class names come from the file (`RFDETR.from_checkpoint`) — never add a
+  `variant`/`model_config` knob to it, and never open `RFDETRModel`'s variants to `seg-*` to predict masks (it is the
+  lightning backend's training wrapper). Boxes and masks are in the INPUT picture's pixels, a label outside the
+  vocabulary (the no-object slot) is dropped, a grey picture is read as three equal channels; the file is read at the
+  first prediction. §10. (`tests/test_rfdetr_predictor.py`)
 - `YoloSink.layout` is the only difference between the Ultralytics folder (`images/<split>`) and
   RF-DETR's (`<split>/images`, the COCO sidecar at `<split>/_annotations.coco.json`); the default
   stays `ultralytics`. (`tests/test_yolo_sink.py::test_the_rfdetr_layout_is_what_rfdetr_reads_and_the_default_is_not`)

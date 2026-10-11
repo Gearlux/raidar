@@ -7,6 +7,9 @@ All notable changes to this project are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- **`raidar.RFDETRPredictor`** predicts from one of RF-DETR's own checkpoint files, the model rebuilt
+  from what the file records (variant, resolution, query groups, head, class names): boxes, scores and
+  labels in the input picture's pixels, and each instance's mask for a `seg-*` checkpoint.
 - **`YoloSink(image_mode="grey")`** writes a grey picture (three equal channels) as one channel — 2.2x
   faster to encode and a third smaller; every reader turns it back into the same three channels, and a
   picture whose channels differ is refused.

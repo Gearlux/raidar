@@ -547,3 +547,55 @@ change what a record without the key writes. Pins:
 - `tests/test_yolo_sink.py::TestRfdetrReadsTheFolderAsSegmentation`
 - `tests/test_yolo_source.py::TestPolygons`
 - `tests/test_yolo_source.py::TestMasksSurviveTheRoundTrip`
+
+---
+
+## 10. Prediction from RF-DETR's own checkpoint is a class of its own, described by the file (2026-10-11)
+
+**Context.** A `seg-*` model the rfdetr backend trained could not be loaded to predict. `RFDETRModel`, the
+lightning backend's model, offers the four detection variants on purpose (it builds box targets and no masks, so a
+seg variant would train nothing it can score), and builds from the variant's defaults: measured on a seg-medium
+trained with `model_config: {group_detr: 4}` —
+
+```
+RFDETRModel(variant="seg-medium", ...)   → ValidationError: Input should be 'nano', 'small', 'medium' or 'large'
+(the variant forced past that check)     → size mismatch for refpoint_embed.weight: [800, 4] in the checkpoint,
+                                            [2600, 4] in the model (13 query groups, the variant's default)
+```
+
+Nothing returned a mask, either. But the checkpoint records the model it is — `model_name` (`RFDETRSegMedium`),
+`model_config` (resolution 1008, `group_detr` 4, 33 classes), the class names — and `rfdetr`'s own
+`RFDETR.from_checkpoint` rebuilds it from that record.
+
+**Decision.** A prediction-only class, `RFDETRPredictor(checkpoint_path, score_threshold)`, beside `RFDETRModel` in
+`rfdetr.py`: built from the file through `from_checkpoint` at the first prediction, it predicts through the library's
+own `predict` (its resize, normalisation and post-processing) and answers the torchvision eval contract plus `masks`,
+everything in the INPUT picture's pixels. It takes no architecture setting at all. Rejected: opening `RFDETRModel`'s
+variants to `seg-*` with a `model_config` pass-through — it breaks the training wrapper's box-only rule, makes a
+config restate settings the file already holds (and fail when they drift), and still returns no masks; and a
+`variant` knob on the predictor — the file names its class.
+
+**Consequences.** A config names a checkpoint and a score cut, nothing else. Any input size: RF-DETR resizes to its
+resolution and maps everything back, so a pipeline feeds the picture it trained on (a 1024 px picture to a 1008 px
+model) instead of rendering at the model's size. It is not an `nn.Module`: the network is the library's, held by its
+`RFDETR` object, and `to()` moves that object's device too — its `predict` places the input by it. A Lightning
+`.ckpt` of rfdetr <= 1.11 carries no `args` and is refused by the library: predict from the `.pth` files.
+
+**Example.** Measured on that seg-medium on a 1024 x 1024 validation picture of an LTE capture (score cut 0.3, CUDA,
+0.05 s a picture warm):
+
+```yaml
+model: !class:raidar.rfdetr.RFDETRPredictor
+  checkpoint_path: runs/signal_detection/a/checkpoint_best_total.pth
+  score_threshold: 0.3
+```
+
+```
+RFDETRSegMedium, resolution 1008, group_detr 4, 33 class names — all read off the file
+boxes [7, 4] · scores [7] · labels [7] · masks [7, 1024, 1024] bool
+  label 1 0.97 box [343, 0, 590, 1024]  mask 200 740 px
+```
+
+**What you may change.** The input forms `_rgb_picture` accepts, and the output keys, appending only. What you may
+not do: give it an architecture setting, or teach `RFDETRModel` the seg variants to predict masks.
+Pins: `tests/test_rfdetr_predictor.py`.

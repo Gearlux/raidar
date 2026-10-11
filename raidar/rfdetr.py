@@ -23,10 +23,12 @@ normalisation is applied internally.
 import os
 from collections.abc import Mapping
 from types import SimpleNamespace
-from typing import Any, Dict, List, Literal, Optional, Union, cast
+from typing import Annotated, Any, Dict, List, Literal, Optional, Union, cast
 
+import numpy as np
 import torch
 import torch.nn as nn
+from annotated_types import Interval
 from confluid import configurable
 from loggair import get_logger
 from matrainer.torch import load_lightning_checkpoint
@@ -469,8 +471,129 @@ class RFDETRModel(nn.Module):
         return predictions
 
 
+#: A score cut, between 0 and 1 — the widget range a form or a picker offers.
+Probability = Annotated[float, Interval(ge=0.0, le=1.0)]
+
+
+@configurable(task="detection", role="model")
+class RFDETRPredictor:
+    """Prediction from one of RF-DETR's OWN checkpoints — boxes, and instance masks for a ``seg-*`` model.
+
+    The PREDICTION twin of :class:`RFDETRModel`, which stays the Lightning backend's TRAINING wrapper and
+    builds box targets only (its variants are the four detectors on purpose). A checkpoint written by
+    RF-DETR's training (``checkpoint_best_total.pth``) carries everything its model is: the class, the
+    resolution, the query groups (``group_detr``), the head and its class names. This reads all of it from
+    the file through ``rfdetr.RFDETR.from_checkpoint`` — so a seg model trained with ``group_detr: 4``
+    loads without anything restated; the variant's own default (13 groups) would refuse its weights.
+
+    The contract is the torchvision eval one the detection ops call (``eval()``, ``to(device)``,
+    ``model(images) -> [{boxes, scores, labels}]``) plus ``masks`` when the model segments:
+
+    * ``images``: a list of pictures of ANY size — ``[3, H, W]`` floats in ``[0, 1]``, ``H x W x 3``
+      uint8 arrays, or a grey picture (``[H, W]`` / ``[1, H, W]``) read as its three equal channels, the
+      way training read a one-channel picture (``convert("RGB")``). RF-DETR resizes each to its resolution.
+    * per picture: ``boxes`` ``[N, 4]`` xyxy and ``masks`` ``[N, H, W]`` bool, both in the INPUT
+      picture's pixels; ``scores`` ``[N]``; ``labels`` ``[N]`` int64, 0-based into :attr:`class_names`.
+      A label outside the vocabulary (RF-DETR's no-object slot) is dropped.
+
+    Not an ``nn.Module``: the network is the library's, held by its ``RFDETR`` object, and ``to()`` must
+    move that object's device too (its ``predict`` places the input by it), which a module's ``to``
+    would not.
+
+    Args:
+        checkpoint_path: The RF-DETR checkpoint to predict with (``checkpoint_best_total.pth`` or
+            ``checkpoint_best_ema.pth``; a Lightning ``.ckpt`` of rfdetr <= 1.11 carries no ``args`` and
+            is refused by the library). Required to predict; read on the first prediction.
+        score_threshold: A detection scoring at or below this is dropped.
+    """
+
+    def __init__(self, checkpoint_path: str = "", score_threshold: Probability = 0.5) -> None:
+        self.checkpoint_path = checkpoint_path
+        self.score_threshold = float(score_threshold)
+        # Lazy-init: the library and the file are touched on the first prediction (or `solidify()`).
+        self._rf: Any = None
+        self._device: str = "cpu"
+
+    def solidify(self) -> Any:
+        """Build (once) and return the library's ``RFDETR`` object, on the device last asked for."""
+        if self._rf is None:
+            if not self.checkpoint_path:
+                raise ValueError("RFDETRPredictor: checkpoint_path is not set — name an RF-DETR checkpoint file")
+            path = os.path.expanduser(os.path.expandvars(self.checkpoint_path))
+            if not os.path.exists(path):
+                raise FileNotFoundError(f"RFDETRPredictor: checkpoint {path} does not exist")
+            from rfdetr.detr import RFDETR
+
+            logger.debug(f"RFDETRPredictor: loading {path} on {self._device}")
+            self._rf = RFDETR.from_checkpoint(path, device=self._device)
+        return self._rf
+
+    def eval(self) -> "RFDETRPredictor":
+        """Prediction only — there is no training mode; kept for the eval contract callers use."""
+        return self
+
+    def to(self, device: Union[str, torch.device]) -> "RFDETRPredictor":
+        """Predict on ``device`` — remembered for the build, applied at once to a model already built."""
+        self._device = str(device)
+        if self._rf is not None:
+            self._rf.model.model.to(self._device)
+            self._rf.model.device = torch.device(self._device)
+        return self
+
+    @property
+    def class_names(self) -> List[str]:
+        """The checkpoint's class names, by label id (reading it builds the model)."""
+        return list(self.solidify().class_names)
+
+    @property
+    def model_refs(self) -> List[ModelRef]:
+        """The weight artifact this predictor loads — the checkpoint file (stored config only, no build)."""
+        return [file_model_ref(self.checkpoint_path)] if self.checkpoint_path else []
+
+    def __call__(self, images: List[Any]) -> List[Dict[str, Tensor]]:
+        rf = self.solidify()
+        detections = rf.predict(
+            [_rgb_picture(image) for image in images], threshold=self.score_threshold, include_source_image=False
+        )
+        if not isinstance(detections, list):
+            detections = [detections]
+        known = len(rf.class_names)
+        outputs: List[Dict[str, Tensor]] = []
+        for found in detections:
+            keep = np.asarray(found.class_id) < known
+            out = {
+                "boxes": torch.as_tensor(np.asarray(found.xyxy, dtype=np.float32)[keep]).reshape(-1, 4),
+                "scores": torch.as_tensor(np.asarray(found.confidence, dtype=np.float32)[keep]),
+                "labels": torch.as_tensor(np.asarray(found.class_id, dtype=np.int64)[keep]),
+            }
+            if found.mask is not None:
+                out["masks"] = torch.as_tensor(np.asarray(found.mask, dtype=bool)[keep])
+            outputs.append(out)
+        return outputs
+
+
+def _rgb_picture(image: Any) -> Any:
+    """One picture as RF-DETR's ``predict`` takes it: a ``[3, H, W]`` float tensor, or an ``H x W x 3`` uint8 array.
+
+    A grey picture becomes its three equal channels — what training's reader made of a one-channel PNG.
+    """
+    if isinstance(image, np.ndarray):
+        if image.ndim == 2:
+            image = np.repeat(image[..., None], 3, axis=-1)
+        elif image.ndim == 3 and image.shape[-1] == 1:
+            image = np.repeat(image, 3, axis=-1)
+        return image if image.dtype == np.uint8 else torch.as_tensor(np.moveaxis(image, -1, 0)).float()
+    tensor = torch.as_tensor(image)
+    if tensor.dim() == 2:
+        tensor = tensor[None]
+    if tensor.shape[0] == 1:
+        tensor = tensor.expand(3, *tensor.shape[1:])
+    return tensor.float()
+
+
 __all__ = [
     "RFDETRModel",
+    "RFDETRPredictor",
     "VariantName",
     "_build_rfdetr_targets",
     "_decode_rfdetr_predictions",
