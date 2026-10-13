@@ -22,26 +22,34 @@ rfdetr_postprocess = pytest.importorskip("rfdetr.models.postprocess")
 QUERIES, CLASSES, RESOLUTION = 6, 4, 32  # the head's slots: three classes and the no-object slot
 
 
+MASK_SIDE = 8  # the stand-in mask head's resolution
+
+
 class _Network(nn.Module):
     """A detector head whose logits and boxes depend on the picture's mean colour — so the resize and the
-    normalization in front of it matter to the test."""
+    normalization in front of it matter to the test; with ``masks`` it also emits a mask logit per query."""
 
-    def __init__(self) -> None:
+    def __init__(self, masks: bool = False) -> None:
         super().__init__()
         torch.manual_seed(0)
         self.head = nn.Linear(3, QUERIES * CLASSES + QUERIES * 4)
+        self.mask_head = nn.Linear(3, QUERIES * MASK_SIDE * MASK_SIDE) if masks else None
 
     def forward(self, x: torch.Tensor) -> Dict[str, torch.Tensor]:
-        out = self.head(x.mean(dim=(2, 3)))
+        colour = x.mean(dim=(2, 3))
+        out = self.head(colour)
         logits = out[:, : QUERIES * CLASSES].view(-1, QUERIES, CLASSES) * 4.0
         boxes = torch.sigmoid(out[:, QUERIES * CLASSES :].view(-1, QUERIES, 4))
-        return {"pred_logits": logits, "pred_boxes": boxes}
+        found = {"pred_logits": logits, "pred_boxes": boxes}
+        if self.mask_head is not None:
+            found["pred_masks"] = self.mask_head(colour).view(-1, QUERIES, MASK_SIDE, MASK_SIDE) * 4.0
+        return found
 
 
-def _fake_rf(num_select: int = 5) -> Any:
+def _fake_rf(num_select: int = 5, masks: bool = False) -> Any:
     model = SimpleNamespace(
-        model=_Network().eval(),
-        postprocess=rfdetr_postprocess.PostProcess(num_select=num_select),
+        model=_Network(masks=masks).eval(),
+        postprocess=rfdetr_postprocess.PostProcess(num_select=num_select, upsample_masks_to_image_size=False),
         resolution=RESOLUTION,
         device=torch.device("cpu"),
         args=SimpleNamespace(num_classes=CLASSES - 1),
@@ -86,7 +94,8 @@ def _library_reference(
     rows = []
     for result in results:
         keep = (result["scores"] > threshold) & (result["labels"] < len(rf.class_names))
-        rows.append({key: result[key][keep] for key in ("boxes", "scores", "labels")})
+        keys = ("boxes", "scores", "labels") + (("masks",) if "masks" in result else ())
+        rows.append({key: result[key][keep] for key in keys})
     return rows
 
 
@@ -160,3 +169,28 @@ def test_a_real_checkpoint_gives_the_predictor_s_own_boxes() -> None:
 
     assert kept["labels"].tolist() == expected["labels"].tolist()
     assert torch.allclose(kept["boxes"], expected["boxes"], atol=1e-2)
+
+
+def test_a_segmenting_model_s_mask_logits_are_the_library_s_selected_masks() -> None:
+    predictor = RFDETRPredictor(checkpoint_path="unused.pth", score_threshold=0.3)
+    predictor._rf = _fake_rf(masks=True)
+    pictures = _pictures(seed=3)
+
+    found = lower_rfdetr_predictor(predictor, pictures, _Context())  # type: ignore[arg-type]
+    expected = _library_reference(predictor._rf, pictures, 0.3)
+
+    assert found["mask_logits"].shape == (2, 5, MASK_SIDE, MASK_SIDE)
+    for index in range(2):
+        keep = found["keep"][index]
+        cut = found["mask_logits"][index][keep] > 0.0
+        assert torch.equal(cut, expected[index]["masks"][:, 0]), "the kept rows' masks at the head's resolution"
+    assert any(bool(found["keep"][i].any()) for i in range(2))
+
+
+def test_a_box_only_model_gives_no_mask_logits() -> None:
+    predictor = RFDETRPredictor(checkpoint_path="unused.pth")
+    predictor._rf = _fake_rf()
+
+    found = lower_rfdetr_predictor(predictor, _pictures(), _Context())  # type: ignore[arg-type]
+
+    assert "mask_logits" not in found
