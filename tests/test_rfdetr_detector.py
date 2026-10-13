@@ -148,6 +148,40 @@ def test_run_name_does_not_shadow_run_method() -> None:
 
 
 # ---------------------------------------------------------------------------
+# model_config: the pass-through to the RF-DETR MODEL's settings (fixed when it is built)
+# ---------------------------------------------------------------------------
+
+
+def test_model_config_reaches_the_model_constructor(monkeypatch: Any) -> None:
+    import rfdetr
+
+    import raidar.rfdetr as rfmod
+
+    built: dict = {}
+    monkeypatch.setattr(rfdetr, "RFDETRSegMedium", lambda **kw: built.update(kw), raising=False)
+    d = RFDETRDetector(variant="seg-medium", resolution=1008, num_classes=33, model_config={"group_detr": 8})
+    d._build_rf(33, True)
+    assert built == {"num_classes": 33, "resolution": 1008, "group_detr": 8}
+    assert rfmod  # the module under test
+
+
+def test_without_model_config_the_model_is_built_as_before(monkeypatch: Any) -> None:
+    import rfdetr
+
+    built: dict = {}
+    monkeypatch.setattr(rfdetr, "RFDETRSegMedium", lambda **kw: built.update(kw), raising=False)
+    RFDETRDetector(variant="seg-medium", resolution=1008)._build_rf(33, True)
+    assert built == {"num_classes": 33, "resolution": 1008}
+
+
+@pytest.mark.parametrize("key", ["num_classes", "resolution", "pretrain_weights"])
+def test_model_config_refuses_a_key_with_its_own_parameter(key: str) -> None:
+    d = RFDETRDetector(variant="seg-medium", model_config={key: 1})
+    with pytest.raises(ValueError, match=key):
+        d._build_rf(33, True)
+
+
+# ---------------------------------------------------------------------------
 # Eval checkpoint-loading path (mocked)
 # ---------------------------------------------------------------------------
 

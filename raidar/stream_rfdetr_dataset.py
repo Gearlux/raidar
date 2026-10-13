@@ -33,17 +33,24 @@ torchvision-detection convention raidar uses elsewhere,
   (RF-DETR reserves index ``K`` for the background class internally — the
   OPPOSITE of torchvision's background-at-0, so do NOT ``+1``-shift labels for
   RF-DETR). A record with no target key is fine.
+* For a seg model (``segmentation_head``), the ``Boxes``' ``extras[POLYGONS]``
+  (:mod:`raidar.yolo_sink`'s contract: per box its outlines in pixels) — each instance's mask,
+  rasterised by RF-DETR's own ``ConvertCoco``; a box without an outline is masked by its
+  rectangle.
+
+The labels are read with the picture, per item — never walked ahead of it — so a random step in
+the stream (``raidar.crop.RandomCropDetection``) cuts the picture and its boxes alike.
 """
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
 import torch
 from loggair import get_logger
 from PIL import Image
-from recordstream import Boxes, Stream, item_data, iter_key
+from recordstream import Boxes, Stream, item_data
 
 # PRIVATE rfdetr module, and it moves: `build_namespace` was renamed
 # `_namespace_from_configs` in rfdetr 1.9.0, which broke this import outright. rfdetr exposes
@@ -53,6 +60,8 @@ from recordstream import Boxes, Stream, item_data, iter_key
 from rfdetr._namespace import _namespace_from_configs
 from rfdetr.datasets.coco import ConvertCoco, make_coco_transforms, make_coco_transforms_square_div_64
 from rfdetr.training.module_data import RFDETRDataModule
+
+from raidar.yolo_sink import POLYGONS
 
 logger = get_logger(__name__)
 
@@ -123,27 +132,36 @@ def _as_i64(value: Any) -> torch.Tensor:
     return torch.as_tensor(np.asarray(value), dtype=torch.int64)
 
 
-def _target_to_coco_annotations(boxes_xyxy: torch.Tensor, labels: torch.Tensor) -> List[Dict[str, Any]]:
+def _target_to_coco_annotations(
+    boxes_xyxy: torch.Tensor, labels: torch.Tensor, polygons: Optional[Sequence[Any]] = None
+) -> List[Dict[str, Any]]:
     """``boxes [N,4] xyxy-pixel`` + ``labels [N]`` -> the COCO annotation-list ``ConvertCoco`` consumes.
 
     Boxes are emitted as ``bbox = [x, y, w, h]`` (COCO format — ``ConvertCoco``
     reconstructs xyxy + clamps); ``category_id`` is the label verbatim (already
     0-indexed, ``cat2label=None``); ``area`` is ``w*h`` (cosmetic — torchmetrics
     box-mAP ignores it); ``iscrowd=0``.
+
+    Given ``polygons`` (``Boxes.extras[POLYGONS]``, per box its outlines in pixels), each annotation also carries
+    ``segmentation``: the outlines as COCO's flat ``[x0, y0, x1, y1, ...]`` lists — or, for a box with none, its
+    rectangle, the YOLO convention that a box without an outline is its own mask.
     """
     boxes = boxes_xyxy.reshape(-1, 4)
     anns: List[Dict[str, Any]] = []
     for i in range(boxes.shape[0]):
         x0, y0, x1, y1 = (float(boxes[i, 0]), float(boxes[i, 1]), float(boxes[i, 2]), float(boxes[i, 3]))
         w, h = (x1 - x0), (y1 - y0)
-        anns.append(
-            {
-                "bbox": [x0, y0, w, h],
-                "category_id": int(labels[i]),
-                "area": float(max(w, 0.0) * max(h, 0.0)),
-                "iscrowd": 0,
-            }
-        )
+        ann: Dict[str, Any] = {
+            "bbox": [x0, y0, w, h],
+            "category_id": int(labels[i]),
+            "area": float(max(w, 0.0) * max(h, 0.0)),
+            "iscrowd": 0,
+        }
+        if polygons is not None:
+            rings = polygons[i] if i < len(polygons) and polygons[i] else []
+            flat = [[float(v) for point in ring for v in point] for ring in rings]
+            ann["segmentation"] = flat or [[x0, y0, x1, y0, x1, y1, x0, y1]]
+        anns.append(ann)
     return anns
 
 
@@ -194,36 +212,38 @@ class StreamRFDETRDataset(torch.utils.data.Dataset):
         self._stream = stream
         self._image_set = image_set
         self._input_key = str(input_key)
+        self._target_key = str(target_key)
         self._transforms = _build_transforms(image_set, resolution, ns)
-        self._convert = ConvertCoco(include_masks=False, cat2label=None)
-        # Projection-optimized label cache: walk the target key ONLY (recordstream key
-        # projection skips input/image construction) so we never decode images just to
-        # index labels. Images decode lazily per __getitem__.
-        self._labels = self._cache_labels(stream, str(target_key))
-
-    @staticmethod
-    def _cache_labels(stream: Stream, target_key: str) -> List[Dict[str, torch.Tensor]]:
-        cached: List[Dict[str, torch.Tensor]] = []
-        for target in iter_key(stream, target_key):
-            boxes, labels = _target_boxes_labels(target)
-            if boxes is not None and labels is not None:
-                cached.append({"boxes": _as_f32(boxes).reshape(-1, 4), "labels": _as_i64(labels)})
-            else:
-                cached.append(
-                    {"boxes": torch.zeros((0, 4), dtype=torch.float32), "labels": torch.zeros((0,), dtype=torch.int64)}
-                )
-        return cached
+        # A seg model (`segmentation_head`) trains on masks: each instance's outline, rasterised by RF-DETR's own
+        # converter at the picture's size, so the masks follow every later resize and crop as the disk path's do.
+        self._masks = bool(getattr(ns, "segmentation_head", False))
+        self._convert = ConvertCoco(include_masks=self._masks, cat2label=None)
+        # Nothing is read here: a picture's labels come from the SAME read as the picture (__getitem__), so a random
+        # step in the stream — a crop — cuts both alike. Until 2026-10-12 every target was walked once at
+        # construction and reused each epoch; a random crop then trained on the labels of another cut.
 
     def __len__(self) -> int:
         return len(self._stream)
 
+    def _labels_of(self, record: Any) -> Tuple[torch.Tensor, torch.Tensor, Optional[Sequence[Any]]]:
+        """``(boxes [N, 4] xyxy px, labels [N], outlines or None)`` of a record's target."""
+        target = record.get(self._target_key) if isinstance(record, dict) else None
+        boxes, labels = _target_boxes_labels(target)
+        if boxes is None or labels is None:
+            return torch.zeros((0, 4), dtype=torch.float32), torch.zeros((0,), dtype=torch.int64), None
+        outlines = None
+        if self._masks:
+            extras = getattr(target, "extras", None) or {}
+            outlines = extras.get(POLYGONS) or []
+        return _as_f32(boxes).reshape(-1, 4), _as_i64(labels), outlines
+
     def __getitem__(self, i: int) -> Any:
         record = self._stream[i]
         pil = _record_input_to_rgb_pil(_record_input(record, self._input_key))
-        cached = self._labels[i]
+        boxes, labels, outlines = self._labels_of(record)
         coco_target = {
             "image_id": i,
-            "annotations": _target_to_coco_annotations(cached["boxes"], cached["labels"]),
+            "annotations": _target_to_coco_annotations(boxes, labels, outlines),
         }
         # ConvertCoco: COCO-annotation-list -> pre-transform tensor target (xyxy-abs boxes,
         # int64 labels, image_id, area, iscrowd, orig_size, size) — identical to the disk path.

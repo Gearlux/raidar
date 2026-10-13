@@ -23,10 +23,12 @@ normalisation is applied internally.
 import os
 from collections.abc import Mapping
 from types import SimpleNamespace
-from typing import Any, Dict, List, Literal, Optional, Union, cast
+from typing import Annotated, Any, Dict, List, Literal, Optional, Union, cast, get_args
 
+import numpy as np
 import torch
 import torch.nn as nn
+from annotated_types import Interval
 from confluid import configurable
 from loggair import get_logger
 from matrainer.torch import load_lightning_checkpoint
@@ -41,20 +43,33 @@ logger = get_logger(__name__)
 #: there is no repository page to link — see :attr:`RFDETRModel.model_refs`.
 RFDETR_URI_PREFIX = "rfdetr://"
 
+#: Every RF-DETR class a config may ask for, by the name the ``variant`` knob takes: the four detectors
+#: and the five instance-segmentation models (``seg-*``), which train on the same box dataset — RF-DETR's
+#: own reader turns a box label into its four-corner polygon — through the ``rfdetr`` backend
+#: (``RFDETRDetector``). The Literals below are read off this table.
+VariantName = Literal[
+    "nano", "small", "medium", "large", "seg-nano", "seg-small", "seg-medium", "seg-large", "seg-xlarge"
+]
 _VARIANT_CLASSES: Dict[str, str] = {
     "nano": "RFDETRNano",
     "small": "RFDETRSmall",
     "medium": "RFDETRMedium",
     "large": "RFDETRLarge",
+    "seg-nano": "RFDETRSegNano",
+    "seg-small": "RFDETRSegSmall",
+    "seg-medium": "RFDETRSegMedium",
+    "seg-large": "RFDETRSegLarge",
+    "seg-xlarge": "RFDETRSegXLarge",
 }
 
 
 def _build_rfdetr(
-    variant: Literal["nano", "small", "medium", "large"],
+    variant: VariantName,
     num_classes: int,
     pretrained_detector: bool,
     resolution: Optional[int],
     weights_file: Optional[str] = None,
+    model_config: Optional[Dict[str, Any]] = None,
 ) -> Any:
     """Instantiate a high-level ``RFDETR`` variant and return it.
 
@@ -67,7 +82,11 @@ def _build_rfdetr(
 
     cls_name = _VARIANT_CLASSES[variant]
     rfdetr_cls = getattr(rfdetr, cls_name)
-    kwargs: Dict[str, Any] = {"num_classes": int(num_classes)}
+    taken = sorted({"num_classes", "resolution", "pretrain_weights"} & set(model_config or {}))
+    if taken:
+        raise ValueError(f"model_config must not set {taken}: each has a parameter of its own")
+    kwargs: Dict[str, Any] = dict(model_config or {})
+    kwargs["num_classes"] = int(num_classes)
     if weights_file is not None:
         kwargs["pretrain_weights"] = weights_file
     elif not pretrained_detector:
@@ -452,8 +471,217 @@ class RFDETRModel(nn.Module):
         return predictions
 
 
+#: A score cut, between 0 and 1 — the widget range a form or a picker offers.
+Probability = Annotated[float, Interval(ge=0.0, le=1.0)]
+
+#: How :class:`RFDETRPredictor` scores a query: ``class`` — RF-DETR's own, one detection per (query, class)
+#: pair above the cut, scored by that class; ``any_class`` — one detection per query, scored by the chance
+#: that ANY of its classes is right and named by its best one.
+ScoreMode = Literal["class", "any_class"]
+
+
+def _any_class_logits(logits: Tensor, counted: Tensor) -> Tensor:
+    """Rewrite ``[B, Q, C]`` class logits so RF-DETR's own top-k ranks each QUERY by its any-class chance.
+
+    RF-DETR scores every class of a query with its own sigmoid, so a query that is surely a signal but
+    torn between classes (0.27, 0.13, 0.13, ...) never passes a per-class cut. Here each query keeps ONE
+    slot — its best counted class — holding ``logit(1 - prod(1 - p))`` over the counted classes, and every
+    other slot is ``-inf`` (score 0). The library's post-processing then selects, boxes and masks exactly
+    as it does for real logits; nothing of it is patched or copied.
+
+    Args:
+        logits: The head's raw class logits, ``[B, Q, C]`` (the no-object slot included).
+        counted: ``[C]`` bool — the slots that count as a class (False: the no-object slot, an excluded class).
+    """
+    prob = logits.sigmoid() * counted.to(logits.dtype)
+    # 1 - prod(1 - p) as -expm1(sum(log1p(-p))): no underflow over many small scores; p = 1 gives -inf -> 1.
+    any_class = -torch.expm1(torch.log1p(-prob).sum(dim=-1))
+    best = prob.argmax(dim=-1, keepdim=True)
+    rewritten = torch.full_like(logits, float("-inf"))
+    return rewritten.scatter(-1, best, torch.logit(any_class, eps=1e-7).unsqueeze(-1).to(logits.dtype))
+
+
+class _AnyClassPostProcess:
+    """RF-DETR's ``PostProcess`` with the logits rewritten first (:func:`_any_class_logits`).
+
+    ``RFDETR.predict`` only CALLS its post-process (``self.model.postprocess(outputs, target_sizes=...,
+    score_threshold=...)``), so wrapping that call is the whole change: the rest of ``predict`` — the
+    threshold, the class names, the masks — runs as the library wrote it.
+    """
+
+    def __init__(self, inner: Any, counted: Tensor) -> None:
+        self.inner = inner  # the library's PostProcess (an nn.Module; its type is the library's private one)
+        self.counted = counted
+
+    def __call__(self, outputs: Dict[str, Tensor], *args: Any, **kwargs: Any) -> Any:
+        logits = outputs["pred_logits"]
+        rewritten = dict(outputs, pred_logits=_any_class_logits(logits, self.counted.to(logits.device)))
+        return self.inner(rewritten, *args, **kwargs)
+
+
+@configurable(task="detection", role="model")
+class RFDETRPredictor:
+    """Prediction from one of RF-DETR's OWN checkpoints — boxes, and instance masks for a ``seg-*`` model.
+
+    The PREDICTION twin of :class:`RFDETRModel`, which stays the Lightning backend's TRAINING wrapper and
+    builds box targets only (its variants are the four detectors on purpose). A checkpoint written by
+    RF-DETR's training (``checkpoint_best_total.pth``) carries everything its model is: the class, the
+    resolution, the query groups (``group_detr``), the head and its class names. This reads all of it from
+    the file through ``rfdetr.RFDETR.from_checkpoint`` — so a seg model trained with ``group_detr: 4``
+    loads without anything restated; the variant's own default (13 groups) would refuse its weights.
+
+    The contract is the torchvision eval one the detection ops call (``eval()``, ``to(device)``,
+    ``model(images) -> [{boxes, scores, labels}]``) plus ``masks`` when the model segments:
+
+    * ``images``: a list of pictures of ANY size — ``[3, H, W]`` floats in ``[0, 1]``, ``H x W x 3``
+      uint8 arrays, or a grey picture (``[H, W]`` / ``[1, H, W]``) read as its three equal channels, the
+      way training read a one-channel picture (``convert("RGB")``). RF-DETR resizes each to its resolution.
+    * per picture: ``boxes`` ``[N, 4]`` xyxy and ``masks`` ``[N, H, W]`` bool, both in the INPUT
+      picture's pixels; ``scores`` ``[N]``; ``labels`` ``[N]`` int64, 0-based into :attr:`class_names`.
+      A label outside the vocabulary (RF-DETR's no-object slot) is dropped.
+
+    Not an ``nn.Module``: the network is the library's, held by its ``RFDETR`` object, and ``to()`` must
+    move that object's device too (its ``predict`` places the input by it), which a module's ``to``
+    would not.
+
+    Args:
+        checkpoint_path: The RF-DETR checkpoint to predict with (``checkpoint_best_total.pth`` or
+            ``checkpoint_best_ema.pth``; a Lightning ``.ckpt`` of rfdetr <= 1.11 carries no ``args`` and
+            is refused by the library). Required to predict; read on the first prediction.
+        score_threshold: A detection scoring at or below this is dropped.
+        score_mode: ``class`` (default) — RF-DETR's own scoring: a detection per (query, class) pair, scored by
+            that class, so one query may answer under two classes. ``any_class`` — one detection per query,
+            scored ``1 - prod(1 - p)`` over its classes (the chance that ANY of them is right) and named by its
+            best class: a query that is surely a signal but torn between classes is kept, its name a best guess.
+        any_class_excludes: Class names left out of the ``any_class`` score and never used as a name (read
+            only in ``any_class`` mode); a name the checkpoint does not have is refused when the model is built.
+    """
+
+    def __init__(
+        self,
+        checkpoint_path: str = "",
+        score_threshold: Probability = 0.5,
+        score_mode: ScoreMode = "class",
+        any_class_excludes: Optional[List[str]] = None,
+    ) -> None:
+        if score_mode not in get_args(ScoreMode):
+            raise ValueError(
+                f"RFDETRPredictor: score_mode {score_mode!r} is not one of "
+                + ", ".join(repr(mode) for mode in get_args(ScoreMode))
+            )
+        self.checkpoint_path = checkpoint_path
+        self.score_threshold = float(score_threshold)
+        self.score_mode: ScoreMode = score_mode
+        self.any_class_excludes: List[str] = list(any_class_excludes or [])
+        # Lazy-init: the library and the file are touched on the first prediction (or `solidify()`).
+        self._rf: Any = None
+        self._device: str = "cpu"
+
+    def solidify(self) -> Any:
+        """Build (once) and return the library's ``RFDETR`` object, on the device last asked for."""
+        if self._rf is None:
+            if not self.checkpoint_path:
+                raise ValueError("RFDETRPredictor: checkpoint_path is not set — name an RF-DETR checkpoint file")
+            path = os.path.expanduser(os.path.expandvars(self.checkpoint_path))
+            if not os.path.exists(path):
+                raise FileNotFoundError(f"RFDETRPredictor: checkpoint {path} does not exist")
+            from rfdetr.detr import RFDETR
+
+            logger.debug(f"RFDETRPredictor: loading {path} on {self._device}")
+            rf = RFDETR.from_checkpoint(path, device=self._device)
+            if self.score_mode == "any_class":
+                # Typed `PostProcess` by the library; the wrapper only has to be CALLED like one (predict's one use).
+                rf.model.postprocess = cast(Any, _AnyClassPostProcess(rf.model.postprocess, self._counted_slots(rf)))
+            self._rf = rf
+        return self._rf
+
+    def _counted_slots(self, rf: Any) -> Tensor:
+        """The class-logit slots ``any_class`` counts: every class of the checkpoint but the excluded ones.
+
+        The head has one slot more than the vocabulary (the no-object slot), and it never counts.
+        """
+        names = list(rf.class_names)
+        unknown = [name for name in self.any_class_excludes if name not in names]
+        if unknown:
+            raise ValueError(
+                f"RFDETRPredictor: any_class_excludes names {', '.join(repr(n) for n in unknown)}, which the "
+                f"checkpoint {self.checkpoint_path} does not have — its classes: {', '.join(names)}"
+            )
+        slots = int(getattr(rf.model.args, "num_classes", len(names))) + 1
+        counted = torch.zeros(max(slots, len(names)), dtype=torch.bool)
+        counted[: len(names)] = True
+        for name in self.any_class_excludes:
+            counted[names.index(name)] = False
+        return counted
+
+    def eval(self) -> "RFDETRPredictor":
+        """Prediction only — there is no training mode; kept for the eval contract callers use."""
+        return self
+
+    def to(self, device: Union[str, torch.device]) -> "RFDETRPredictor":
+        """Predict on ``device`` — remembered for the build, applied at once to a model already built."""
+        self._device = str(device)
+        if self._rf is not None:
+            self._rf.model.model.to(self._device)
+            self._rf.model.device = torch.device(self._device)
+        return self
+
+    @property
+    def class_names(self) -> List[str]:
+        """The checkpoint's class names, by label id (reading it builds the model)."""
+        return list(self.solidify().class_names)
+
+    @property
+    def model_refs(self) -> List[ModelRef]:
+        """The weight artifact this predictor loads — the checkpoint file (stored config only, no build)."""
+        return [file_model_ref(self.checkpoint_path)] if self.checkpoint_path else []
+
+    def __call__(self, images: List[Any]) -> List[Dict[str, Tensor]]:
+        rf = self.solidify()
+        detections = rf.predict(
+            [_rgb_picture(image) for image in images], threshold=self.score_threshold, include_source_image=False
+        )
+        if not isinstance(detections, list):
+            detections = [detections]
+        known = len(rf.class_names)
+        outputs: List[Dict[str, Tensor]] = []
+        for found in detections:
+            keep = np.asarray(found.class_id) < known
+            out = {
+                "boxes": torch.as_tensor(np.asarray(found.xyxy, dtype=np.float32)[keep]).reshape(-1, 4),
+                "scores": torch.as_tensor(np.asarray(found.confidence, dtype=np.float32)[keep]),
+                "labels": torch.as_tensor(np.asarray(found.class_id, dtype=np.int64)[keep]),
+            }
+            if found.mask is not None:
+                out["masks"] = torch.as_tensor(np.asarray(found.mask, dtype=bool)[keep])
+            outputs.append(out)
+        return outputs
+
+
+def _rgb_picture(image: Any) -> Any:
+    """One picture as RF-DETR's ``predict`` takes it: a ``[3, H, W]`` float tensor, or an ``H x W x 3`` uint8 array.
+
+    A grey picture becomes its three equal channels — what training's reader made of a one-channel PNG.
+    """
+    if isinstance(image, np.ndarray):
+        if image.ndim == 2:
+            image = np.repeat(image[..., None], 3, axis=-1)
+        elif image.ndim == 3 and image.shape[-1] == 1:
+            image = np.repeat(image, 3, axis=-1)
+        return image if image.dtype == np.uint8 else torch.as_tensor(np.moveaxis(image, -1, 0)).float()
+    tensor = torch.as_tensor(image)
+    if tensor.dim() == 2:
+        tensor = tensor[None]
+    if tensor.shape[0] == 1:
+        tensor = tensor.expand(3, *tensor.shape[1:])
+    return tensor.float()
+
+
 __all__ = [
     "RFDETRModel",
+    "RFDETRPredictor",
+    "ScoreMode",
+    "VariantName",
     "_build_rfdetr_targets",
     "_decode_rfdetr_predictions",
 ]

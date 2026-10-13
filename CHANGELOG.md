@@ -6,6 +6,49 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+- **`raidar.crop.RandomCropDetection`** cuts a picture to one `height` x `width` piece with its boxes and mask
+  outlines, before a detector's own resize: `placement: random` (a new piece each epoch) or `centre`; a smaller
+  picture is padded with its median, a box cut under `min_size_px` dropped. Pictures of any height then train an
+  RF-DETR seg model, whose batch needs every picture one size (`README.md`).
+- **RF-DETR stream mode trains `seg-*` models**: each instance's mask from its target's `extras["polygons"]`, a
+  box without one masked by its rectangle; a picture's labels are read with the picture, per item.
+- **`raidar.RFDETRPredictor`** predicts from one of RF-DETR's own checkpoint files, the model rebuilt
+  from what the file records (variant, resolution, query groups, head, class names): boxes, scores and
+  labels in the input picture's pixels, and each instance's mask for a `seg-*` checkpoint.
+- **`RFDETRPredictor(score_mode="any_class")`** keeps one detection per query, scored by the chance that any of
+  its classes is right (`1 - prod(1 - p)`) and named by its best class — a query torn between classes is found
+  where a per-class cut drops it. `any_class_excludes` leaves named classes out of the score. `score_mode="class"`,
+  the default, is RF-DETR's own scoring.
+- **`YoloSink(image_mode="grey")`** writes a grey picture (three equal channels) as one channel — 2.2x
+  faster to encode and a third smaller; every reader turns it back into the same three channels, and a
+  picture whose channels differ is refused.
+- **`YoloSink(image_threads=4)`** encodes and writes the pictures on threads, each under its record's
+  index — the same files as one thread writes.
+- **Instance masks through `YoloSink`.** A record's `Boxes` target may carry each instance's
+  polygons in `extras["polygons"]` (`raidar.POLYGONS` names the key; per box a list of non-overlapping
+  polygons of `[x, y]` pixel points, `[]` for a box with no mask of its own). The sink writes the
+  YOLO-seg line `class x1 y1 x2 y2 ...` — one ring per instance, several polygons joined by
+  zero-width bridges — and the COCO sidecar's `segmentation` (the polygons apart) and `area` (their
+  shoelace sum); a split holding any ring holds no box line. `raidar.YoloSource` reads a ring back
+  as the instance's polygon, so a merge keeps the masks. RF-DETR's own YOLO reader yields the masks
+  and its COCO reader decodes the sidecar. Records without the key are written as before.
+- **`YoloSink(mode="append")`** continues a split after its last record — the index, `metadata.jsonl`
+  and the COCO sidecar grow; a vocabulary that disagrees id for id is refused before anything is
+  written. `replace`, the default, wipes the split first as before.
+- **`YoloSink(facts=[...])`** lists the distinct values of the named record entries in `data.yaml`
+  (a picture's scale: a folder of mixed scales is recorded, never refused).
+- **`raidar.YoloSource`** reads one split of a YOLO folder back as records — either layout, the
+  labels scaled by the picture, the `metadata.jsonl` row re-attached, class ids remapped by name to a
+  vocabulary — and `examples/merge_yolo.yaml` merges folders with it (readers → the sink in `append`).
+- **`YoloSink(layout="rfdetr")`** writes the folder RF-DETR's own reader accepts — `<split>/images`,
+  `<split>/labels`, the COCO sidecar at `<split>/_annotations.coco.json` — beside the default
+  Ultralytics layout (`images/<split>`), which is unchanged.
+- **The segmentation variants** `seg-nano` / `seg-small` / `seg-medium` / `seg-large` / `seg-xlarge`
+  on the `rfdetr` backend (`RFDETRDetector`): RF-DETR's instance-segmentation models, trained from a
+  box dataset on disk (`dataset_file: yolo`, a box label read as its four-corner polygon). One table,
+  `raidar.rfdetr._VARIANT_CLASSES`, names every variant; `RFDETRModel` keeps the four detectors.
+
 ### Changed
 - `--framework ultralytics` loads the separate Ultralytics package as the `raidar.ultralytics`
   subpackage, and `examples/train_cppe5.yaml` names its trainer

@@ -37,6 +37,9 @@ _BACKEND_NAMES = {
     # The native RF-DETR model module (runs through the LIGHTNING backend; building it needs the
     # `rfdetr` library, so its extra is the one that supplies the weights + architecture).
     "RFDETRModel": ("raidar.rfdetr", "rfdetr"),
+    # Prediction from RF-DETR's own checkpoint files (any variant, seg masks included) — the model
+    # rebuilt from what the file records; the `rfdetr` extra supplies the library it calls.
+    "RFDETRPredictor": ("raidar.rfdetr", "rfdetr"),
     # The ONE Hub zoo wrapper — a `model_name` string reaches any object-detection checkpoint;
     # it is the huggingface BACKEND's model (the model computes its own loss from `labels=`).
     "HuggingFaceDetectionModel": ("raidar.huggingface_model", "huggingface"),
@@ -66,6 +69,9 @@ _BACKEND_NAMES = {
     # The on-disk YOLO-layout sink is numpy/PIL/yaml only — no framework — but it stays lazy so
     # `import raidar` imports NOTHING. Its "extra" is the core install itself.
     "YoloSink": ("raidar.yolo_sink", ""),
+    "YoloSource": ("raidar.yolo_source", ""),
+    # The key a producer puts each instance's polygons under in `Boxes.extras` (a constant, not a class).
+    "POLYGONS": ("raidar.yolo_sink", ""),
 }
 
 __all__ = [*_BACKEND_NAMES]

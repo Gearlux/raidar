@@ -1,0 +1,49 @@
+# Merge YOLO dataset folders into one — readers over the folders, the sink in append mode.
+#
+#   recordstream run examples/merge_yolo.yaml                  # the train split
+#   recordstream run examples/merge_yolo.yaml --scope val      # the val split, into the same folder
+#
+# Each `raidar.YoloSource` reads a folder (either layout: images/<split> or <split>/images), scales
+# the labels back by the picture, re-attaches each record's metadata.jsonl row and remaps class ids
+# by NAME to the vocabulary below (an unknown name is refused). `raidar.YoloSink` with
+# `mode: append` continues the merged folder after its last record; `facts: [scale]` lists the
+# distinct picture scales the merged folder holds in its data.yaml — mixed scales are allowed and
+# recorded, never refused. Folders written with `facts: [scale]` carry the scale per record.
+# A folder of instance masks (polygon lines) merges with its masks: the reader returns each line's ring
+# as the instance's polygon and the sink writes it back as a ring.
+
+first: ./runs/dataset_a
+second: ./runs/dataset_b
+merged: ./runs/dataset_merged
+split_name: train
+
+val: !scope:val
+  split_name: val
+
+# NOT named `classes`: a top-level mapping is broadcast into every node with a parameter of that
+# name, and the readers' `classes` slots below hold a `!ref:` — confluid refuses the two together.
+vocabulary:
+  0: signal
+  1: ignore
+
+source: !class:recordstream.sources.concat.ConcatSource
+  sources:
+    - !class:raidar.YoloSource
+      root: !ref:first
+      split: !ref:split_name
+      classes: !ref:vocabulary
+    - !class:raidar.YoloSource
+      root: !ref:second
+      split: !ref:split_name
+      classes: !ref:vocabulary
+
+runnable: !class:recordstream.processing.DatasetProcessor
+  stream: !class:recordstream.core.stream.Stream
+    source: !ref:source
+  sink: !class:raidar.YoloSink
+    output_dir: !ref:merged
+    split: !ref:split_name
+    class_names: !ref:vocabulary
+    layout: rfdetr
+    mode: append
+    facts: [scale]

@@ -38,7 +38,7 @@ def _registers_anything(path: Path) -> bool:
     """True when importing this module would execute a registration.
 
     Two forms: the ``@configurable`` DECORATOR on a class this project owns, and a bare
-    ``configurable(...)`` / ``register(...)`` CALL — which is how ``configurables.py`` tags the
+    ``configurable(...)`` / ``register(...)`` CALL — which is how ``torchvision_detection.py`` tags the
     torchvision builder functions it cannot decorate.
     """
     tree = ast.parse(path.read_text())

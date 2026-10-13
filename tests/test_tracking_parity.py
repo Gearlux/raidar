@@ -1,4 +1,4 @@
-"""Both detection backends hand matrainer the RUNNABLE, and neither derives its own record.
+"""Every detection backend hands matrainer the RUNNABLE, and none derives its own record.
 
 AST-based (not import-based) for the fleet-test reason established in the classification and
 segmentation projects: an import-based check silently reduces to whichever frameworks the local

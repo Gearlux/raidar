@@ -388,3 +388,47 @@ def test_only_a_top_level_model_mapping_marks_an_rfdetr_file(tmp_path: Any) -> N
 
     assert verdicts == {"rfdetr.pth": True, "ultralytics.pt": False, "lightning.ckpt": False, "plain.pt": False}
     assert _is_rfdetr_checkpoint(str(tmp_path / "absent.pth")) is False, "a missing file is the loader's error to raise"
+
+
+# --- the variant table (2026-10-06) ----------------------------------------
+
+
+class TestTheVariantTable:
+    """One table names every RF-DETR class a config may ask for; the two Literals are read off it."""
+
+    def test_the_literal_and_the_table_agree(self) -> None:
+        from typing import get_args
+
+        from raidar.rfdetr import _VARIANT_CLASSES, VariantName
+
+        assert tuple(get_args(VariantName)) == tuple(_VARIANT_CLASSES)
+
+    def test_the_segmentation_variants_name_classes_the_library_ships(self) -> None:
+        rfdetr = pytest.importorskip("rfdetr")
+        from raidar.rfdetr import _VARIANT_CLASSES
+
+        seg = {name: cls for name, cls in _VARIANT_CLASSES.items() if name.startswith("seg-")}
+        assert list(seg) == ["seg-nano", "seg-small", "seg-medium", "seg-large", "seg-xlarge"]
+        for name, cls in _VARIANT_CLASSES.items():
+            assert hasattr(rfdetr, cls), f"{name!r} names {cls}, which rfdetr does not export"
+        assert all(cls.startswith("RFDETRSeg") for cls in seg.values())
+
+    def test_the_lightning_wrapper_offers_the_detection_variants_only(self) -> None:
+        """It builds box targets and no masks, so a segmentation variant would train nothing it can score."""
+        import inspect
+        from typing import get_args
+
+        from raidar.rfdetr import _VARIANT_CLASSES
+
+        offered = get_args(inspect.signature(RFDETRModel).parameters["variant"].annotation)
+        assert offered == ("nano", "small", "medium", "large")
+        assert set(offered) <= set(_VARIANT_CLASSES)
+
+    def test_the_rfdetr_backend_offers_every_variant(self) -> None:
+        from typing import get_args, get_type_hints
+
+        from raidar.rfdetr import VariantName
+        from raidar.rfdetr_detector import RFDETRDetector
+
+        # get_type_hints, not the signature: that module's annotations are strings (``from __future__``)
+        assert get_args(get_type_hints(RFDETRDetector.__init__)["variant"]) == get_args(VariantName)

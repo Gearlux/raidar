@@ -100,7 +100,7 @@ huggingface = [
 # jax), and `recordstream.keras` (which `raidar/_keras.py` imports through) selects whichever is
 # installed. This extra names bare `torch` TWICE over: as the engine Keras runs on here, and
 # because the detection target chain is torch-shaped (`CocoToTorchVisionDetection` emits torch
-# boxes; the shared `ToTensor` carries the RGB coercion). NOT raidar[torch]: the torchvision zoo,
+# boxes; the shared `ToTensor` emits a CHW torch tensor). NOT raidar[torch]: the torchvision zoo,
 # torchmetrics and pycocotools belong to the torch backends — a Keras config wires the shared
 # FCOS spec and scores with the spec's own numpy AP.
 keras = [
@@ -150,6 +150,9 @@ rfdetr = [
 # and an extra that is declared but never defined makes uv warn and install nothing.
 mlflow = ["matrainer[mlflow]>=0.1.0a1"]
 tensorboard = ["matrainer[tensorboard]>=0.1.0a1"]
+# The compiler's view of the RF-DETR predictor (raidar.lowering): the library's inference path as a fixed-size
+# torch program, found through the `torpaido.lowerings` entry point below. Needs `[rfdetr]` to run.
+compile = ["torpaido[torch]"]
 dev = [
     # Release tooling: `python -m build` produces the sdist + wheel, `twine check`
     # validates the metadata PyPI will re-validate on upload.
@@ -193,6 +196,10 @@ raidar = "raidar.cli:app"
 # Naming: `raidar-<backend>` for a runnable, `raidar-<backend>-model` for a zoo wrapper. After
 # changing this table, reinstall the editable (`uv pip install -e ./raidar --no-deps`) for the
 # metadata to take effect. `tests/test_entry_points.py` DERIVES the expectation from the tree.
+# The compiler imports every module under this group before it lowers a package's graph (`[compile]` extra).
+[project.entry-points."torpaido.lowerings"]
+raidar = "raidar.lowering"
+
 [project.entry-points."confluid.configurables"]
 raidar-lightning = "raidar.lightning_detector"
 raidar-torch = "raidar.torch_detector"
@@ -218,6 +225,8 @@ raidar-mlx = "raidar.mlx_detector"
 # torchvision detection builder FUNCTIONS (lazy, `register`-ed).
 raidar-torchvision-detection = "raidar.torchvision_detection"
 raidar-yolo-sink = "raidar.yolo_sink"
+raidar-yolo-source = "raidar.yolo_source"   # the folder reader beside the sink (merging = read + append)
+raidar-crop = "raidar.crop"   # RandomCropDetection: one piece size for a detector, cut before its own resize
 
 [tool.setuptools.packages.find]
 where = ["."]
@@ -255,9 +264,11 @@ testpaths = ["tests"]
 # statement data beside the parent's branch data, and the final combine refuses to merge
 # them — measured on matrainer's Linux CI 2026-09-27 (INTERNALERROR "Can't combine statement
 # coverage data with branch data"); it does not reproduce on macOS. See AGENTS.md.
-addopts = "--cov-branch"
+# `-m 'not slow'`: plain `pytest` is the fast run, `pytest -m slow` the slow run, `pytest -m ''`
+# both (root AGENTS.md "Two Test Runs").
+addopts = "--cov-branch -m 'not slow'"
 markers = [
-    "slow: heavy end-to-end tests (e.g. a real RF-DETR train epoch); deselect with -m 'not slow'.",
+    "slow: heavy end-to-end tests (e.g. a real RF-DETR train epoch) — the slow run (`pytest -m slow`); CI runs it.",
 ]
 
 [tool.coverage.run]

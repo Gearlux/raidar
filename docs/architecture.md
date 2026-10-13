@@ -51,9 +51,11 @@ rfdetr: !scope:framework=rfdetr                  # `raidar train cfg.yaml --fram
 ```
 
 **What you may change.** Add a backend by writing `raidar/<name>_detector.py` (a merged runnable
-with a `task` knob) and a `FRAMEWORKS` row, then declaring its scope block in the example config
-— nothing else. What you may NOT do: reintroduce a per-backend binary or subcommand, or nest a
-framework-specific key inside `runnable:`.
+with a `task` knob) and a `FRAMEWORKS` row, then declaring its scope block in the example config.
+The fleet tests name the rest: an entry point in `pyproject.toml`, rows in `BACKENDS` and
+`METRIC_BRIDGES` in `tests/test_tracking_parity.py`, and a row in `examples/sweep/sweep.yaml`. What
+you may NOT do: reintroduce a per-backend binary or subcommand, or nest a framework-specific key
+inside `runnable:`.
 
 ---
 
@@ -189,7 +191,9 @@ beside the target instead of replacing it.
 detection_ops:
   - !class:recordstream.ops.target.CocoToTorchVisionDetection { bbox_format: xywh, label_offset: 0 }
   - !class:recordstream.ops.target.ResizeDetection { width: 256, height: 256 }
-  - !class:recordstream.ops.torch.ToTensor { mode: RGB, normalize: true }
+  - !class:recordstream.ops.image.ConvertMode { mode: RGB }
+  - !class:recordstream.ops.numpy.Scale {}
+  - !class:recordstream.ops.torch.ToTensor {}
   - !class:raidar.fcos.targets.FcosTargets { num_classes: 5, input_shape: [256, 256, 3] }
 ```
 
@@ -252,8 +256,8 @@ riding `_fit_scores`/`_evaluate_split`. The seeded spec cells reproduced their c
 BIT-EXACTLY through every new base (keras 2.30023455619812, tensorflow 2.3113211567203202,
 jax 2.1331496040026345, mlx 1.953120619058609) — the strongest refactor evidence the fleet
 records. (The keras canonical later moved to 2.285114049911499 — matrainer's `shuffle=False`
-fix of 2026-08-08, which made the cell tracker-neutral; see the AGENTS canonical-numbers
-mandate and matrainer `docs/architecture.md` record 9 amendment 6.)
+fix of 2026-08-08, which made the cell tracker-neutral; see record 8 and matrainer
+`docs/architecture.md` record 9 amendment 6.)
 
 **What you may change.** Hook implementations and task state freely; the concrete signature
 (it is the config surface). What you may not do: shadow the inherited machinery
@@ -375,3 +379,313 @@ Pins: `tests/test_rfdetr.py` (`test_every_checkpoint_shape_loads_every_weight`,
 `test_rfdetr_files_go_to_the_library_and_the_rest_to_the_generic_loader`,
 `test_an_explicit_count_the_file_disagrees_with_fails_loudly`,
 `test_only_a_top_level_model_mapping_marks_an_rfdetr_file`).
+
+---
+
+## 8. Every random draw that shapes the network is seeded before the build (2026-08-06, extended 2026-08-09)
+
+**Context.** A backend that cannot reproduce itself cannot confirm a refactor, and six of
+them could not:
+
+- The keras FCOS cell had no seed. Three runs of the identical config gave final train/loss
+  2.27, 2.18 and 2.12.
+- `huggingface` and `rfdetr` did seed, but too late. `transformers.Trainer` applies
+  `TrainingArguments.seed` when training starts, and RF-DETR's module seeds in `on_fit_start`.
+  Both happen after the wrapper has built the network and randomly initialized its
+  `num_classes` head. The data order was seeded and the weights were not. Two runs of one
+  config gave:
+
+  | backend | run 1 | run 2 |
+  |---|---|---|
+  | rfdetr, mAP50:95 | 0.3156 | 0.3819 |
+  | huggingface, val/map_50 | 0.0685 | 0.1302 |
+
+- The torchvision builders re-initialize their head on every build, and no framework covered
+  that draw. Identical sweeps moved train/loss: torch 0.5115 → 0.5143, lightning
+  0.5366 → 0.5246, fastai 0.5181 → 0.5430.
+
+**Decision.** Seed at BUILD time, in each framework's own idiom, and do not restore the RNG
+afterwards. This is a run-level seed applied at the earliest useful moment, so it also covers
+the loader shuffle.
+
+| what | knob | applied |
+|---|---|---|
+| each FCOS implementation | `seed: int = 0` | before its build: `torch.manual_seed`, `keras.utils.set_random_seed` (Keras has no per-layer seed), per-initializer `stateless_uniform` (raw TF), `nnx.Rngs`, `mx.random.seed` |
+| lightning · torch · fastai | `seed: int = 0` on each flat constructor | once, in `DetectionTorchHooks.initialize()`, before the task base builds the model |
+| huggingface | `seed: int = 42` (the transformers default) | `transformers.set_seed` before the build; the same value joins the `TrainingArguments` floor |
+| rfdetr | `train_config: {seed: …}` (RF-DETR defaults it to `None`) | `seed_everything(seed, workers=True)` at the top of both fit paths; no seed, no call |
+
+The FCOS seed and the torchvision-family seed are separate on purpose: the first binds the
+architecture comparison, the second binds the run.
+
+**Consequences.**
+
+- **Runs reproduce.** Paired 1-epoch runs of torch, lightning and fastai matched on every
+  metric. torch at 5 epochs landed on train/loss 0.5018 / val/map_50 0.3485 twice, with
+  `metrics.csv` identical. huggingface landed on train/loss 40.41484375 twice.
+- **rfdetr reproduces on cpu only.** Seeded, two cpu runs gave mAP50:95 0.355725 both times;
+  two mps runs gave 0.29446 and 0.333115. That residual is Apple's MPS backend, not the seed.
+  Pin `device: cpu` on the rfdetr block for a run you will compare against itself.
+- **Seed first, then vary the device.** A cpu-vs-mps comparison made before the seeding fix
+  cannot isolate the device, because the unseeded head dominates both arms. One such
+  comparison (0.3777 / 0.3453 on cpu) was briefly read as clearing the device. The seeded runs
+  above show mps does add variance.
+- **The FCOS cells are bit-comparable across a refactor.** The seeded sweep of the example
+  config (5 epochs, the 96-row cppe-5 slice), 2026-08-06; the keras row as re-measured
+  2026-08-08, identical under the csv and mlflow trackers and across reruns:
+
+  | engine | final train/loss | final val/map_50 |
+  |---|---|---|
+  | keras | 2.285114049911499 | 0.00020625352105024217 |
+  | tensorflow | 2.3113211567203202 | 0.001234 |
+  | jax | 2.1331496040026345 | 0.001068 |
+  | mlx | 1.953120619058609 | 0.002274 |
+
+  tensorflow, jax and mlx reproduced these through the whole base migration (record 5). The
+  keras number was 2.30023455619812 until matrainer's Keras base stopped letting Keras
+  shuffle batch order through Python's global `random` (`shuffle=False`; matrainer
+  `docs/architecture.md` record 9, amendment 6). A tracker that drew from that global RNG had
+  shifted the order. Keras numbers from before that change are not comparable with later ones.
+
+**Example.**
+
+```yaml
+lightning: !scope:framework=lightning
+  runnable: !class:raidar.LightningDetector
+    seed: 0                          # the default; torch.manual_seed before the model is built
+keras: !scope:framework=keras
+  model: !lazy:raidar.fcos.keras_fcos.KerasFcos
+    input_shape: [256, 256, 3]
+    seed: 7                          # a different initialization of the same network
+rfdetr: !scope:framework=rfdetr
+  runnable: !class:raidar.RFDETRDetector
+    train_config: { seed: 7 }        # without it RF-DETR seeds nothing
+    device: cpu                      # reproducible; mps is faster but not reproducible
+```
+
+**What you may change.** You may add `seed` to a new backend or model whose build draws random
+numbers, applied before the build in that framework's own idiom. Do not restore the RNG after
+the build, do not move the torchvision-family seed out of the shared hook, and do not add a
+seed to a wrapper that only loads weights. Pins:
+- `tests/test_fcos_spec.py::test_every_implementation_is_SEEDED`
+- `tests/test_fcos_spec.py::test_the_keras_seed_actually_reproduces_the_weights`
+- `tests/test_torch_detector.py::TestTheSeedCoversTheModelBuild`
+- `tests/test_huggingface_detector.py::TestTheRunIsSeeded`
+- `tests/test_rfdetr_detector.py::TestTheSeedCoversTheMODEL`
+
+---
+
+## 9. An instance's mask is ONE bridged ring, and a split holds one label form (2026-10-07)
+
+**Context.** A producer that knows an instance's shape hands the sink its polygons, and an
+instance can be several separate pieces. The two targets the folder must feed hold less:
+
+- A YOLO-seg label line is `class x1 y1 x2 y2 ...` — ONE polygon per line.
+- Ultralytics 8.4.126 refuses a label file that mixes the two forms (`labels mix segment and
+  detection rows`) and a segment model refuses a dataset with fewer segments than boxes
+  (`Segment dataset requires equal numbers of boxes and segments`).
+- RF-DETR 1.9.3's YOLO reader tells a box line (5 fields) from a polygon line (7 or more) line by
+  line, rasterizes a polygon with `ImageDraw.polygon(fill=1)` and reads a box line as its
+  four-corner polygon; its COCO reader decodes a list of polygons per instance to their union.
+
+Writing one line per piece would turn one instance into several: the count, the class
+statistics and every metric that matches instances to predictions would change with it. Writing
+only COCO would leave the YOLO folder without masks.
+
+**Decision.** Per instance, ONE ring. Several polygons are joined by zero-width bridges: walk the
+first polygon round from the vertex nearest its closest neighbour and back to that vertex, cross
+to the neighbour's nearest vertex, walk it round and back, and so on, each next polygon being the
+one nearest the vertex the walk stands on; then retrace the bridge vertices in reverse to the
+start. A bridge is walked once each way, so it encloses no area under even-odd or non-zero fill.
+The COCO sidecar needs no such trick and keeps the polygons apart, with `area` their summed
+shoelace area. An instance without polygons is its box's four corners, in both. The form is
+decided for the SPLIT, not the record: as soon as one record carries a polygon, every line (and
+every COCO annotation) becomes a ring when the sink flushes, the earlier box-only records and the
+ones an `append` continues included. Nothing is written to `data.yaml` — neither reader asks for a
+marker. The ring code is written for this sink; it copies no Ultralytics code (AGPL).
+
+**Consequences.**
+
+- **The bridges light a pixel line.** Measured with RF-DETR's YOLO reader on two rectangles with
+  one bridge: 302 pixels in the union of the rectangles, 311 in the ring's mask — nothing lost,
+  9 pixels along the bridge. The COCO reader's mask of the same instance is exactly the polygons'
+  `area`, 256 pixels, with no bridge.
+- **A round trip keeps the ring, not the pieces.** `YoloSource` returns the ring as the instance's one
+  polygon, so a merge writes COCO `segmentation` as that one ring. Its `area` is unchanged (the bridges
+  add none); the pieces are not recoverable from the YOLO folder.
+- **Coordinates are six decimals**, like a box line; RF-DETR clips polygon points to the picture.
+- **An `append` reads the split's label files at flush** to learn whether the earlier records are
+  rings. A `replace` run without polygons reads none and writes what it always wrote.
+
+**Example.**
+
+```python
+from raidar import POLYGONS
+from recordstream import Boxes
+
+target = Boxes(
+    boxes=[[2, 2, 56, 28], [44, 2, 60, 10]],
+    labels=[1, 0],
+    extras={POLYGONS: [
+        [[[2, 2], [10, 2], [10, 10], [2, 10]], [[40, 16], [56, 16], [56, 28], [40, 28]]],  # two pieces
+        [],                                                                              # its box
+    ]},
+)
+# 64 x 32 picture, labels/<split>/000000.txt:
+# 1 0.156250 0.312500 0.031250 0.312500 0.031250 0.062500 0.156250 0.062500 0.156250 0.312500 0.625000 0.500000 0.875000 0.500000 0.875000 0.875000 0.625000 0.875000 0.625000 0.500000
+# 0 0.687500 0.062500 0.937500 0.062500 0.937500 0.312500 0.687500 0.312500
+```
+
+**What you may change.** You may pick the bridge vertices and the order of the pieces differently,
+as long as the ring stays closed, its first point is not repeated, every bridge is walked twice
+and the polygons' union is what it fills. Do not write one line per piece, do not leave a box line
+in a split that holds a ring, do not add a `data.yaml` marker or a sink knob for it, and do not
+change what a record without the key writes. Pins:
+- `tests/test_yolo_sink.py::TestBoxOnlyRecordsAreUnchanged`
+- `tests/test_yolo_sink.py::TestSeveralPolygonsOfOneInstance`
+- `tests/test_yolo_sink.py::TestOneFormPerSplit`
+- `tests/test_yolo_sink.py::TestRfdetrReadsTheFolderAsSegmentation`
+- `tests/test_yolo_source.py::TestPolygons`
+- `tests/test_yolo_source.py::TestMasksSurviveTheRoundTrip`
+
+---
+
+## 10. Prediction from RF-DETR's own checkpoint is a class of its own, described by the file (2026-10-11)
+
+**Context.** A `seg-*` model the rfdetr backend trained could not be loaded to predict. `RFDETRModel`, the
+lightning backend's model, offers the four detection variants on purpose (it builds box targets and no masks, so a
+seg variant would train nothing it can score), and builds from the variant's defaults: measured on a seg-medium
+trained with `model_config: {group_detr: 4}` —
+
+```
+RFDETRModel(variant="seg-medium", ...)   → ValidationError: Input should be 'nano', 'small', 'medium' or 'large'
+(the variant forced past that check)     → size mismatch for refpoint_embed.weight: [800, 4] in the checkpoint,
+                                            [2600, 4] in the model (13 query groups, the variant's default)
+```
+
+Nothing returned a mask, either. But the checkpoint records the model it is — `model_name` (`RFDETRSegMedium`),
+`model_config` (resolution 1008, `group_detr` 4, 33 classes), the class names — and `rfdetr`'s own
+`RFDETR.from_checkpoint` rebuilds it from that record.
+
+**Decision.** A prediction-only class, `RFDETRPredictor(checkpoint_path, score_threshold)`, beside `RFDETRModel` in
+`rfdetr.py`: built from the file through `from_checkpoint` at the first prediction, it predicts through the library's
+own `predict` (its resize, normalisation and post-processing) and answers the torchvision eval contract plus `masks`,
+everything in the INPUT picture's pixels. It takes no architecture setting at all. Rejected: opening `RFDETRModel`'s
+variants to `seg-*` with a `model_config` pass-through — it breaks the training wrapper's box-only rule, makes a
+config restate settings the file already holds (and fail when they drift), and still returns no masks; and a
+`variant` knob on the predictor — the file names its class.
+
+**Consequences.** A config names a checkpoint and a score cut, nothing else. Any input size: RF-DETR resizes to its
+resolution and maps everything back, so a pipeline feeds the picture it trained on (a 1024 px picture to a 1008 px
+model) instead of rendering at the model's size. It is not an `nn.Module`: the network is the library's, held by its
+`RFDETR` object, and `to()` moves that object's device too — its `predict` places the input by it. A Lightning
+`.ckpt` of rfdetr <= 1.11 carries no `args` and is refused by the library: predict from the `.pth` files.
+
+**Example.** Measured on that seg-medium on a 1024 x 1024 validation picture of an LTE capture (score cut 0.3, CUDA,
+0.05 s a picture warm):
+
+```yaml
+model: !class:raidar.rfdetr.RFDETRPredictor
+  checkpoint_path: runs/signal_detection/a/checkpoint_best_total.pth
+  score_threshold: 0.3
+```
+
+```
+RFDETRSegMedium, resolution 1008, group_detr 4, 33 class names — all read off the file
+boxes [7, 4] · scores [7] · labels [7] · masks [7, 1024, 1024] bool
+  label 1 0.97 box [343, 0, 590, 1024]  mask 200 740 px
+```
+
+**What you may change.** The input forms `_rgb_picture` accepts, and the output keys, appending only. What you may
+not do: give it an architecture setting, or teach `RFDETRModel` the seg variants to predict masks.
+Pins: `tests/test_rfdetr_predictor.py`.
+
+## 11. A query scored by ANY of its classes rewrites the logits RF-DETR ranks (2026-10-12)
+
+**Context.** RF-DETR scores every class of a query with its own sigmoid and its post-processing keeps the
+(query, class) pairs above the cut. A model that has learnt WHERE objects are but not always WHAT they are spreads
+a query over several classes, none over the cut: measured on a signal-detection model, a query read 0.274, 0.127,
+0.126, 0.092 and 28 smaller scores — dropped at 0.3, though `1 - prod(1 - p)` is 0.685. Across 81 captures, 115 of
+1 724 objects had no detection at all, while lowering the cut to 0.05 found every object at 125 false alarms on one
+capture, most of them one query repeated under several classes.
+
+**Decision.** `RFDETRPredictor(score_mode="any_class")` keeps ONE detection per query, scored by its any-class
+chance and named by its best class. It is done by wrapping the post-processing call that `RFDETR.predict` makes
+(`self.model.postprocess(outputs, target_sizes=..., score_threshold=...)`): before the library's own step runs,
+each query's logits become one slot — its best counted class — holding `logit(1 - prod(1 - p))`, every other slot
+`-inf`. The library then selects, scales the boxes, cuts and upsamples the masks exactly as for real logits.
+Rejected: overriding `PostProcess._select_topk` (a private method, renamed or reshaped across releases — this rewrite
+depends only on the `pred_logits` key and the call's signature); re-implementing `predict` past the network (its
+resize, normalisation, COCO-id mapping and mask path would be a copy to keep in step); and summing or taking the max
+of the class scores (the max is `class` mode again; a sum is no probability and passes 1).
+
+**Consequences.** `class` stays the default and gives the library's answer unchanged. In `any_class` mode a query
+never answers twice and its score is never below its best class's, so at one cut it keeps every query `class` mode
+keeps and possibly more; the name of a kept query may be wrong, and only the any-class score is reported. The
+no-object slot never counts; `any_class_excludes` leaves named classes out the same way (an unknown name is refused
+at the build, naming the checkpoint's classes). The sum is taken as `-expm1(sum(log1p(-p)))`, so 32 small scores
+do not underflow and a certain class (`p = 1`) gives 1, not NaN.
+
+**Example.** The query above, and the test set's totals (cut 0.3 per class, 0.5 any class):
+
+```yaml
+model: !class:raidar.rfdetr.RFDETRPredictor
+  checkpoint_path: runs/signal_detection/a/checkpoint_best_total.pth
+  score_mode: any_class
+  score_threshold: 0.5
+```
+
+```
+query     class 0.274 (best) → dropped        any_class 0.685 → kept, named by the 0.274 class
+81 captures, 1 724 objects    class:     1 640 found, 115 missed, 200 false alarms, 1 097 accurate
+                              any_class: 1 697 found,  73 missed, 199 false alarms, 1 158 accurate
+```
+
+**What you may change.** The aggregation (`_any_class_logits`) for another probability rule, keeping one slot per
+query; the modes, appending to `ScoreMode`. What you may not do: change `class` mode's answer, or patch the library's
+post-processing in place. Pins: `tests/test_rfdetr_predictor.py::TestTheAnyClassRewrite`, `::TestAnyClassScoring`.
+
+## 12. A picture is cut to one piece before RF-DETR's resize; stream mode reads masks and labels per item (2026-10-12)
+
+**Context.** An RF-DETR seg model's batch pads its pictures to one size but joins their masks as they come, so a batch
+of pictures of different shapes stops the run (`RuntimeError: Sizes of tensors must match except in dimension 0.
+Expected size 564 but got size 1333`). Pictures of a whole capture — 504 columns of band, as many rows as the capture
+has time, 100 to 7 143 rows — never share a shape. RF-DETR's own levers cannot fix it, measured on such pictures:
+its square resize (the default) makes every picture one shape by squeezing it (1 008 rows to 564); with
+`square_resize_div_64: false` the shape is kept but its zoom-crop (`scale_jitter`) still cuts a SQUARE beside the
+uncut 1:2 pictures (`Expected size 1128 but got size 564`); a custom crop in `aug_config` runs AFTER its resize,
+which caps the long side at 1 333 px — a 504 x 3 000 picture reaches it 224 px wide, and any crop wider than that
+fails (`CropSizeError`). Stream mode gave no masks at all (`ConvertCoco(include_masks=False)`), and read every
+target once at construction (a projection walk) and reused it each epoch.
+
+**Decision.** `raidar.crop.RandomCropDetection` cuts each picture to one `height` x `width` piece in its OWN pixels,
+in the stream, so RF-DETR only ever sees squares and keeps its defaults (square resize, zoom-crop, flip): boxes
+moved and clipped (a box under `min_size_px` dropped), outlines clipped exactly (Sutherland–Hodgman against the
+piece), a smaller picture padded with its median, never stretched — the tiled pictures' rule. `random` placement
+draws from Python's `random`, which the data loader seeds per worker and per epoch; `centre` is validation's.
+`StreamRFDETRDataset` reads a record's labels in the same read as its picture and, for a seg model
+(`segmentation_head`), hands RF-DETR each instance's outlines as COCO polygons (its box rectangle when it has none),
+rasterised by RF-DETR's own `ConvertCoco`, so the masks follow its later resize and crop as the disk path's do. The
+step lives in raidar because it is an augmentation (recordstream ships none) and the outline contract is raidar's.
+
+**Consequences.** A folder of any picture heights trains a seg model: one epoch of seg-nano at 504 over 130 + 65
+pictures 504 wide and 100 / 1 008 / 3 000 tall wrote its mask losses and `val/segm_mAP_*` (2026-10-12). A model
+trained on pieces should be RUN on pieces — the review workspaces still run it on the whole picture (a follow-up,
+waivefront's `TASKS.md`). Stream mode starts sooner (nothing is walked up front); a picture is decoded once per item,
+as before.
+
+**Example.**
+
+```python
+import random
+from raidar.crop import RandomCropDetection
+
+crop = RandomCropDetection(height=504, width=504, placement="random")
+random.seed(0)
+piece = crop(record)          # record: YoloSource's {image: 504 x 3000, target: Boxes + extras["polygons"]}
+piece["image"].data.shape     # (504, 504, 3); piece["target"].canvas == (504, 504)
+```
+
+**What you may change.** The placements (a new one is a `Placement` value with its test), `min_size_px`, the pad
+value with a measurement. Not: a crop moved into RF-DETR's `aug_config` (it runs after the resize and its cap), a
+stream that caches labels apart from the picture it read, or stretching a picture to the piece.

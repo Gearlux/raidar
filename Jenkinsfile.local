@@ -18,6 +18,11 @@ pipeline {
             defaultValue: false,
             description: 'If true, run every quality gate to completion and report all issues. Default (false) fails fast on the first failing gate.'
         )
+        booleanParam(
+            name: 'SLOW_TESTS',
+            defaultValue: false,
+            description: 'If true, run the slow tests too. The nightly run of the orchestrator sets it; a manual build runs the fast tests only.'
+        )
     }
 
     environment {
@@ -239,6 +244,9 @@ with open('isort-checkstyle.xml', 'w') as f:
         }
 
         stage('Slow Tests') {
+            when {
+                expression { return params.SLOW_TESTS }
+            }
             steps {
                 script {
                     // 5 = the marker is registered but nothing is currently marked — valid, not a failure.

@@ -43,13 +43,16 @@ from matrainer.tracking.provenance import capture_log_file, log_run_context
 from recordstream import RecordSource, ensure_materialized
 from recordstream.runnable import ProgressReporting, TorchRunner, entrypoint, run_entrypoint
 
+from raidar.rfdetr import VariantName
+
 logger = get_logger(__name__)
 
 #: Which entry point :meth:`RFDETRDetector.run` dispatches to. No ``predict``: RF-DETR's loop has
 #: no prediction-sink path — prediction runs through the lightning backend + ``RFDETRModel``.
 RFDETRTask = Literal["fit", "evaluate", "test"]
 
-_VariantName = Literal["nano", "small", "medium", "large"]
+#: Every variant the table in :mod:`raidar.rfdetr` names — the detectors and the ``seg-*`` models.
+_VariantName = VariantName
 
 #: Built when ``num_classes`` is omitted in disk mode — RF-DETR's ``train()`` re-aligns the head
 #: to the dataset's category count, so the initial value is a placeholder the native loop
@@ -120,7 +123,10 @@ class RFDETRDetector(TorchRunner, ProgressReporting):
     Args:
         data: Disk-mode dataset directory (COCO/YOLO/Roboflow). Mutually exclusive with
             ``train_set``/``val_set``.
-        variant: ``"nano"`` (default) / ``"small"`` / ``"medium"`` / ``"large"``.
+        variant: ``"nano"`` (default) / ``"small"`` / ``"medium"`` / ``"large"``, or an instance-
+            segmentation model ``"seg-nano"`` / ``"seg-small"`` / ``"seg-medium"`` / ``"seg-large"`` /
+            ``"seg-xlarge"`` — trained from the same box dataset on disk (``dataset_file: yolo``: a box
+            label is read as its four-corner polygon).
         pretrained: Start from RF-DETR's COCO-pretrained weights on a fit.
         weights: Trained checkpoint to EVALUATE (``task="evaluate"``/``"test"``) — loaded via
             RF-DETR's own ``model_config.pretrain_weights`` path, which handles head re-sizing.
@@ -145,6 +151,11 @@ class RFDETRDetector(TorchRunner, ProgressReporting):
             OVER the floor this class derives and handed verbatim to
             ``rf.get_train_config(**…)`` / ``rf.train(**…)``, where RF-DETR's own pydantic
             ``TrainConfig`` validates it. A key pinned here WINS over the floor.
+        model_config: The pass-through to RF-DETR's MODEL settings, fixed when the model is built
+            (``group_detr``, ``num_queries``, …) — validated by RF-DETR's own config. ``num_classes``,
+            ``resolution`` and the weights have parameters of their own and are refused here. A
+            lower ``group_detr`` than the variant's default shrinks a segmentation run's mask
+            memory (it scales with the groups) and loads the published weights only partly.
         trackers: matrainer trackers — one or a list. RF-DETR's loop is upstream-owned, so they
             receive the run's PROVENANCE (git state, resolved config, hyperparameters, manifest,
             log file); RF-DETR's own logger knobs (via ``train_config``) keep the per-step curves.
@@ -175,6 +186,7 @@ class RFDETRDetector(TorchRunner, ProgressReporting):
         num_classes: Optional[int] = None,
         class_names: Optional[Dict[int, str]] = None,
         train_config: Optional[Dict[str, Any]] = None,
+        model_config: Optional[Dict[str, Any]] = None,
         trackers: Optional[Union[Partial[Tracker], List[Partial[Tracker]]]] = None,
         metric_names: Optional[Partial[MetricNames]] = None,
         metrics_sidecar_path: Optional[str] = None,
@@ -198,6 +210,7 @@ class RFDETRDetector(TorchRunner, ProgressReporting):
         self.num_classes = int(num_classes) if num_classes is not None else None
         self.class_names = dict(class_names) if class_names else None
         self.train_config = dict(train_config) if train_config else {}
+        self.model_config = dict(model_config) if model_config else {}
         # Stored VERBATIM (lazy-init mandate); `_live_trackers()` normalizes + flows at run time.
         self.trackers: Optional[Union[Partial[Tracker], List[Partial[Tracker]]]] = trackers
         self.metric_names: Optional[Partial[MetricNames]] = metric_names
@@ -351,6 +364,7 @@ class RFDETRDetector(TorchRunner, ProgressReporting):
             num_classes=num_classes,
             pretrained_detector=pretrained,
             resolution=self.resolution,
+            model_config=self.model_config,
         )
 
     def _seed_before_the_model_is_built(self) -> None:
@@ -363,7 +377,9 @@ class RFDETRDetector(TorchRunner, ProgressReporting):
 
         Measured 2026-08-06: with ``train_config: {seed: 7}`` pinned and nothing else changed, two
         runs still gave mAP50:95 0.3595 / 0.3406 on mps AND 0.3777 / 0.3453 on cpu — so the device
-        was not the cause (that hypothesis was tested and rejected); the model init was.
+        alone was not the cause; the model init was. With the seed applied here, cpu reproduces
+        (two runs, 0.355725) while mps still varies (0.29446 / 0.333115 with the same seed) —
+        Apple's MPS backend, a residual no seed reaches.
 
         ``seed_everything(..., workers=True)`` matches upstream's own call exactly, including the
         worker seeding. No configured seed = no call, so an unpinned run behaves as it always did.
