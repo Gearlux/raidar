@@ -7,6 +7,12 @@ All notable changes to this project are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- **`raidar.crop.RandomCropDetection`** cuts a picture to one `height` x `width` piece with its boxes and mask
+  outlines, before a detector's own resize: `placement: random` (a new piece each epoch) or `centre`; a smaller
+  picture is padded with its median, a box cut under `min_size_px` dropped. Pictures of any height then train an
+  RF-DETR seg model, whose batch needs every picture one size (`README.md`).
+- **RF-DETR stream mode trains `seg-*` models**: each instance's mask from its target's `extras["polygons"]`, a
+  box without one masked by its rectangle; a picture's labels are read with the picture, per item.
 - **`raidar.RFDETRPredictor`** predicts from one of RF-DETR's own checkpoint files, the model rebuilt
   from what the file records (variant, resolution, query groups, head, class names): boxes, scores and
   labels in the input picture's pixels, and each instance's mask for a `seg-*` checkpoint.

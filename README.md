@@ -293,9 +293,43 @@ MPS backend rather than the config, so mps is the faster option and cpu is the r
 RF-DETR's instance-segmentation models; in disk mode with `dataset_file: yolo` RF-DETR reads a box
 label as its four-corner polygon, so a box dataset is enough (a label line with ≥ 3 points is read
 as that polygon — `YoloSink` writes such lines when a record's target carries
-`extras["polygons"]`, below). Stream mode hands RF-DETR boxes only, so a `seg-*` variant takes `data:`. The
-`RFDETRModel` wrapper (the lightning backend) offers the four detection variants: it builds box
-targets and no masks.
+`extras["polygons"]`, below). In stream mode a `seg-*` variant takes each instance's mask from its target's
+`extras["polygons"]` (a box without an outline is masked by its rectangle), rasterised by RF-DETR's own converter,
+and a picture's labels are read with the picture — so a random step in the stream cuts both alike (next section).
+The `RFDETRModel` wrapper (the lightning backend) offers the four detection variants: it builds box targets and no
+masks.
+
+### One picture size for any picture — `raidar.RandomCropDetection`
+
+RF-DETR batches a seg model's masks only when every picture of a batch comes out of its own resize the same size;
+pictures of different shapes stop the run (`Sizes of tensors must match except in dimension 0`), and its own crop
+(`scale_jitter`) and shape-keeping resize (`square_resize_div_64: false`) cannot fix that — they run after the resize,
+and the long side is capped at 1333 px. `RandomCropDetection` cuts each picture to ONE `height` x `width` piece in
+its own pixels, before RF-DETR sees it: its boxes moved and clipped (a box left under `min_size_px`, 3, in either
+direction dropped), its outlines clipped exactly, a picture smaller than the piece padded with its median — never
+stretched. `placement: random` cuts anywhere (Python's `random`, which the data loader seeds per worker and epoch: a
+new piece each epoch); `centre` the middle piece, every call — for validation. Read a folder with `YoloSource`:
+
+```yaml
+runnable: !class:raidar.RFDETRDetector
+  variant: seg-nano
+  resolution: 504
+  num_classes: 2
+  class_names: {0: signal, 1: ignore}
+  train_set: !class:recordstream.core.stream.Stream
+    source: !class:raidar.YoloSource {root: ./runs/pictures, split: train}
+    ops:
+      - !class:raidar.crop.RandomCropDetection {height: 504, width: 504, placement: random}
+  val_set: !class:recordstream.core.stream.Stream
+    source: !class:raidar.YoloSource {root: ./runs/pictures, split: val}
+    ops:
+      - !class:raidar.crop.RandomCropDetection {height: 504, width: 504, placement: centre}
+```
+
+Measured (2026-10-12, seg-nano at 504, one epoch over 130 + 65 pictures 504 px wide and 100, 1 008 or 3 000 rows
+tall): it trains — mask losses and `val/segm_mAP_*` written. Without the cut, the same folder read by RF-DETR's
+shape-keeping resize stops on the masks' sizes, and a 504 x 3000 picture reaches the model 224 px wide.
+
 
 `raidar evaluate --framework rfdetr` runs RF-DETR's native validation/test loop over a trained
 checkpoint (`weights:`). The wired `trackers:` receive the run's **record** (provenance, config,

@@ -645,3 +645,47 @@ query     class 0.274 (best) → dropped        any_class 0.685 → kept, named 
 query; the modes, appending to `ScoreMode`. What you may not do: change `class` mode's answer, or patch the library's
 post-processing in place. Pins: `tests/test_rfdetr_predictor.py::TestTheAnyClassRewrite`, `::TestAnyClassScoring`.
 
+## 12. A picture is cut to one piece before RF-DETR's resize; stream mode reads masks and labels per item (2026-10-12)
+
+**Context.** An RF-DETR seg model's batch pads its pictures to one size but joins their masks as they come, so a batch
+of pictures of different shapes stops the run (`RuntimeError: Sizes of tensors must match except in dimension 0.
+Expected size 564 but got size 1333`). Pictures of a whole capture — 504 columns of band, as many rows as the capture
+has time, 100 to 7 143 rows — never share a shape. RF-DETR's own levers cannot fix it, measured on such pictures:
+its square resize (the default) makes every picture one shape by squeezing it (1 008 rows to 564); with
+`square_resize_div_64: false` the shape is kept but its zoom-crop (`scale_jitter`) still cuts a SQUARE beside the
+uncut 1:2 pictures (`Expected size 1128 but got size 564`); a custom crop in `aug_config` runs AFTER its resize,
+which caps the long side at 1 333 px — a 504 x 3 000 picture reaches it 224 px wide, and any crop wider than that
+fails (`CropSizeError`). Stream mode gave no masks at all (`ConvertCoco(include_masks=False)`), and read every
+target once at construction (a projection walk) and reused it each epoch.
+
+**Decision.** `raidar.crop.RandomCropDetection` cuts each picture to one `height` x `width` piece in its OWN pixels,
+in the stream, so RF-DETR only ever sees squares and keeps its defaults (square resize, zoom-crop, flip): boxes
+moved and clipped (a box under `min_size_px` dropped), outlines clipped exactly (Sutherland–Hodgman against the
+piece), a smaller picture padded with its median, never stretched — the tiled pictures' rule. `random` placement
+draws from Python's `random`, which the data loader seeds per worker and per epoch; `centre` is validation's.
+`StreamRFDETRDataset` reads a record's labels in the same read as its picture and, for a seg model
+(`segmentation_head`), hands RF-DETR each instance's outlines as COCO polygons (its box rectangle when it has none),
+rasterised by RF-DETR's own `ConvertCoco`, so the masks follow its later resize and crop as the disk path's do. The
+step lives in raidar because it is an augmentation (recordstream ships none) and the outline contract is raidar's.
+
+**Consequences.** A folder of any picture heights trains a seg model: one epoch of seg-nano at 504 over 130 + 65
+pictures 504 wide and 100 / 1 008 / 3 000 tall wrote its mask losses and `val/segm_mAP_*` (2026-10-12). A model
+trained on pieces should be RUN on pieces — the review workspaces still run it on the whole picture (a follow-up,
+waivefront's `TASKS.md`). Stream mode starts sooner (nothing is walked up front); a picture is decoded once per item,
+as before.
+
+**Example.**
+
+```python
+import random
+from raidar.crop import RandomCropDetection
+
+crop = RandomCropDetection(height=504, width=504, placement="random")
+random.seed(0)
+piece = crop(record)          # record: YoloSource's {image: 504 x 3000, target: Boxes + extras["polygons"]}
+piece["image"].data.shape     # (504, 504, 3); piece["target"].canvas == (504, 504)
+```
+
+**What you may change.** The placements (a new one is a `Placement` value with its test), `min_size_px`, the pad
+value with a measurement. Not: a crop moved into RF-DETR's `aug_config` (it runs after the resize and its cap), a
+stream that caches labels apart from the picture it read, or stretching a picture to the piece.

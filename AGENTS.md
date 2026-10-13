@@ -25,7 +25,7 @@ Other modules: `detection_base.py` (torch-free); `torch_detection.py` (the torch
 registered metrics + `native_batch`, not to be confused with `detection_torch.py`);
 `torchvision_detection.py` (builder registrations); the model wrappers `rfdetr.py`,
 `huggingface_model.py`, `torchvision_model.py`; `fcos/` (spec, five implementations,
-`FcosTargets`); `cli.py` (the `FRAMEWORKS` table only); `__init__.py` (lazy exports over
+`FcosTargets`); `crop.py` (`RandomCropDetection`, one piece size before a detector's own resize); `cli.py` (the `FRAMEWORKS` table only); `__init__.py` (lazy exports over
 `_BACKEND_NAMES`). Example: `examples/train_cppe5.yaml`. Sweep: `examples/sweep/`.
 
 **Who owns what:** recordstream owns records, collate, `batch_boxes`/`batch_metadata`, the
@@ -66,7 +66,8 @@ hooks, model wrappers, the FCOS spec, registrations and configs.
   `::test_stream_train_smoke`.
 - The RF-DETR variants are ONE table, `raidar.rfdetr._VARIANT_CLASSES`, and the two Literals are
   read off it: `VariantName` (the backend, every entry — the `seg-*` models train from the dataset
-  on disk, a box label read as its four-corner polygon, a polygon line as that polygon) and the four detection names on
+  on disk, a box label read as its four-corner polygon, a polygon line as that polygon, or from a stream whose
+  targets carry `extras[POLYGONS]`) and the four detection names on
   `RFDETRModel`, which builds box targets and no masks. A new variant is a table row
   (`tests/test_rfdetr.py::TestTheVariantTable`).
 - `RFDETRPredictor` predicts only, from RF-DETR's own checkpoint file, and takes NO architecture setting: the variant,
@@ -80,6 +81,16 @@ hooks, model wrappers, the FCOS spec, registrations and configs.
   `1 - prod(1 - p)`), so selection, boxes and masks stay the library's — never override `PostProcess` internals or
   copy `predict`'s tail. The no-object slot never counts; an unknown `any_class_excludes` name is refused at the build.
   §11. (`tests/test_rfdetr_predictor.py::TestTheAnyClassRewrite`, `::TestAnyClassScoring`)
+- RF-DETR stream mode reads a record's labels in the SAME read as its picture, never walked ahead or cached, and a
+  `seg-*` model gets each instance's mask from `Boxes.extras[POLYGONS]` through RF-DETR's own `ConvertCoco` (a box
+  without an outline masked by its rectangle). §12. (`tests/test_stream_rfdetr_dataset.py::test_a_pictures_labels_come_from_the_read_that_gave_the_picture`,
+  `::test_a_seg_model_gets_each_instances_mask_from_its_outline_and_a_box_without_one_is_its_box`)
+- `RandomCropDetection` (`raidar/crop.py`) cuts in the picture's OWN pixels before RF-DETR's resize: exactly
+  `height` x `width` out, boxes clipped and a box under `min_size_px` dropped, outlines clipped exactly, a smaller
+  picture padded with its median and never stretched; `random` draws from Python's `random` (seeded per loader
+  worker and epoch), never an instance RNG (pickled into every worker it would repeat). Never move the cut into
+  RF-DETR's `aug_config` — it runs after the resize and its 1 333 px cap. §12.
+  (`tests/test_crop.py`, `tests/test_stream_rfdetr_dataset.py::test_cut_pictures_of_any_height_batch_into_masks_of_one_size`)
 - `YoloSink.layout` is the only difference between the Ultralytics folder (`images/<split>`) and
   RF-DETR's (`<split>/images`, the COCO sidecar at `<split>/_annotations.coco.json`); the default
   stays `ultralytics`. (`tests/test_yolo_sink.py::test_the_rfdetr_layout_is_what_rfdetr_reads_and_the_default_is_not`)

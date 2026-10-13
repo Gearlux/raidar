@@ -7,8 +7,10 @@ mirroring the per-item contract the disk ``CocoDetection`` produces: a
 module skips when they're absent.
 """
 
-from typing import Any
+import random
+from typing import Any, Tuple
 
+import numpy as np
 import pytest
 
 pytest.importorskip("rfdetr.training")  # the [train,loggers] extras
@@ -20,6 +22,7 @@ from rfdetr.config import RFDETRNanoConfig, TrainConfig  # noqa: E402
 
 import raidar.stream_rfdetr_dataset as frd  # noqa: E402
 from raidar.stream_rfdetr_dataset import StreamRFDETRDataModule, StreamRFDETRDataset  # noqa: E402
+from raidar.yolo_sink import POLYGONS  # noqa: E402
 
 
 def _det_record(image: Any, boxes: Any, labels: Any, idx: int) -> Record:
@@ -97,14 +100,13 @@ def test_len_matches_stream() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Projection-optimized label cache (no image decode at construction)
+# Nothing read up front; a picture and its labels come from ONE read
 # ---------------------------------------------------------------------------
 
 
-def test_labels_cached_via_projection_without_image_decode(monkeypatch: Any) -> None:
-    stream = _stream(4)
-
-    # Spy: image decode must NOT fire while caching labels (only per __getitem__).
+def test_nothing_is_read_up_front_and_each_item_reads_its_record_once(monkeypatch: Any) -> None:
+    """The labels are read with the picture, per item: a random step in the stream (a crop) then cuts both alike.
+    Before 2026-10-12 every target was walked once at construction and reused for every epoch."""
     decode_calls = {"n": 0}
     real_decode = frd._record_input_to_rgb_pil
 
@@ -113,24 +115,117 @@ def test_labels_cached_via_projection_without_image_decode(monkeypatch: Any) -> 
         return real_decode(arr)
 
     monkeypatch.setattr(frd, "_record_input_to_rgb_pil", _counting_decode)
-
-    # Spy: labels are cached via the key-restricted projection helper.
-    projection_calls = {"n": 0}
-    real_iter_key = frd.iter_key
-
-    def _counting_iter_key(src: Any, key: str) -> Any:
-        projection_calls["n"] += 1
-        return real_iter_key(src, key)
-
-    monkeypatch.setattr(frd, "iter_key", _counting_iter_key)
-
-    ds = _val_dataset(stream, resolution=256)
-    assert projection_calls["n"] == 1, "labels must be cached via iter_key (target-key-only projection)"
-    assert decode_calls["n"] == 0, "no image should be decoded while caching labels"
-    assert len(ds._labels) == 4
-
-    _ = ds[0]  # now an image IS decoded
+    ds = _val_dataset(_stream(4), resolution=256)
+    assert decode_calls["n"] == 0
+    _ = ds[0]
     assert decode_calls["n"] == 1
+
+
+class _Counter:
+    """A stream step that paints every pixel 10 * k and labels the one box k, k counting the calls."""
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def __call__(self, record: Record) -> Record:
+        self.calls += 1
+        pixels = np.full((40, 60, 3), 10 * self.calls, dtype=np.uint8)
+        return {
+            **record,
+            "image": Image(pixels, layout="HWC"),
+            "target": Boxes(boxes=torch.tensor([[4.0, 4.0, 20.0, 24.0]]), labels=torch.tensor([self.calls])),
+        }
+
+
+def test_a_pictures_labels_come_from_the_read_that_gave_the_picture() -> None:
+    counter = _Counter()
+    ds = _val_dataset(Stream(source=[{"idx": 0}], ops=[counter]), resolution=64)
+    for _ in range(3):
+        img, target = ds[0]
+        mean = torch.tensor([0.485, 0.456, 0.406])[:, None, None]
+        std = torch.tensor([0.229, 0.224, 0.225])[:, None, None]
+        value = float(((img * std + mean) * 255.0).mean())
+        assert round(value / 10.0) == int(target["labels"][0])
+
+
+# ---------------------------------------------------------------------------
+# A seg model's masks, from the instances' outlines
+# ---------------------------------------------------------------------------
+
+
+def _seg_ns(*, square: bool = True, multi_scale: bool = False) -> Any:
+    from types import SimpleNamespace
+
+    return SimpleNamespace(
+        square_resize_div_64=square,
+        multi_scale=multi_scale,
+        expanded_scales=False,
+        do_random_resize_via_padding=False,
+        patch_size=16,
+        num_windows=4,
+        aug_config=None,
+        segmentation_head=True,
+    )
+
+
+def _seg_record(height: int = 40, width: int = 60) -> Record:
+    ring = [[30.0, 10.0], [50.0, 10.0], [50.0, 30.0], [30.0, 30.0]]
+    return {
+        "image": Image(np.zeros((height, width, 3), dtype=np.uint8), layout="HWC"),
+        "target": Boxes(
+            boxes=np.array([[30.0, 10.0, 50.0, 30.0], [4.0, 4.0, 20.0, 24.0]], dtype=np.float32),
+            labels=np.array([0, 1], dtype=np.int64),
+            canvas=(height, width),
+            extras={POLYGONS: [[ring], []]},
+        ),
+    }
+
+
+def _box_share(mask: torch.Tensor, box: torch.Tensor) -> Tuple[float, float]:
+    """The share of the box (cxcywh, normalized) the mask lights, and the share of the mask inside the box."""
+    height, width = mask.shape
+    cx, cy, w, h = box.tolist()
+    x0, x1 = int(round((cx - w / 2) * width)), int(round((cx + w / 2) * width))
+    y0, y1 = int(round((cy - h / 2) * height)), int(round((cy + h / 2) * height))
+    inside = mask[y0:y1, x0:x1]
+    return float(inside.float().mean()), float(inside.sum()) / max(float(mask.sum()), 1.0)
+
+
+def test_a_seg_model_gets_each_instances_mask_from_its_outline_and_a_box_without_one_is_its_box() -> None:
+    ds = StreamRFDETRDataset(Stream(source=[_seg_record()]), "val", 64, _seg_ns())
+    img, target = ds[0]
+    masks = target["masks"]
+    assert masks.shape == (2,) + tuple(img.shape[-2:])
+    for mask, box in zip(masks, target["boxes"]):
+        filled, inside = _box_share(mask, box)
+        assert filled > 0.9 and inside > 0.9
+
+
+def test_a_box_only_model_gets_no_masks() -> None:
+    ds = _val_dataset(Stream(source=[_seg_record()]), resolution=64)
+    assert "masks" not in ds[0][1]
+
+
+def test_cut_pictures_of_any_height_batch_into_masks_of_one_size() -> None:
+    """Pictures 100, 1008 and 3000 rows tall, as RF-DETR's shape-keeping training resize sees them: each cut to one
+    48 x 48 piece first, their masks join into one batch; uncut, the batch stops on the masks' sizes — the run that
+    stopped on 2026-10-12 (``Sizes of tensors must match except in dimension 0``)."""
+    from rfdetr.utilities.tensors import collate_fn
+
+    from raidar.crop import RandomCropDetection
+
+    records = [_seg_record(height, 48) for height in (100, 1008, 3000, 1008)]
+    random.seed(0)
+    torch.manual_seed(0)
+    cut = StreamRFDETRDataset(
+        Stream(source=records, ops=[RandomCropDetection(height=48, width=48)]), "train", 48, _seg_ns(square=False)
+    )
+    _, targets = collate_fn([cut[i] for i in range(len(records))])
+    assert torch.cat([t["masks"] for t in targets]).shape[-2:] == targets[0]["masks"].shape[-2:]
+    uncut = StreamRFDETRDataset(Stream(source=records), "train", 48, _seg_ns(square=False))
+    _, targets = collate_fn([uncut[i] for i in range(len(records))])
+    with pytest.raises(RuntimeError, match="Sizes of tensors must match except in dimension 0"):
+        torch.cat([t["masks"] for t in targets])
 
 
 # ---------------------------------------------------------------------------

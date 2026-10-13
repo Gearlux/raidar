@@ -219,6 +219,7 @@ raidar-mlx = "raidar.mlx_detector"
 raidar-torchvision-detection = "raidar.torchvision_detection"
 raidar-yolo-sink = "raidar.yolo_sink"
 raidar-yolo-source = "raidar.yolo_source"   # the folder reader beside the sink (merging = read + append)
+raidar-crop = "raidar.crop"   # RandomCropDetection: one piece size for a detector, cut before its own resize
 
 [tool.setuptools.packages.find]
 where = ["."]
