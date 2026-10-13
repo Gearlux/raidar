@@ -81,6 +81,13 @@ hooks, model wrappers, the FCOS spec, registrations and configs.
   `1 - prod(1 - p)`), so selection, boxes and masks stay the library's — never override `PostProcess` internals or
   copy `predict`'s tail. The no-object slot never counts; an unknown `any_class_excludes` name is refused at the build.
   §11. (`tests/test_rfdetr_predictor.py::TestTheAnyClassRewrite`, `::TestAnyClassScoring`)
+- `raidar.lowering` (the `[compile]` extra, entry point `torpaido.lowerings`) lowers `RFDETRPredictor` for the package
+  compiler as the library's own inference path, fixed-size: `interpolate(bilinear, antialias=False)` to the model's
+  resolution (what `predict`'s `F.resize(antialias=False)` is), `(x - means) / stds`, the network, the library's
+  `PostProcess._select_topk` and `_gather_and_scale_boxes` on its own outputs, and `keep = score > threshold & label <
+  known` in place of the row-dropping cut; `any_class` reuses `_any_class_logits` and `_counted_slots`. Never copy the
+  library's post-processing — call it. Pinned against the library's pieces on a stand-in network, and against the
+  predictor on a real checkpoint when `RAIDAR_RFDETR_CHECKPOINT` is set (slow). (`tests/test_lowering.py`)
 - RF-DETR stream mode reads a record's labels in the SAME read as its picture, never walked ahead or cached, and a
   `seg-*` model gets each instance's mask from `Boxes.extras[POLYGONS]` through RF-DETR's own `ConvertCoco` (a box
   without an outline masked by its rectangle). §12. (`tests/test_stream_rfdetr_dataset.py::test_a_pictures_labels_come_from_the_read_that_gave_the_picture`,

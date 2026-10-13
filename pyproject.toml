@@ -150,6 +150,9 @@ rfdetr = [
 # and an extra that is declared but never defined makes uv warn and install nothing.
 mlflow = ["matrainer[mlflow]>=0.1.0a1"]
 tensorboard = ["matrainer[tensorboard]>=0.1.0a1"]
+# The compiler's view of the RF-DETR predictor (raidar.lowering): the library's inference path as a fixed-size
+# torch program, found through the `torpaido.lowerings` entry point below. Needs `[rfdetr]` to run.
+compile = ["torpaido[torch]"]
 dev = [
     # Release tooling: `python -m build` produces the sdist + wheel, `twine check`
     # validates the metadata PyPI will re-validate on upload.
@@ -193,6 +196,10 @@ raidar = "raidar.cli:app"
 # Naming: `raidar-<backend>` for a runnable, `raidar-<backend>-model` for a zoo wrapper. After
 # changing this table, reinstall the editable (`uv pip install -e ./raidar --no-deps`) for the
 # metadata to take effect. `tests/test_entry_points.py` DERIVES the expectation from the tree.
+# The compiler imports every module under this group before it lowers a package's graph (`[compile]` extra).
+[project.entry-points."torpaido.lowerings"]
+raidar = "raidar.lowering"
+
 [project.entry-points."confluid.configurables"]
 raidar-lightning = "raidar.lightning_detector"
 raidar-torch = "raidar.torch_detector"
