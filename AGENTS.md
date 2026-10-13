@@ -75,6 +75,11 @@ hooks, model wrappers, the FCOS spec, registrations and configs.
   lightning backend's training wrapper). Boxes and masks are in the INPUT picture's pixels, a label outside the
   vocabulary (the no-object slot) is dropped, a grey picture is read as three equal channels; the file is read at the
   first prediction. §10. (`tests/test_rfdetr_predictor.py`)
+- `RFDETRPredictor.score_mode`: `class` (default) is the library's answer unchanged; `any_class` rewrites the
+  `pred_logits` handed to the library's OWN post-processing (one slot per query: its best counted class carrying
+  `1 - prod(1 - p)`), so selection, boxes and masks stay the library's — never override `PostProcess` internals or
+  copy `predict`'s tail. The no-object slot never counts; an unknown `any_class_excludes` name is refused at the build.
+  §11. (`tests/test_rfdetr_predictor.py::TestTheAnyClassRewrite`, `::TestAnyClassScoring`)
 - `YoloSink.layout` is the only difference between the Ultralytics folder (`images/<split>`) and
   RF-DETR's (`<split>/images`, the COCO sidecar at `<split>/_annotations.coco.json`); the default
   stays `ultralytics`. (`tests/test_yolo_sink.py::test_the_rfdetr_layout_is_what_rfdetr_reads_and_the_default_is_not`)

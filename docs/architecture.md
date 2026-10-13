@@ -599,3 +599,49 @@ boxes [7, 4] · scores [7] · labels [7] · masks [7, 1024, 1024] bool
 **What you may change.** The input forms `_rgb_picture` accepts, and the output keys, appending only. What you may
 not do: give it an architecture setting, or teach `RFDETRModel` the seg variants to predict masks.
 Pins: `tests/test_rfdetr_predictor.py`.
+
+## 11. A query scored by ANY of its classes rewrites the logits RF-DETR ranks (2026-10-12)
+
+**Context.** RF-DETR scores every class of a query with its own sigmoid and its post-processing keeps the
+(query, class) pairs above the cut. A model that has learnt WHERE objects are but not always WHAT they are spreads
+a query over several classes, none over the cut: measured on a signal-detection model, a query read 0.274, 0.127,
+0.126, 0.092 and 28 smaller scores — dropped at 0.3, though `1 - prod(1 - p)` is 0.685. Across 81 captures, 115 of
+1 724 objects had no detection at all, while lowering the cut to 0.05 found every object at 125 false alarms on one
+capture, most of them one query repeated under several classes.
+
+**Decision.** `RFDETRPredictor(score_mode="any_class")` keeps ONE detection per query, scored by its any-class
+chance and named by its best class. It is done by wrapping the post-processing call that `RFDETR.predict` makes
+(`self.model.postprocess(outputs, target_sizes=..., score_threshold=...)`): before the library's own step runs,
+each query's logits become one slot — its best counted class — holding `logit(1 - prod(1 - p))`, every other slot
+`-inf`. The library then selects, scales the boxes, cuts and upsamples the masks exactly as for real logits.
+Rejected: overriding `PostProcess._select_topk` (a private method, renamed or reshaped across releases — this rewrite
+depends only on the `pred_logits` key and the call's signature); re-implementing `predict` past the network (its
+resize, normalisation, COCO-id mapping and mask path would be a copy to keep in step); and summing or taking the max
+of the class scores (the max is `class` mode again; a sum is no probability and passes 1).
+
+**Consequences.** `class` stays the default and gives the library's answer unchanged. In `any_class` mode a query
+never answers twice and its score is never below its best class's, so at one cut it keeps every query `class` mode
+keeps and possibly more; the name of a kept query may be wrong, and only the any-class score is reported. The
+no-object slot never counts; `any_class_excludes` leaves named classes out the same way (an unknown name is refused
+at the build, naming the checkpoint's classes). The sum is taken as `-expm1(sum(log1p(-p)))`, so 32 small scores
+do not underflow and a certain class (`p = 1`) gives 1, not NaN.
+
+**Example.** The query above, and the test set's totals (cut 0.3 per class, 0.5 any class):
+
+```yaml
+model: !class:raidar.rfdetr.RFDETRPredictor
+  checkpoint_path: runs/signal_detection/a/checkpoint_best_total.pth
+  score_mode: any_class
+  score_threshold: 0.5
+```
+
+```
+query     class 0.274 (best) → dropped        any_class 0.685 → kept, named by the 0.274 class
+81 captures, 1 724 objects    class:     1 640 found, 115 missed, 200 false alarms, 1 097 accurate
+                              any_class: 1 697 found,  73 missed, 199 false alarms, 1 158 accurate
+```
+
+**What you may change.** The aggregation (`_any_class_logits`) for another probability rule, keeping one slot per
+query; the modes, appending to `ScoreMode`. What you may not do: change `class` mode's answer, or patch the library's
+post-processing in place. Pins: `tests/test_rfdetr_predictor.py::TestTheAnyClassRewrite`, `::TestAnyClassScoring`.
+

@@ -10,6 +10,10 @@ All notable changes to this project are documented here. The format follows
 - **`raidar.RFDETRPredictor`** predicts from one of RF-DETR's own checkpoint files, the model rebuilt
   from what the file records (variant, resolution, query groups, head, class names): boxes, scores and
   labels in the input picture's pixels, and each instance's mask for a `seg-*` checkpoint.
+- **`RFDETRPredictor(score_mode="any_class")`** keeps one detection per query, scored by the chance that any of
+  its classes is right (`1 - prod(1 - p)`) and named by its best class — a query torn between classes is found
+  where a per-class cut drops it. `any_class_excludes` leaves named classes out of the score. `score_mode="class"`,
+  the default, is RF-DETR's own scoring.
 - **`YoloSink(image_mode="grey")`** writes a grey picture (three equal channels) as one channel — 2.2x
   faster to encode and a third smaller; every reader turns it back into the same three channels, and a
   picture whose channels differ is refused.

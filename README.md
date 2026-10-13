@@ -525,6 +525,34 @@ model: !class:raidar.rfdetr.RFDETRPredictor
   score_threshold: 0.3          # a detection scoring at or below this is dropped
 ```
 
+Two settings choose how a query is scored:
+
+| setting | values | effect |
+|---|---|---|
+| `score_mode` | `class` (default) | RF-DETR's own: one detection per (query, class) pair above the cut, scored by that class — a query may answer under two classes |
+| | `any_class` | one detection per query, scored `1 - prod(1 - p)` over its classes — the chance that ANY of them is right — and named by its best class |
+| `any_class_excludes` | class names, default none | left out of the `any_class` score and never used as a name; a name the checkpoint lacks is refused when the model is built |
+
+RF-DETR scores each class with its own sigmoid, so a query the model is sure holds an object but that is
+torn between classes never passes a per-class cut. Measured on one query of a trained model:
+
+```
+class scores           0.274, 0.127, 0.126, 0.092, ... (28 more, together 0.373)
+score_mode: class      best class 0.274 — dropped at a 0.3 cut
+score_mode: any_class  0.685, named by the 0.274 class — kept at a 0.5 cut
+```
+
+`any_class` finds more objects; its name is a best guess. On a test set of 81 captures (1 724 objects) the
+same model went from 182 missed / 152 false alarms (`class`, cut 0.3) to 104 / 128 (`any_class`, cut 0.5):
+
+```yaml
+model: !class:raidar.rfdetr.RFDETRPredictor
+  checkpoint_path: runs/seg_medium/checkpoint_best_total.pth
+  score_mode: any_class
+  score_threshold: 0.5
+  # any_class_excludes: [ignore]   # a class that must neither add to the score nor name a box
+```
+
 It answers the torchvision eval contract the prediction ops call — `eval()`, `to(device)`,
 `model(images) -> [{boxes, scores, labels}]` — plus `masks` for a `seg-*` model:
 
