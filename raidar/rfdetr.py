@@ -23,7 +23,7 @@ normalisation is applied internally.
 import os
 from collections.abc import Mapping
 from types import SimpleNamespace
-from typing import Annotated, Any, Dict, List, Literal, Optional, Union, cast, get_args
+from typing import Annotated, Any, Dict, List, Literal, Optional, Tuple, Union, cast, get_args
 
 import numpy as np
 import torch
@@ -535,7 +535,8 @@ class RFDETRPredictor:
 
     * ``images``: a list of pictures of ANY size — ``[3, H, W]`` floats in ``[0, 1]``, ``H x W x 3``
       uint8 arrays, or a grey picture (``[H, W]`` / ``[1, H, W]``) read as its three equal channels, the
-      way training read a one-channel picture (``convert("RGB")``). RF-DETR resizes each to its resolution.
+      way training read a one-channel picture (``convert("RGB")``). RF-DETR resizes each to its resolution —
+      or, with ``keep_picture_size``, hands it to the network at its own size.
     * per picture: ``boxes`` ``[N, 4]`` xyxy and ``masks`` ``[N, H, W]`` bool, both in the INPUT
       picture's pixels; ``scores`` ``[N]``; ``labels`` ``[N]`` int64, 0-based into :attr:`class_names`.
       A label outside the vocabulary (RF-DETR's no-object slot) is dropped.
@@ -555,6 +556,10 @@ class RFDETRPredictor:
             best class: a query that is surely a signal but torn between classes is kept, its name a best guess.
         any_class_excludes: Class names left out of the ``any_class`` score and never used as a name (read
             only in ``any_class`` mode); a name the checkpoint does not have is refused when the model is built.
+        keep_picture_size: Predict each picture at its OWN size — RF-DETR's ``predict`` is told the picture's shape,
+            so its resize to the model's square changes nothing — as a model trained with
+            ``RFDETRDetector(keep_picture_size=True)`` saw its pictures. Each side must be a multiple of the backbone's
+            block (patch x windows), which RF-DETR checks; pictures of several sizes are predicted one size at a time.
     """
 
     def __init__(
@@ -563,6 +568,7 @@ class RFDETRPredictor:
         score_threshold: Probability = 0.5,
         score_mode: ScoreMode = "class",
         any_class_excludes: Optional[List[str]] = None,
+        keep_picture_size: bool = False,
     ) -> None:
         if score_mode not in get_args(ScoreMode):
             raise ValueError(
@@ -573,6 +579,7 @@ class RFDETRPredictor:
         self.score_threshold = float(score_threshold)
         self.score_mode: ScoreMode = score_mode
         self.any_class_excludes: List[str] = list(any_class_excludes or [])
+        self.keep_picture_size = bool(keep_picture_size)
         # Lazy-init: the library and the file are touched on the first prediction (or `solidify()`).
         self._rf: Any = None
         self._device: str = "cpu"
@@ -636,13 +643,27 @@ class RFDETRPredictor:
         """The weight artifact this predictor loads — the checkpoint file (stored config only, no build)."""
         return [file_model_ref(self.checkpoint_path)] if self.checkpoint_path else []
 
+    def _detections(self, rf: Any, pictures: List[Any]) -> List[Any]:
+        """RF-DETR's answer for each picture, in order: one ``predict`` call, or with ``keep_picture_size`` one call per
+        picture size, each told that size as its ``shape``."""
+        if not self.keep_picture_size:
+            found = rf.predict(pictures, threshold=self.score_threshold, include_source_image=False)
+            return found if isinstance(found, list) else [found]
+        by_size: Dict[Tuple[int, int], List[int]] = {}
+        for index, picture in enumerate(pictures):
+            by_size.setdefault(_picture_hw(picture), []).append(index)
+        answers: List[Any] = [None] * len(pictures)
+        for shape, indices in by_size.items():
+            found = rf.predict(
+                [pictures[i] for i in indices], threshold=self.score_threshold, include_source_image=False, shape=shape
+            )
+            for index, answer in zip(indices, found if isinstance(found, list) else [found]):
+                answers[index] = answer
+        return answers
+
     def __call__(self, images: List[Any]) -> List[Dict[str, Tensor]]:
         rf = self.solidify()
-        detections = rf.predict(
-            [_rgb_picture(image) for image in images], threshold=self.score_threshold, include_source_image=False
-        )
-        if not isinstance(detections, list):
-            detections = [detections]
+        detections = self._detections(rf, [_rgb_picture(image) for image in images])
         known = len(rf.class_names)
         outputs: List[Dict[str, Tensor]] = []
         for found in detections:
@@ -656,6 +677,13 @@ class RFDETRPredictor:
                 out["masks"] = torch.as_tensor(np.asarray(found.mask, dtype=bool)[keep])
             outputs.append(out)
         return outputs
+
+
+def _picture_hw(picture: Any) -> Tuple[int, int]:
+    """``(height, width)`` of a picture as :func:`_rgb_picture` gives it: ``H x W x 3`` uint8 or ``[3, H, W]``."""
+    if isinstance(picture, np.ndarray):
+        return int(picture.shape[0]), int(picture.shape[1])
+    return int(picture.shape[-2]), int(picture.shape[-1])
 
 
 def _rgb_picture(image: Any) -> Any:

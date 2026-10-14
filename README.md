@@ -330,6 +330,40 @@ Measured (2026-10-12, seg-nano at 504, one epoch over 130 + 65 pictures 504 px w
 tall): it trains — mask losses and `val/segm_mAP_*` written. Without the cut, the same folder read by RF-DETR's
 shape-keeping resize stops on the masks' sizes, and a 504 x 3000 picture reaches the model 224 px wide.
 
+### A picture at its own size — `RFDETRDetector(keep_picture_size=True)`
+
+RF-DETR always resizes: to a `resolution` x `resolution` square, or (`square_resize_div_64: false`) to a short side of
+`resolution` and a long side of at most 1333 px — a constant of the library, not a setting. A tall picture therefore
+never reaches the model whole: 504 x 2040 trains as 330 x 1333. `keep_picture_size: true` (stream mode) skips that
+resize and keeps everything else of RF-DETR's pipeline — its augmentation (`aug_config`: unset, a horizontal flip at
+0.5; `{}`, none; otherwise its Albumentations stack) and its normalization — so each picture reaches the model at its
+own size:
+
+```yaml
+runnable: !class:raidar.RFDETRDetector
+  variant: seg-medium
+  resolution: 504                # sizes the model; the pictures keep their own size
+  keep_picture_size: true
+  train_set: !class:recordstream.core.stream.Stream
+    source: !class:raidar.YoloSource {root: ./runs/pictures, split: train}   # every picture 504 x 2040
+  ...
+```
+
+| | `keep_picture_size: false` (default) | `true` |
+|---|---|---|
+| a 504 x 2040 picture reaches the model as | 330 x 1333 (`square_resize_div_64: false`) or 504 x 504 (square) | 504 x 2040 |
+| pictures of two sizes | resized alike | refused where the second is read: `keep_picture_size: picture 1 (…png) is 48 x 216 (width x height), the first was 48 x 204 — …` |
+
+Every picture must be ONE size (a seg batch joins masks of one size) — cut them to one with `RandomCropDetection`
+first if they are not. Each side should be a multiple of the backbone's block (patch x windows: 24 for `seg-small` and
+up, 12 for `seg-nano`): RF-DETR's batch pads a picture up to one, so 512 x 2048 trains as 528 x 2064 with the extra
+rows and columns padding. A disk dataset (`data`) is read by RF-DETR's own loader, so the setting is refused there.
+
+A model trained this way is RUN the same way: `RFDETRPredictor(keep_picture_size=True)` tells RF-DETR's `predict`
+each picture's own shape, so its resize to the model's square changes nothing (pictures of several sizes are
+predicted one size at a time; RF-DETR refuses a side its backbone does not divide). The package compiler lowers it
+the same way: the network gets the picture as it is, never the model's square.
+
 
 `raidar evaluate --framework rfdetr` runs RF-DETR's native validation/test loop over a trained
 checkpoint (`weights:`). The wired `trackers:` receive the run's **record** (provenance, config,

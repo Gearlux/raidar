@@ -58,8 +58,11 @@ from recordstream import Boxes, Stream, item_data
 # only one available — pinned by tests/test_stream_rfdetr_dataset.py, which fails loudly on the
 # next rename rather than at training time.
 from rfdetr._namespace import _namespace_from_configs
+from rfdetr.datasets._torchvision import Compose, RandomHorizontalFlip
 from rfdetr.datasets.coco import ConvertCoco, make_coco_transforms, make_coco_transforms_square_div_64
+from rfdetr.datasets.transforms import AlbumentationsWrapper, Normalize
 from rfdetr.training.module_data import RFDETRDataModule
+from torchvision.transforms.v2 import ToDtype, ToImage
 
 from raidar.yolo_sink import POLYGONS
 
@@ -186,6 +189,27 @@ def _build_transforms(image_set: str, resolution: int, ns: Any) -> Any:
     )
 
 
+def _unresized_transforms(image_set: str, ns: Any) -> Any:
+    """RF-DETR's pipeline for ``image_set`` WITHOUT its resize: each picture reaches the model at its own size.
+
+    RF-DETR's own pipelines always resize — the square one to ``resolution`` x ``resolution``, the other to a short
+    side of ``resolution`` and a long side of at most 1333 (its ``_COCO_MAX_SIZE``, a module constant) — so a
+    504 x 2040 picture trains as 330 x 1333. This keeps what they do besides: for training, the augmentation RF-DETR
+    routes ``aug_config`` to (``None``: its horizontal flip at 0.5; ``{}``: none; anything else: its Albumentations
+    stack), then the tensor, the float scale and ImageNet normalization. The batch still pads every picture to a
+    multiple of the backbone's block (patch x windows) — RF-DETR's collate does that, not this pipeline.
+    """
+    aug_config = getattr(ns, "aug_config", None)
+    steps: List[Any] = []
+    if image_set == "train":
+        if aug_config is None:
+            steps.append(RandomHorizontalFlip(p=0.5))
+        elif aug_config:
+            steps.extend(AlbumentationsWrapper.from_config(aug_config))
+    steps += [ToImage(), ToDtype(torch.float32, scale=True), Normalize()]
+    return Compose(steps)
+
+
 class StreamRFDETRDataset(torch.utils.data.Dataset):
     """In-memory ``Dataset`` yielding RF-DETR's ``(normalized-image, target)`` pairs from a Stream.
 
@@ -198,6 +222,9 @@ class StreamRFDETRDataset(torch.utils.data.Dataset):
             ``patch_size`` / ``num_windows`` / ``aug_config`` that drive the transform.
         input_key: Record key carrying the input image (default ``"image"``).
         target_key: Record key carrying the target ``Boxes`` (default ``"target"``).
+        keep_picture_size: Hand every picture to the model at its own size — RF-DETR's resize skipped
+            (:func:`_unresized_transforms`). Every picture must then be ONE size: a second size is refused where it is
+            read, naming both, since a seg batch stops on masks of two sizes.
     """
 
     def __init__(
@@ -208,12 +235,20 @@ class StreamRFDETRDataset(torch.utils.data.Dataset):
         ns: Any,
         input_key: str = "image",
         target_key: str = "target",
+        keep_picture_size: bool = False,
     ) -> None:
         self._stream = stream
         self._image_set = image_set
         self._input_key = str(input_key)
         self._target_key = str(target_key)
-        self._transforms = _build_transforms(image_set, resolution, ns)
+        self._keep_picture_size = bool(keep_picture_size)
+        self._transforms = (
+            _unresized_transforms(image_set, ns)
+            if self._keep_picture_size
+            else _build_transforms(image_set, resolution, ns)
+        )
+        #: The first picture's (width, height) once read — every kept picture must be that size.
+        self._kept_size: Optional[Tuple[int, int]] = None
         # A seg model (`segmentation_head`) trains on masks: each instance's outline, rasterised by RF-DETR's own
         # converter at the picture's size, so the masks follow every later resize and crop as the disk path's do.
         self._masks = bool(getattr(ns, "segmentation_head", False))
@@ -237,9 +272,25 @@ class StreamRFDETRDataset(torch.utils.data.Dataset):
             outlines = extras.get(POLYGONS) or []
         return _as_f32(boxes).reshape(-1, 4), _as_i64(labels), outlines
 
+    def _check_kept_size(self, i: int, record: Any, size: Tuple[int, int]) -> None:
+        """Refuse a kept picture whose size is not the first one's, naming both and the record's file."""
+        if self._kept_size is None:
+            self._kept_size = size
+            return
+        if size != self._kept_size:
+            name = record.get("file") if isinstance(record, dict) else None
+            where = f"picture {i}" + (f" ({name})" if name else "")
+            raise ValueError(
+                f"keep_picture_size: {where} is {size[0]} x {size[1]} (width x height), the first was "
+                f"{self._kept_size[0]} x {self._kept_size[1]} — a picture kept at its own size must be the one size "
+                "every other is (a seg batch joins masks of one size): make the pictures one size, or crop them to one"
+            )
+
     def __getitem__(self, i: int) -> Any:
         record = self._stream[i]
         pil = _record_input_to_rgb_pil(_record_input(record, self._input_key))
+        if self._keep_picture_size:
+            self._check_kept_size(i, record, pil.size)
         boxes, labels, outlines = self._labels_of(record)
         coco_target = {
             "image_id": i,
@@ -270,6 +321,8 @@ class StreamRFDETRDataModule(RFDETRDataModule):
         train_stream / val_stream / test_stream: the wired Streams (``test`` falls back to
             ``val`` when unset).
         class_names: ordered list of class names (index = class id).
+        keep_picture_size: Every dataset it makes hands each picture to the model at its own size
+            (:class:`StreamRFDETRDataset`'s setting of the same name).
     """
 
     def __init__(
@@ -281,8 +334,10 @@ class StreamRFDETRDataModule(RFDETRDataModule):
         val_stream: Optional[Stream] = None,
         test_stream: Optional[Stream] = None,
         class_names: Optional[List[str]] = None,
+        keep_picture_size: bool = False,
     ) -> None:
         super().__init__(model_config, train_config)
+        self._keep_picture_size = bool(keep_picture_size)
         self._train_stream = train_stream
         self._val_stream = val_stream
         self._test_stream = test_stream
@@ -290,7 +345,9 @@ class StreamRFDETRDataModule(RFDETRDataModule):
 
     def _make(self, stream: Stream, image_set: str) -> StreamRFDETRDataset:
         ns = _namespace_from_configs(self.model_config, self.train_config)
-        return StreamRFDETRDataset(stream, image_set, self.model_config.resolution, ns)
+        return StreamRFDETRDataset(
+            stream, image_set, self.model_config.resolution, ns, keep_picture_size=self._keep_picture_size
+        )
 
     def setup(self, stage: str) -> None:
         if stage == "fit":

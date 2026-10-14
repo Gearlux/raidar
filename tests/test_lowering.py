@@ -84,10 +84,14 @@ def _pictures(seed: int = 0, count: int = 2, height: int = 37, width: int = 53) 
 
 
 def _library_reference(
-    rf: Any, pictures: torch.Tensor, threshold: float, any_class: Any = None
+    rf: Any, pictures: torch.Tensor, threshold: float, any_class: Any = None, own_size: bool = False
 ) -> List[Dict[str, Any]]:
-    """What ``RFDETR.predict`` computes on tensors: its resize, its normalization, its post-processing, its cut."""
-    resized = torch.stack([TF.resize(p, [RESOLUTION, RESOLUTION], antialias=False) for p in pictures])
+    """What ``RFDETR.predict`` computes on tensors: its resize, its normalization, its post-processing, its cut.
+
+    ``own_size``: ``predict(shape=(H, W))`` with the pictures' own shape — the resize to its own size changes nothing.
+    """
+    size = list(pictures.shape[-2:]) if own_size else [RESOLUTION, RESOLUTION]
+    resized = torch.stack([TF.resize(p, size, antialias=False) for p in pictures])
     normalized = TF.normalize(resized, rf.means, rf.stds)
     with torch.no_grad():
         outputs = rf.model.model(normalized)
@@ -111,13 +115,26 @@ def test_the_lowering_is_registered_for_the_predictor() -> None:
     assert model_lowering_for(RFDETRPredictor(checkpoint_path="x")) is lower_rfdetr_predictor
 
 
-def test_a_predictor_that_keeps_the_picture_size_is_refused_until_lowered() -> None:
-    """The lowering resizes to the model's square, as ``predict`` does by default; a predictor told to keep each
-    picture's size would compile into an artifact that answers another picture than the package's."""
-    predictor = RFDETRPredictor(checkpoint_path="unused.pth", keep_picture_size=True)
+def test_a_predictor_that_keeps_the_picture_size_runs_the_network_on_the_picture_as_it_is() -> None:
+    """``keep_picture_size``: the network gets the 48 x 24 pictures themselves (``predict(shape=(H, W))``), never the
+    model's 32 x 32 square, and the kept rows are the library's answer on them."""
+    predictor = RFDETRPredictor(checkpoint_path="unused.pth", score_threshold=0.3, keep_picture_size=True)
     predictor._rf = _fake_rf()
-    with pytest.raises(ValueError, match=r"keep_picture_size=True.*not lowered yet"):
-        lower_rfdetr_predictor(predictor, _pictures(), _Context())  # type: ignore[arg-type]
+    pictures = _pictures(seed=5, height=48, width=24)
+
+    found = lower_rfdetr_predictor(predictor, pictures, _Context())  # type: ignore[arg-type]
+    expected = _library_reference(predictor._rf, pictures, 0.3, own_size=True)
+
+    assert tuple(predictor._rf.model.model.seen[1].shape[-2:]) == (48, 24), "the picture's own size"
+    for index in range(2):
+        kept = _kept(found, index)
+        assert kept["labels"].tolist() == expected[index]["labels"].tolist()
+        assert torch.allclose(kept["scores"], expected[index]["scores"], atol=1e-6)
+        assert torch.allclose(kept["boxes"], expected[index]["boxes"], atol=1e-4)
+    square = RFDETRPredictor(checkpoint_path="unused.pth", score_threshold=0.3)
+    square._rf = predictor._rf
+    lower_rfdetr_predictor(square, pictures, _Context())  # type: ignore[arg-type]
+    assert tuple(predictor._rf.model.model.seen[1].shape[-2:]) == (RESOLUTION, RESOLUTION), "the default: the square"
 
 
 def test_the_kept_rows_are_the_library_s_detections() -> None:

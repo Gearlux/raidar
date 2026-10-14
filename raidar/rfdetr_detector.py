@@ -164,6 +164,11 @@ class RFDETRDetector(TorchRunner, ProgressReporting):
             so the translation declares ``source="lightning"``).
         metrics_sidecar_path: Optional JSON sidecar for the final metrics
             (written through ``matrainer.artifacts.write_metrics_sidecar``).
+        keep_picture_size: Train and evaluate each picture at its OWN size: RF-DETR's resize — a square of
+            ``resolution``, or a short side of ``resolution`` and a long side of at most 1333 — is skipped, its
+            augmentation and normalization kept. Every picture must be one size, each side a multiple of the
+            backbone's block (patch x windows: 24 for seg-small and up, 12 for seg-nano) or the batch pads it to one.
+            ``resolution`` still sizes the model. Stream mode only (a disk dataset is read by RF-DETR's own loader).
     """
 
     def __init__(
@@ -190,6 +195,7 @@ class RFDETRDetector(TorchRunner, ProgressReporting):
         trackers: Optional[Union[Partial[Tracker], List[Partial[Tracker]]]] = None,
         metric_names: Optional[Partial[MetricNames]] = None,
         metrics_sidecar_path: Optional[str] = None,
+        keep_picture_size: bool = False,
     ) -> None:
         # Store config ONLY — no functional work (zero-arg / lazy-init mandate).
         self.data = data
@@ -215,6 +221,7 @@ class RFDETRDetector(TorchRunner, ProgressReporting):
         self.trackers: Optional[Union[Partial[Tracker], List[Partial[Tracker]]]] = trackers
         self.metric_names: Optional[Partial[MetricNames]] = metric_names
         self.metrics_sidecar_path = metrics_sidecar_path
+        self.keep_picture_size = bool(keep_picture_size)
         self._computed_metrics: Optional[Dict[str, float]] = None
 
     @property
@@ -232,7 +239,15 @@ class RFDETRDetector(TorchRunner, ProgressReporting):
     def _stream_wired(self) -> bool:
         return self.train_set is not None or self.val_set is not None
 
+    def _refuse_kept_size_on_disk(self) -> None:
+        if self.keep_picture_size and self.data is not None:
+            raise ValueError(
+                "RFDETRDetector: keep_picture_size works on train_set/val_set streams only — a disk dataset (`data`) "
+                "is read by RF-DETR's own loader, which always resizes"
+            )
+
     def _validate_fit_inputs(self) -> None:
+        self._refuse_kept_size_on_disk()
         stream = self._stream_wired()
         if self.data is not None and stream:
             raise ValueError(
@@ -249,6 +264,7 @@ class RFDETRDetector(TorchRunner, ProgressReporting):
     def _validate_eval_inputs(self) -> None:
         if not self.weights:
             raise ValueError("RFDETRDetector: `weights` (trained checkpoint path) is required for evaluate/test.")
+        self._refuse_kept_size_on_disk()
         stream = self.val_set is not None
         if self.data is not None and stream:
             raise ValueError("RFDETRDetector: pass EITHER `data` (disk dir) OR `val_set` (Stream) — not both.")
@@ -436,6 +452,7 @@ class RFDETRDetector(TorchRunner, ProgressReporting):
             val_stream=self.val_set,
             test_stream=self.test_set,
             class_names=names,
+            keep_picture_size=self.keep_picture_size,
         )
         trainer = build_trainer(cfg, rf.model_config, **_trainer_device_kwargs(self.device))
         trainer.fit(module, datamodule, ckpt_path=cfg.resume or None)
@@ -510,6 +527,7 @@ class RFDETRDetector(TorchRunner, ProgressReporting):
             val_stream=self.val_set,
             test_stream=self.val_set if run_test else None,
             class_names=names,
+            keep_picture_size=self.keep_picture_size,
         )
         self._evaluate(module, datamodule, rf.model_config, cfg, run_test)
 

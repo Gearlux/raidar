@@ -229,6 +229,87 @@ def test_cut_pictures_of_any_height_batch_into_masks_of_one_size() -> None:
 
 
 # ---------------------------------------------------------------------------
+# keep_picture_size: each picture at its own size, RF-DETR's resize skipped
+# ---------------------------------------------------------------------------
+
+
+def _tall_record(height: int = 204, width: int = 48, value: int = 0) -> Record:
+    """A ``height`` x ``width`` grey picture whose left half is ``value`` and right half 200, one box and outline."""
+    pixels = np.full((height, width, 3), 200, dtype=np.uint8)
+    pixels[:, : width // 2] = value
+    ring = [[4.0, 10.0], [20.0, 10.0], [20.0, 150.0], [4.0, 150.0]]
+    return {
+        "image": Image(pixels, layout="HWC"),
+        "target": Boxes(
+            boxes=np.array([[4.0, 10.0, 20.0, 150.0]], dtype=np.float32),
+            labels=np.array([1], dtype=np.int64),
+            canvas=(height, width),
+            extras={POLYGONS: [[ring]]},
+        ),
+        "file": f"picture_{height}x{width}.png",
+    }
+
+
+@pytest.mark.parametrize("image_set", ["train", "val"])
+def test_a_kept_picture_reaches_the_model_at_its_own_size_where_the_resize_would_change_it(image_set: str) -> None:
+    """A 48 x 204 picture (width x height) at resolution 64: RF-DETR's resize makes it 64 tall at most; kept, it stays
+    48 x 204, its box normalized by its own size and its mask the picture's size."""
+    kept = StreamRFDETRDataset(Stream(source=[_tall_record()]), image_set, 64, _seg_ns(), keep_picture_size=True)
+    img, target = kept[0]
+    assert tuple(img.shape) == (3, 204, 48)
+    assert tuple(target["masks"].shape) == (1, 204, 48)
+    cx, cy, w, h = target["boxes"][0].tolist()
+    assert (w, h) == (pytest.approx(16 / 48), pytest.approx(140 / 204))
+    assert cy == pytest.approx(80 / 204)
+    assert cx in (pytest.approx(12 / 48), pytest.approx(36 / 48)), "the box, flipped or not"
+    resized, _ = StreamRFDETRDataset(Stream(source=[_tall_record()]), image_set, 64, _seg_ns())[0]
+    assert tuple(resized.shape[-2:]) != (204, 48)
+
+
+def test_a_kept_val_picture_is_the_picture_normalized_and_nothing_else() -> None:
+    img, _ = StreamRFDETRDataset(Stream(source=[_tall_record()]), "val", 64, _seg_ns(), keep_picture_size=True)[0]
+    mean, std = torch.tensor([0.485, 0.456, 0.406]), torch.tensor([0.229, 0.224, 0.225])
+    expected_left = (0.0 - mean) / std
+    expected_right = (200.0 / 255.0 - mean) / std
+    assert torch.allclose(img[:, :, :24], expected_left[:, None, None].expand(3, 204, 24), atol=1e-6)
+    assert torch.allclose(img[:, :, 24:], expected_right[:, None, None].expand(3, 204, 24), atol=1e-6)
+
+
+def test_kept_training_pictures_keep_rf_detrs_flip_and_an_empty_aug_config_turns_it_off() -> None:
+    """RF-DETR's default augmentation (``aug_config`` None) is a horizontal flip at 0.5: over 40 draws both sides turn
+    up; ``aug_config: {}`` — RF-DETR's spelling of no augmentation — never flips."""
+    stream = Stream(source=[_tall_record()])
+    torch.manual_seed(0)
+    random.seed(0)
+    flipped = StreamRFDETRDataset(stream, "train", 64, _seg_ns(), keep_picture_size=True)
+    lefts = {round(float(flipped[0][0][0, 0, 0]), 3) for _ in range(40)}
+    assert len(lefts) == 2, "dark on the left in some draws, bright in others"
+    ns = _seg_ns()
+    ns.aug_config = {}
+    unflipped = StreamRFDETRDataset(stream, "train", 64, ns, keep_picture_size=True)
+    assert {round(float(unflipped[0][0][0, 0, 0]), 3) for _ in range(20)} == {round((0.0 - 0.485) / 0.229, 3)}
+
+
+def test_a_kept_picture_of_another_size_is_refused_naming_both_sizes_and_the_file() -> None:
+    """A seg batch joins its masks as they come, so kept pictures of two sizes would stop the run at the batch with
+    ``Sizes of tensors must match``; the dataset refuses the second size where it is read."""
+    stream = Stream(source=[_tall_record(), _tall_record(height=216)])
+    dataset = StreamRFDETRDataset(stream, "val", 64, _seg_ns(), keep_picture_size=True)
+    dataset[0]
+    with pytest.raises(
+        ValueError,
+        match=r"keep_picture_size: picture 1 \(picture_216x48\.png\) is 48 x 216 \(width x height\), "
+        r"the first was 48 x 204",
+    ):
+        dataset[1]
+
+
+def test_the_kept_size_is_not_a_default() -> None:
+    dataset = StreamRFDETRDataset(Stream(source=[_tall_record(), _tall_record(height=216)]), "val", 64, _seg_ns())
+    assert tuple(dataset[1][0].shape[-2:]) != (216, 48), "resized, and two sizes pass as they always did"
+
+
+# ---------------------------------------------------------------------------
 # DataModule injection (no disk build_dataset)
 # ---------------------------------------------------------------------------
 
@@ -274,6 +355,24 @@ def test_datamodule_dataloader_yields_nested_tensor_batch() -> None:
     assert len(targets) == 2
     assert set(targets[0]) >= {"boxes", "labels", "orig_size"}
     assert [set(t) >= {"boxes", "labels"} for t in targets] == [True, True]
+
+
+def test_the_datamodule_hands_keep_picture_size_to_every_dataset_it_makes() -> None:
+    mc, tc = _configs()
+    records = [_tall_record() for _ in range(2)]
+    dm = StreamRFDETRDataModule(
+        mc,
+        tc,
+        train_stream=Stream(source=records),
+        val_stream=Stream(source=records),
+        class_names=["cat", "dog"],
+        keep_picture_size=True,
+    )
+    dm.setup("fit")
+    dm.setup("test")
+    for dataset in (dm._dataset_train, dm._dataset_val, dm._dataset_test):
+        assert isinstance(dataset, StreamRFDETRDataset)
+        assert tuple(dataset[0][0].shape[-2:]) == (204, 48)
 
 
 def test_datamodule_test_falls_back_to_val() -> None:

@@ -326,3 +326,55 @@ class TestAnyClassScoring:
             pytest.raises(ValueError, match=r"score_mode 'per_query'.*'class', 'any_class'"),
         ):
             RFDETRPredictor(score_mode="per_query")  # type: ignore[arg-type]
+
+
+class TestKeepPictureSize:
+    """``keep_picture_size``: each picture reaches the network at its OWN size — RF-DETR's ``predict`` told the
+    picture's shape, so its resize to the model's square changes nothing — as a model trained with
+    ``RFDETRDetector(keep_picture_size=True)`` saw its pictures."""
+
+    @staticmethod
+    def _shapes(model: RFDETRPredictor, monkeypatch: Any) -> List[Any]:
+        """The ``shape`` each ``predict`` call of ``model``'s RF-DETR object is given, recorded in order."""
+        rf = model.solidify()
+        seen: List[Any] = []
+        original = rf.predict
+
+        def spy(images: Any, **kwargs: Any) -> Any:
+            seen.append(kwargs.get("shape"))
+            return original(images, **kwargs)
+
+        monkeypatch.setattr(rf, "predict", spy)
+        return seen
+
+    def test_a_tall_picture_is_predicted_at_its_own_shape(self, seg_checkpoint: str, monkeypatch: Any) -> None:
+        model = RFDETRPredictor(checkpoint_path=seg_checkpoint, score_threshold=0.0, keep_picture_size=True)
+        shapes = self._shapes(model.eval().to("cpu"), monkeypatch)
+        with torch.no_grad():
+            (out,) = model([torch.rand(3, 240, 48)])
+        assert shapes == [(240, 48)]
+        assert out["masks"].shape[1:] == (240, 48)
+        assert float(out["boxes"][:, [1, 3]].max()) <= 240 + 1e-3
+
+    def test_pictures_of_two_sizes_are_each_predicted_at_their_own_and_answered_in_order(
+        self, seg_checkpoint: str, monkeypatch: Any
+    ) -> None:
+        model = RFDETRPredictor(checkpoint_path=seg_checkpoint, score_threshold=0.0, keep_picture_size=True)
+        shapes = self._shapes(model.eval().to("cpu"), monkeypatch)
+        with torch.no_grad():
+            outs = model([torch.rand(3, 240, 48), torch.rand(3, 96, 48), torch.rand(3, 240, 48)])
+        assert sorted(shapes) == [(96, 48), (240, 48)], "one call per size, the two 240-row pictures together"
+        assert [tuple(o["masks"].shape[1:]) for o in outs] == [(240, 48), (96, 48), (240, 48)]
+
+    def test_the_default_lets_rf_detr_resize_to_its_square(self, seg_checkpoint: str, monkeypatch: Any) -> None:
+        model = RFDETRPredictor(checkpoint_path=seg_checkpoint, score_threshold=0.0)
+        shapes = self._shapes(model.eval().to("cpu"), monkeypatch)
+        with torch.no_grad():
+            model([torch.rand(3, 240, 48)])
+        assert shapes == [None]
+
+    def test_a_side_the_backbone_does_not_divide_is_refused_by_rf_detr(self, seg_checkpoint: str) -> None:
+        """seg-nano's block is 12 (patch 12 x 1 window): 250 rows are refused, naming the divisibility."""
+        model = RFDETRPredictor(checkpoint_path=seg_checkpoint, keep_picture_size=True).eval().to("cpu")
+        with pytest.raises(ValueError, match="divisible"):
+            model([torch.rand(3, 250, 48)])

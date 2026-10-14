@@ -109,6 +109,18 @@ hooks, model wrappers, the FCOS spec, registrations and configs.
   worker and epoch), never an instance RNG (pickled into every worker it would repeat). Never move the cut into
   RF-DETR's `aug_config` — it runs after the resize and its 1 333 px cap. §12.
   (`tests/test_crop.py`, `tests/test_stream_rfdetr_dataset.py::test_cut_pictures_of_any_height_batch_into_masks_of_one_size`)
+- `RFDETRDetector(keep_picture_size=True)` skips RF-DETR's resize and NOTHING else: the augmentation RF-DETR routes
+  `aug_config` to (`None` its flip, `{}` none, else its Albumentations stack) and its normalization stay
+  (`stream_rfdetr_dataset._unresized_transforms`); a second picture size is refused where it is read, naming both and
+  the record's `file`; stream mode only (a disk dataset is refused). Never pad or resize there to make sizes agree —
+  a crop before it does. (`tests/test_stream_rfdetr_dataset.py::test_a_kept_picture_reaches_the_model_at_its_own_size_where_the_resize_would_change_it`,
+  `::test_a_kept_picture_of_another_size_is_refused_naming_both_sizes_and_the_file`,
+  `tests/test_rfdetr_detector.py::test_keep_picture_size_is_refused_on_a_disk_dataset`)
+  Its prediction twin is `RFDETRPredictor(keep_picture_size=True)`: RF-DETR's OWN `predict` with `shape=` the
+  picture's `(H, W)`, one call per picture size, answers in input order — never a resize or post-processing of
+  raidar's; `raidar.lowering` skips its resize to the square for it, the network getting the pictures as they are
+  (`tests/test_rfdetr_predictor.py::TestKeepPictureSize`,
+  `tests/test_lowering.py::test_a_predictor_that_keeps_the_picture_size_runs_the_network_on_the_picture_as_it_is`).
 - `YoloSink.layout` is the only difference between the Ultralytics folder (`images/<split>`) and
   RF-DETR's (`<split>/images`, the COCO sidecar at `<split>/_annotations.coco.json`); the default
   stays `ultralytics`. (`tests/test_yolo_sink.py::test_the_rfdetr_layout_is_what_rfdetr_reads_and_the_default_is_not`)

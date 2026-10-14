@@ -7,6 +7,12 @@ All notable changes to this project are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- **`RFDETRDetector(keep_picture_size=True)`** hands every picture to the model at its own size in stream mode —
+  RF-DETR's resize (a square, or a long side capped at 1333 px) skipped, its augmentation and normalization kept;
+  every picture must be one size, a second size refused naming both (`README.md`).
+- **`RFDETRPredictor(keep_picture_size=True)`** predicts each picture at its own size (RF-DETR's `predict` told the
+  picture's shape), as a model trained with `keep_picture_size` saw them; its lowering for the package compiler
+  skips the resize to the square the same way.
 - **`raidar.crop.RandomCropDetection`** cuts a picture to one `height` x `width` piece with its boxes and mask
   outlines, before a detector's own resize: `placement: random` (a new piece each epoch) or `centre`; a smaller
   picture is padded with its median, a box cut under `min_size_px` dropped. Pictures of any height then train an

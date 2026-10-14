@@ -689,3 +689,41 @@ piece["image"].data.shape     # (504, 504, 3); piece["target"].canvas == (504, 5
 **What you may change.** The placements (a new one is a `Placement` value with its test), `min_size_px`, the pad
 value with a measurement. Not: a crop moved into RF-DETR's `aug_config` (it runs after the resize and its cap), a
 stream that caches labels apart from the picture it read, or stretching a picture to the piece.
+
+## 13. A picture may reach RF-DETR at its own size: the resize skipped, nothing else (2026-10-13)
+
+**Context.** RF-DETR resizes every picture: to a `resolution` square, or (`square_resize_div_64: false`) to a short
+side of `resolution` with the long side capped at 1 333 px — `_COCO_MAX_SIZE`, a module constant of
+`rfdetr/datasets/coco.py`, not a setting. A picture made tall on purpose — a capture's rows at a fixed time step,
+504 x 2 040 — never reaches the model whole (330 x 1 333). The network itself takes a non-square input whose sides are
+multiples of its block (patch x windows: measured 2026-10-13, seg-medium at 504 x 2 040 ran, 512 x 2 048 was refused
+`Backbone requires input shape to be divisible by 24`), and RF-DETR's collate pads a batch up to that block.
+
+**Decision.** `RFDETRDetector(keep_picture_size=True)` hands `StreamRFDETRDataset` a pipeline of RF-DETR's own
+pieces without the resize (`_unresized_transforms`): the augmentation RF-DETR's router picks for `aug_config` (`None`
+its horizontal flip, `{}` none, otherwise its Albumentations stack), `ToImage`, the float scale, its `Normalize`. The
+dataset refuses a picture whose size differs from the first it read, naming both and the record's `file`, because a
+seg batch joins masks of one size and would fail later with `Sizes of tensors must match`. Stream mode only: a disk
+dataset goes through RF-DETR's `build_dataset`, which this runnable does not build.
+
+**Consequences.** Pictures of one non-square size train whole; `resolution` only sizes the model. The predictor
+(`RFDETRPredictor`, §10) still resizes to its square, so a model trained this way is not yet run at its pictures'
+size outside the training loop.
+
+**Example.**
+
+```python
+from raidar.stream_rfdetr_dataset import StreamRFDETRDataset
+
+dataset = StreamRFDETRDataset(stream, "val", 504, ns, keep_picture_size=True)
+image, target = dataset[0]    # a 504 x 2040 picture -> image.shape == (3, 2040, 504)
+```
+
+**What you may change.** The augmentation kept, if RF-DETR's router changes (follow it, never diverge). Not: a resize
+or a pad added to this path to make sizes agree — a crop in the stream does that (§12).
+
+**Addendum (2026-10-14): prediction at the picture's size.** `RFDETRPredictor(keep_picture_size=True)` passes each
+picture's `(H, W)` as `predict`'s own `shape` argument — the library's resize then changes nothing — grouping the
+pictures of a call by size (one `predict` per size, answers back in input order). Nothing of `predict` is copied, so
+its normalization, post-processing and mask upsampling stay the library's. The compiler's lowering mirrors it by
+skipping its own resize to the square: `predict(shape=(H, W))` at the picture's own size is the picture itself.
