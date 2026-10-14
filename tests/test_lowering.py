@@ -58,7 +58,11 @@ def _fake_rf(num_select: int = 5, masks: bool = False) -> Any:
         args=SimpleNamespace(num_classes=CLASSES - 1),
     )
     return SimpleNamespace(
-        model=model, class_names=["a", "b", "c"], means=[0.485, 0.456, 0.406], stds=[0.229, 0.224, 0.225]
+        model=model,
+        class_names=["a", "b", "c"],
+        means=[0.485, 0.456, 0.406],
+        stds=[0.229, 0.224, 0.225],
+        model_config=SimpleNamespace(patch_size=4, num_windows=2),  # blocks of 8 px
     )
 
 
@@ -84,10 +88,12 @@ def _pictures(seed: int = 0, count: int = 2, height: int = 37, width: int = 53) 
 
 
 def _library_reference(
-    rf: Any, pictures: torch.Tensor, threshold: float, any_class: Any = None
+    rf: Any, pictures: torch.Tensor, threshold: float, any_class: Any = None, size: Any = None
 ) -> List[Dict[str, Any]]:
-    """What ``RFDETR.predict`` computes on tensors: its resize, its normalization, its post-processing, its cut."""
-    resized = torch.stack([TF.resize(p, [RESOLUTION, RESOLUTION], antialias=False) for p in pictures])
+    """What ``RFDETR.predict`` computes on tensors: its resize (``shape=size``), its normalization, its
+    post-processing, its cut."""
+    target = list(size) if size is not None else [RESOLUTION, RESOLUTION]
+    resized = torch.stack([TF.resize(p, target, antialias=False) for p in pictures])
     normalized = TF.normalize(resized, rf.means, rf.stds)
     with torch.no_grad():
         outputs = rf.model.model(normalized)
@@ -268,6 +274,27 @@ def test_the_lowering_runs_the_network_in_its_traceable_form() -> None:
     assert context.held["network"] is network and getattr(network.block, "_plain_depthwise_conv", False)
     name, mask = network.seen
     assert name == "NestedTensor" and mask.shape == (2, RESOLUTION, RESOLUTION) and not bool(mask.any())
+
+
+def test_a_model_trained_keeping_the_aspect_is_resized_as_the_predictor_resizes() -> None:
+    """A checkpoint trained with ``square_resize_div_64: false``: the picture goes in at the predictor's own
+    ``input_size`` — 37 x 53 at a 32 px resolution, blocks of 8 → 32 x 48 — in the artifact as in the predictor."""
+    predictor = RFDETRPredictor(checkpoint_path="unused.pth", score_threshold=0.3)
+    rf = _fake_rf()
+    predictor._rf, predictor._keeps_aspect = rf, True
+    seen: List[tuple] = []
+    rf.model.model.register_forward_pre_hook(lambda _m, args: seen.append(tuple(args[0].shape[-2:])))
+    pictures = _pictures(seed=4)
+
+    found = lower_rfdetr_predictor(predictor, pictures, _Context())  # type: ignore[arg-type]
+    expected = _library_reference(rf, pictures, 0.3, size=(32, 48))
+
+    assert predictor.input_size(37, 53) == (32, 48)
+    assert seen == [(32, 48), (32, 48)], "the lowering's call, then the reference's"
+    for index in range(2):
+        kept = _kept(found, index)
+        assert kept["labels"].tolist() == expected[index]["labels"].tolist()
+        assert torch.allclose(kept["boxes"], expected[index]["boxes"], atol=1e-4)
 
 
 def test_a_box_only_model_gives_no_mask_logits() -> None:
