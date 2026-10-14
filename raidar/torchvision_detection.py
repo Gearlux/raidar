@@ -13,10 +13,9 @@ the same bucket as ``RFDETRModel``) + ``lazy=True`` so:
   role=…)`` and the form-spec enumerate them alongside ``RFDETRModel`` — confluid's ``to_pydantic``
   is callable-aware (introspects the builder's OWN signature), so the function generates a valid
   config schema with no wrapper class; and
-* StreamStudio generates an OBJECT node for it (``streamstudio.bridge._build_object_node`` is
-  callable-aware): widgets come from the builder's signature (``num_classes`` / ``weights_backbone``
-  / …) and the node's role-qualified output socket (``RECORDSTREAM_OBJECT:model``, carrying a
-  ``PartialClass(builder, …)``) wires STRAIGHT into a detection trainer's ``model`` slot — no Retag.
+* a graph editor offers the builder's own signature (``num_classes`` / ``weights_backbone`` / …) as
+  its fields, so a builder needs no wrapper class to be configured and flowed into a detection
+  trainer's ``model`` slot.
 
 Registered with a presentation-only ``group="detection"`` for palette nesting (mirroring how
 ``matrainer.lightning.configurables`` groups the torch optimizers). The ``role="model"`` is what lets these raw
@@ -25,8 +24,9 @@ builders sit beside the raidar wrapper class (``RFDETRModel``) in every model pi
 Mask R-CNN / Keypoint R-CNN are intentionally excluded — they need instance masks / keypoints in the
 target, not the ``{boxes, labels}`` shape ``recordstream.batch_boxes`` yields.
 
-Exposed via the ``confluid.configurables`` entry point + ``__all__`` so StreamStudio's discovery second
-pass surfaces them — ``scan_module`` alone skips them (their ``__module__`` is ``torchvision``).
+Exposed via the ``confluid.configurables`` entry point + ``__all__`` so a discovery pass over the module's
+exports surfaces them — scanning the module's own classes alone skips them (their ``__module__`` is
+``torchvision``).
 """
 
 from confluid import register
