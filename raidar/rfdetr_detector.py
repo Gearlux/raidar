@@ -38,6 +38,7 @@ from loggair import get_logger
 from matrainer.artifacts import write_metrics_sidecar
 from matrainer.metric_names import MetricNames, as_metric_names
 from matrainer.run_names import generate_run_name, run_prefix
+from matrainer.torch.device import apply_mps_low_watermark
 from matrainer.tracking.base import Tracker, as_tracker_list
 from matrainer.tracking.provenance import capture_log_file, log_run_context
 from recordstream import RecordSource, ensure_materialized
@@ -222,6 +223,9 @@ class RFDETRDetector(TorchRunner, ProgressReporting):
         self.metric_names: Optional[Partial[MetricNames]] = metric_names
         self.metrics_sidecar_path = metrics_sidecar_path
         self.keep_picture_size = bool(keep_picture_size)
+        # A BODY slot, as on matrainer's torch trainers: a config or the command line sets
+        # `runnable.mps_low_watermark: 0.5`; `run()` hands it to torch before RF-DETR touches the GPU.
+        self.mps_low_watermark: Optional[float] = None
         self._computed_metrics: Optional[Dict[str, float]] = None
 
     @property
@@ -231,6 +235,8 @@ class RFDETRDetector(TorchRunner, ProgressReporting):
 
     # ---- run dispatch ------------------------------------------------------- #
     def run(self) -> None:
+        # Before anything is built: torch reads the Apple-GPU allocator's watermark when the GPU is first used.
+        apply_mps_low_watermark(self.mps_low_watermark)
         # The `@entrypoint` markers below ARE the dispatch table — a hand-written
         # {task: method} dict restates them and drifts (recordstream `docs/runnable.md`).
         run_entrypoint(self, self.task)

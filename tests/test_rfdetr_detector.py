@@ -402,3 +402,17 @@ def _first_call_line(fn_node: Any, name: str) -> Any:
     return None
 
 
+def test_mps_low_watermark_is_handed_to_torch_before_the_task(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A body slot a config names; `run()` applies it before the entry point builds anything."""
+    from confluid import load, to_pydantic
+
+    from raidar import rfdetr_detector
+
+    order: List[Any] = []
+    monkeypatch.setattr(rfdetr_detector, "apply_mps_low_watermark", lambda value: order.append(("watermark", value)))
+    monkeypatch.setattr(rfdetr_detector, "run_entrypoint", lambda runnable, task: order.append(("task", task)))
+    assert RFDETRDetector().mps_low_watermark is None
+    assert "mps_low_watermark" in to_pydantic(RFDETRDetector).model_fields
+    detector = load("runnable: !class:raidar.rfdetr_detector.RFDETRDetector\n  mps_low_watermark: 0.5\n")["runnable"]
+    detector.run()
+    assert order == [("watermark", 0.5), ("task", "fit")]

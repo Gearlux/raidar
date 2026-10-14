@@ -289,6 +289,25 @@ runnable: !class:raidar.RFDETRDetector
 Seeded, two runs land identically **on cpu**. On mps they still differ — that residual is Apple's
 MPS backend rather than the config, so mps is the faster option and cpu is the reproducible one.
 
+**On a Mac, let torch give the GPU's memory back.** By default torch keeps the memory it has cached
+on Apple's GPU, which on a Mac is the machine's memory: a seg-nano smoke run (504 x 504, batch 1)
+held 11 GB on an 18 GB laptop, swapped, and its epoch took 8 min 42 s. With `mps_low_watermark: 0.5`
+torch releases its cache above half the GPU's working set: 9.1-9.5 GB and 2 min 45 s for the whole
+run (measured 2026-10-14). Set it in the config or on the command line:
+
+```yaml
+runnable: !class:raidar.RFDETRDetector
+  mps_low_watermark: 0.5               # unset: torch's default (1.4); ignored off Apple's GPU
+```
+
+```bash
+recordstream run cfg.yaml runnable.mps_low_watermark=0.5
+```
+
+It is `PYTORCH_MPS_LOW_WATERMARK_RATIO`, set before RF-DETR first uses the GPU; that variable
+already in the shell wins. The same setting is on every matrainer torch trainer (matrainer README →
+`matrainer.torch`).
+
 **A segmentation variant trains from the same boxes.** `variant: seg-nano` … `seg-xlarge` build
 RF-DETR's instance-segmentation models; in disk mode with `dataset_file: yolo` RF-DETR reads a box
 label as its four-corner polygon, so a box dataset is enough (a label line with ≥ 3 points is read

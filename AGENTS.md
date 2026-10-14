@@ -121,6 +121,10 @@ hooks, model wrappers, the FCOS spec, registrations and configs.
   raidar's; `raidar.lowering` skips its resize to the square for it, the network getting the pictures as they are
   (`tests/test_rfdetr_predictor.py::TestKeepPictureSize`,
   `tests/test_lowering.py::test_a_predictor_that_keeps_the_picture_size_runs_the_network_on_the_picture_as_it_is`).
+- `RFDETRDetector.mps_low_watermark` is a BODY slot (not a constructor param), handed to
+  `matrainer.torch.apply_mps_low_watermark` FIRST in `run()`, before RF-DETR touches the GPU — the same setting
+  matrainer's torch trainers carry; never a raidar copy of the helper
+  (`tests/test_rfdetr_detector.py::test_mps_low_watermark_is_handed_to_torch_before_the_task`).
 - `YoloSink.layout` is the only difference between the Ultralytics folder (`images/<split>`) and
   RF-DETR's (`<split>/images`, the COCO sidecar at `<split>/_annotations.coco.json`); the default
   stays `ultralytics`. (`tests/test_yolo_sink.py::test_the_rfdetr_layout_is_what_rfdetr_reads_and_the_default_is_not`)

@@ -7,6 +7,9 @@ All notable changes to this project are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- **`RFDETRDetector.mps_low_watermark`** — on Apple's GPU, torch gives its cached memory back above that share of the
+  GPU's working set (`PYTORCH_MPS_LOW_WATERMARK_RATIO`, set before the model is built); settable in a config or on
+  the command line (`runnable.mps_low_watermark=0.5`). Unset leaves torch's default.
 - **`RFDETRDetector(keep_picture_size=True)`** hands every picture to the model at its own size in stream mode —
   RF-DETR's resize (a square, or a long side capped at 1333 px) skipped, its augmentation and normalization kept;
   every picture must be one size, a second size refused naming both (`README.md`).
