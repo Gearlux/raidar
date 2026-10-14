@@ -41,6 +41,43 @@ def seg_checkpoint(tmp_path_factory: Any) -> str:
 
 
 @pytest.fixture(scope="module")
+def aspect_checkpoint(tmp_path_factory: Any) -> str:
+    """The seg-nano above as a run with ``square_resize_div_64: false`` writes it: trained keeping each picture's
+    aspect, its short side at the 96 px resolution. The flag lives only in the file's ``args``: the library's loaded
+    model reports its default, True, whatever the file says (measured on rfdetr 1.13)."""
+    import rfdetr
+
+    rf = rfdetr.RFDETRSegNano(num_classes=3, pretrain_weights=None, resolution=96, group_detr=2, device="cpu")
+    path = tmp_path_factory.mktemp("aspect") / "checkpoint_best_total.pth"
+    network = rf.model.model
+    assert network is not None
+    torch.save(
+        {
+            "model": network.state_dict(),
+            "args": {"class_names": CLASS_NAMES, "square_resize_div_64": False},
+            "model_name": "RFDETRSegNano",
+            "model_config": rf.model_config.model_dump(),
+        },
+        path,
+    )
+    return str(path)
+
+
+def _input_sizes(model: RFDETRPredictor, pictures: List[Any]) -> List[tuple]:
+    """The (height, width) the network was handed, one per forward call, for these pictures."""
+    seen: List[tuple] = []
+    hook = model.solidify().model.model.register_forward_pre_hook(
+        lambda _m, args: seen.append(tuple(args[0].shape[-2:]))
+    )
+    try:
+        with torch.no_grad():
+            model(pictures)
+    finally:
+        hook.remove()
+    return seen
+
+
+@pytest.fixture(scope="module")
 def predictor(seg_checkpoint: str) -> RFDETRPredictor:
     model = RFDETRPredictor(checkpoint_path=seg_checkpoint, score_threshold=0.0)
     return model.eval().to("cpu")
@@ -156,6 +193,41 @@ class TestPrediction:
 def _noisy_or(prob: torch.Tensor) -> torch.Tensor:
     """The chance that at least one of independent class scores is right: 1 - prod(1 - p) over the last axis."""
     return 1 - torch.prod(1 - prob, dim=-1)
+
+
+class TestTheTrainingsResize:
+    """The picture reaches the network at the size the model's training validated on, read off the checkpoint: the
+    square of its resolution (RF-DETR's default, ``square_resize_div_64: true``), or — trained keeping the aspect —
+    the short side at the resolution and the long side scaled with it, both rounded up to whole blocks of
+    ``patch_size x num_windows`` (where training's validation padded), the long side first capped at 1 333 px."""
+
+    def test_a_square_trained_model_sees_the_square_of_its_resolution(self, predictor: RFDETRPredictor) -> None:
+        assert _input_sizes(predictor, [torch.rand(3, 200, 100)]) == [(96, 96)]
+
+    def test_a_model_trained_keeping_the_aspect_sees_the_pictures_aspect(self, aspect_checkpoint: str) -> None:
+        """A 200 x 100 picture at a 96 px resolution: 192 x 96 — the answer still in the picture's own pixels."""
+        model = RFDETRPredictor(checkpoint_path=aspect_checkpoint, score_threshold=0.0).eval().to("cpu")
+        assert _input_sizes(model, [torch.rand(3, 200, 100)]) == [(192, 96)]
+        with torch.no_grad():
+            (out,) = model([torch.rand(3, 200, 100)])
+        assert out["masks"].shape[1:] == (200, 100)
+        assert float(out["boxes"][:, [1, 3]].max()) <= 200 + 1e-3
+
+    def test_the_long_side_is_capped_as_training_validation_capped_it(self, aspect_checkpoint: str) -> None:
+        """2000 x 100: the long side capped at 1333 (short 66.65) and both rounded up to blocks of 24 → 1344 x 72."""
+        model = RFDETRPredictor(checkpoint_path=aspect_checkpoint, score_threshold=0.0).eval().to("cpu")
+        assert _input_sizes(model, [torch.rand(3, 2000, 100)]) == [(1344, 72)]
+
+    def test_pictures_of_two_aspects_in_one_call_each_get_their_own_size_in_order(self, aspect_checkpoint: str) -> None:
+        model = RFDETRPredictor(checkpoint_path=aspect_checkpoint, score_threshold=0.0).eval().to("cpu")
+        pictures = [torch.rand(3, 200, 100), torch.rand(3, 100, 100), torch.rand(3, 200, 100)]
+        assert _input_sizes(model, pictures) == [(192, 96), (96, 96)], "one network call per size"
+        with torch.no_grad():
+            outs = model(pictures)
+        assert [tuple(out["masks"].shape[1:]) for out in outs] == [(200, 100), (100, 100), (200, 100)]
+        with torch.no_grad():
+            (alone,) = model([pictures[2]])
+        assert torch.allclose(outs[2]["scores"], alone["scores"]), "a picture's answer does not depend on its company"
 
 
 class TestTheAnyClassRewrite:
@@ -366,12 +438,12 @@ class TestKeepPictureSize:
         assert sorted(shapes) == [(96, 48), (240, 48)], "one call per size, the two 240-row pictures together"
         assert [tuple(o["masks"].shape[1:]) for o in outs] == [(240, 48), (96, 48), (240, 48)]
 
-    def test_the_default_lets_rf_detr_resize_to_its_square(self, seg_checkpoint: str, monkeypatch: Any) -> None:
+    def test_the_default_resizes_to_the_square_of_the_resolution(self, seg_checkpoint: str, monkeypatch: Any) -> None:
         model = RFDETRPredictor(checkpoint_path=seg_checkpoint, score_threshold=0.0)
         shapes = self._shapes(model.eval().to("cpu"), monkeypatch)
         with torch.no_grad():
             model([torch.rand(3, 240, 48)])
-        assert shapes == [None]
+        assert shapes == [(96, 96)], "the predictor names the square itself (input_size), never the picture's shape"
 
     def test_a_side_the_backbone_does_not_divide_is_refused_by_rf_detr(self, seg_checkpoint: str) -> None:
         """seg-nano's block is 12 (patch 12 x 1 window): 250 rows are refused, naming the divisibility."""

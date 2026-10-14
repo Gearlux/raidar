@@ -8,7 +8,7 @@ module skips when they're absent.
 """
 
 import random
-from typing import Any, Tuple
+from typing import Any, Optional, Tuple
 
 import numpy as np
 import pytest
@@ -153,10 +153,10 @@ def test_a_pictures_labels_come_from_the_read_that_gave_the_picture() -> None:
 # ---------------------------------------------------------------------------
 
 
-def _seg_ns(*, square: bool = True, multi_scale: bool = False) -> Any:
+def _seg_ns(*, square: bool = True, multi_scale: bool = False, scale_jitter: Optional[bool] = None) -> Any:
     from types import SimpleNamespace
 
-    return SimpleNamespace(
+    ns = SimpleNamespace(
         square_resize_div_64=square,
         multi_scale=multi_scale,
         expanded_scales=False,
@@ -166,6 +166,9 @@ def _seg_ns(*, square: bool = True, multi_scale: bool = False) -> Any:
         aug_config=None,
         segmentation_head=True,
     )
+    if scale_jitter is not None:
+        ns.scale_jitter = scale_jitter
+    return ns
 
 
 def _seg_record(height: int = 40, width: int = 60) -> Record:
@@ -226,6 +229,23 @@ def test_cut_pictures_of_any_height_batch_into_masks_of_one_size() -> None:
     _, targets = collate_fn([uncut[i] for i in range(len(records))])
     with pytest.raises(RuntimeError, match="Sizes of tensors must match except in dimension 0"):
         torch.cat([t["masks"] for t in targets])
+
+
+def _train_mask_sizes(ns: Any, count: int = 24) -> set:
+    """The mask sizes RF-DETR's training transforms give ``count`` draws of one 128 x 64 picture (aspect kept)."""
+    random.seed(1)
+    torch.manual_seed(1)
+    ds = StreamRFDETRDataset(Stream(source=[_seg_record(128, 64)] * count), "train", 64, ns)
+    return {tuple(ds[i][1]["masks"].shape[-2:]) for i in range(count)}
+
+
+def test_the_scale_jitter_setting_reaches_the_training_transforms_as_on_rfdetrs_own_loader() -> None:
+    """RF-DETR's own folder loader passes ``scale_jitter`` (default on) to its transforms; so does the stream. On, a
+    picture that keeps its aspect comes out of the zoom-crop branch square and out of the other one tall — masks of two
+    sizes that one batch cannot hold (the run stopped on 2026-10-14 in the matcher's ``torch.cat``); off, one size."""
+    assert _train_mask_sizes(_seg_ns(square=False)) == {(128, 64), (64, 64)}, "unset: RF-DETR's default, on"
+    assert _train_mask_sizes(_seg_ns(square=False, scale_jitter=True)) == {(128, 64), (64, 64)}
+    assert _train_mask_sizes(_seg_ns(square=False, scale_jitter=False)) == {(128, 64)}
 
 
 # ---------------------------------------------------------------------------

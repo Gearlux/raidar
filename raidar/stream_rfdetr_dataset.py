@@ -186,6 +186,9 @@ def _build_transforms(image_set: str, resolution: int, ns: Any) -> Any:
         patch_size=getattr(ns, "patch_size", 16),
         num_windows=getattr(ns, "num_windows", 4),
         aug_config=getattr(ns, "aug_config", None),
+        # RF-DETR's own folder loader passes it too (default on). Off, a picture that keeps its aspect never goes
+        # through the zoom-crop branch, which makes it square: a seg batch of both sizes stops on its masks.
+        scale_jitter=getattr(ns, "scale_jitter", True),
     )
 
 

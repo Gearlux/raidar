@@ -24,7 +24,11 @@ All notable changes to this project are documented here. The format follows
   box without one masked by its rectangle; a picture's labels are read with the picture, per item.
 - **`raidar.RFDETRPredictor`** predicts from one of RF-DETR's own checkpoint files, the model rebuilt
   from what the file records (variant, resolution, query groups, head, class names): boxes, scores and
-  labels in the input picture's pixels, and each instance's mask for a `seg-*` checkpoint.
+  labels in the input picture's pixels, and each instance's mask for a `seg-*` checkpoint. A model trained keeping its pictures' aspect
+  (`square_resize_div_64: false`, read off the file's `args`) is shown each picture at that aspect — the short side
+  at its resolution — and `input_size(height, width)` says the size.
+- **RF-DETR stream mode passes `train_config`'s `scale_jitter`** to RF-DETR's transforms, as RF-DETR's own folder
+  loader does: off, pictures that keep a non-square aspect train a `seg-*` model in batches.
 - **`RFDETRPredictor(score_mode="any_class")`** keeps one detection per query, scored by the chance that any of
   its classes is right (`1 - prod(1 - p)`) and named by its best class — a query torn between classes is found
   where a per-class cut drops it. `any_class_excludes` leaves named classes out of the score. `score_mode="class"`,

@@ -1,8 +1,8 @@
 """The compiler's view of raidar's RF-DETR predictor: the library's own inference path as torch, fixed-size.
 
 Installed by the ``[compile]`` extra and listed under the entry-point group ``torpaido.lowerings``. The lowering
-mirrors ``RFDETR.predict`` step for step — the bilinear resize to the model's resolution without antialiasing (none
-for a predictor with ``keep_picture_size``: ``predict(shape=(H, W))`` gives the network the pictures as they are),
+mirrors ``RFDETR.predict`` step for step — the bilinear resize to the predictor's ``input_size`` without antialiasing
+(the picture's own size for a predictor with ``keep_picture_size``, where the resize changes nothing),
 the ImageNet normalization, the network, the library's own top-k selection and box scaling — and replaces the
 one thing an exported program cannot do, the score filter that changes the row count, with a ``keep`` mask over
 the fixed ``num_select`` rows. A segmenting model's mask logits leave as the selected rows' ``[B, K, Hm, Wm]``
@@ -71,15 +71,14 @@ def traceable(network: nn.Module) -> nn.Module:
 def lower_rfdetr_predictor(model: RFDETRPredictor, pictures: Tensor, ctx: Context) -> Dict[str, Any]:
     rf = model.solidify()
     network = ctx.module("network", traceable(rf.model.model))
-    resolution = int(rf.model.resolution)
     batch = pictures.shape[0]
-    if model.keep_picture_size:
-        # `predict(shape=(H, W))` with the pictures' own shape: its resize to their own size changes nothing.
-        resized = pictures
-    else:
-        resized = torch.nn.functional.interpolate(
-            pictures, size=(resolution, resolution), mode="bilinear", align_corners=False, antialias=False
-        )
+    # The size the predictor resizes to: the square of the resolution, or the picture's aspect for a model trained
+    # keeping it. A picture's size is fixed in a compiled package (the picture step resizes to it), so it is read
+    # once, at the trace.
+    size = model.input_size(int(pictures.shape[-2]), int(pictures.shape[-1]))
+    resized = torch.nn.functional.interpolate(
+        pictures, size=size, mode="bilinear", align_corners=False, antialias=False
+    )
     mean = ctx.buffer("mean", lambda: torch.tensor(list(rf.means), dtype=torch.float32).view(1, -1, 1, 1))
     std = ctx.buffer("std", lambda: torch.tensor(list(rf.stds), dtype=torch.float32).view(1, -1, 1, 1))
     outputs = network(nested((resized - mean) / std))

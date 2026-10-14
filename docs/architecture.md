@@ -576,7 +576,7 @@ config restate settings the file already holds (and fail when they drift), and s
 `variant` knob on the predictor — the file names its class.
 
 **Consequences.** A config names a checkpoint and a score cut, nothing else. Any input size: RF-DETR resizes to its
-resolution and maps everything back, so a pipeline feeds the picture it trained on (a 1024 px picture to a 1008 px
+resolution (or, for a model trained keeping the aspect, to that aspect — §13) and maps everything back, so a pipeline feeds the picture it trained on (a 1024 px picture to a 1008 px
 model) instead of rendering at the model's size. It is not an `nn.Module`: the network is the library's, held by its
 `RFDETR` object, and `to()` moves that object's device too — its `predict` places the input by it. A Lightning
 `.ckpt` of rfdetr <= 1.11 carries no `args` and is refused by the library: predict from the `.pth` files.
@@ -690,7 +690,59 @@ piece["image"].data.shape     # (504, 504, 3); piece["target"].canvas == (504, 5
 value with a measurement. Not: a crop moved into RF-DETR's `aug_config` (it runs after the resize and its cap), a
 stream that caches labels apart from the picture it read, or stretching a picture to the piece.
 
-## 13. A picture may reach RF-DETR at its own size: the resize skipped, nothing else (2026-10-13)
+(2026-10-14) The zoom-crop the context names became a lever: the stream now passes `scale_jitter` to RF-DETR's
+transforms, so pictures of ONE shape that keep their aspect train with it off (§13).
+
+## 13. The checkpoint says how its pictures were resized; the stream passes the zoom-crop switch (2026-10-14)
+
+**Context.** A detection set's pictures became 504 x 1008 — the whole capture, the band's bins as columns — trained
+keeping that aspect (`square_resize_div_64: false`, short side at a 504 resolution). Two things stood in the way.
+Training: one epoch of seg-nano stopped in RF-DETR's mask matcher (`torch.cat` of the batch's masks: `Expected size
+372 but got size 744`) — its zoom-crop (`scale_jitter`, on by default) cuts a SQUARE from half the pictures and the
+other half keep their 1:2 shape, and the batch pads pictures but not masks. RF-DETR's own folder loader passes
+`scale_jitter` from its config to the transforms; the stream's builder, which mirrors that loader, did not, so
+`train_config: {scale_jitter: false}` changed nothing. Measured on a 504 x 1008 picture at 504: on, 1248 x 624 x55
+and 624 x 624 x45 of 100 draws; off, 1248 x 624 x100. Prediction: `RFDETR.predict` resizes to the square of the
+resolution unless handed a `shape`, so the model trained at 1008 x 504 was shown 504 x 504. Whether a model trained
+keeping the aspect is recorded in the checkpoint's `args` only — `from_checkpoint` builds the loaded model's args
+from its model config, and they report the library's default (True) whatever the file says (measured, rfdetr 1.13).
+
+**Decision.** (1) The stream's transform builder passes `scale_jitter` (default on, as RF-DETR's loader does). (2)
+`RFDETRPredictor` reads `square_resize_div_64` off the file's `args` when it builds — a tensor-free read
+(`weights_only`, memory-mapped: 0.02 s on a 142 MB checkpoint) — and resizes each picture as that training validated:
+the square of the resolution, or the short side at the resolution with the long side scaled and capped at 1 333 px,
+both rounded UP to whole blocks of `patch_size x num_windows` (where validation padded the batch; `predict` takes only
+whole blocks). Pictures needing different sizes go in one `predict` call per size, their answers back in order. The
+lowering resizes through the same `input_size`. Rejected: a `shape` setting on the predictor — an input size is the
+model's training, which the file records, and a setting could disagree with it (§10's rule, no architecture setting).
+
+**Consequences.** A model trained keeping the aspect needs no setting to run: its package hands the network a 1008 x
+504 picture at 1008 x 504 (624 x 312 for a 312 smoke model, measured end to end 2026-10-14). A square-trained
+checkpoint, and every file without the key, predicts as before. Turning the zoom-crop off loses that augmentation for
+the configs that do; a set of pictures of SEVERAL shapes still needs the piece cut (§12). The compiled lowering reads
+the picture's size at the trace, so a compiled package keeps the picture size it was compiled at — the picture step
+fixes it.
+
+**Example.**
+
+```yaml
+train_config:
+  square_resize_div_64: false   # the aspect kept; recorded in the checkpoint, read back by the predictor
+  scale_jitter: false           # no square zoom-crop beside the 1:2 pictures
+```
+
+```python
+predictor = RFDETRPredictor(checkpoint_path="runs/a/checkpoint_best_total.pth")
+predictor.input_size(1008, 504)   # (1008, 504) at a 504 resolution trained keeping the aspect; (504, 504) square
+```
+
+**What you may change.** The rounding (up to a block) with a measurement against the training's validation. Not: a
+size setting on the predictor, the flag read from the loaded model's args (they hold the default), or a predict call
+mixing pictures of two sizes. Pins: `tests/test_rfdetr_predictor.py::TestTheTrainingsResize`,
+`tests/test_lowering.py::test_a_model_trained_keeping_the_aspect_is_resized_as_the_predictor_resizes`,
+`tests/test_stream_rfdetr_dataset.py::test_the_scale_jitter_setting_reaches_the_training_transforms_as_on_rfdetrs_own_loader`.
+
+## 14. A picture may reach RF-DETR at its own size: the resize skipped, nothing else (2026-10-13)
 
 **Context.** RF-DETR resizes every picture: to a `resolution` square, or (`square_resize_div_64: false`) to a short
 side of `resolution` with the long side capped at 1 333 px — `_COCO_MAX_SIZE`, a module constant of
@@ -707,8 +759,9 @@ seg batch joins masks of one size and would fail later with `Sizes of tensors mu
 dataset goes through RF-DETR's `build_dataset`, which this runnable does not build.
 
 **Consequences.** Pictures of one non-square size train whole; `resolution` only sizes the model. The predictor
-(`RFDETRPredictor`, §10) still resizes to its square, so a model trained this way is not yet run at its pictures'
-size outside the training loop.
+(`RFDETRPredictor`, §10) runs such a model the same way through `keep_picture_size` (addendum), which wins over the
+size the checkpoint records (§13): a model trained keeping the aspect needs no setting, one trained on whole pictures
+needs this one.
 
 **Example.**
 
@@ -722,8 +775,8 @@ image, target = dataset[0]    # a 504 x 2040 picture -> image.shape == (3, 2040,
 **What you may change.** The augmentation kept, if RF-DETR's router changes (follow it, never diverge). Not: a resize
 or a pad added to this path to make sizes agree — a crop in the stream does that (§12).
 
-**Addendum (2026-10-14): prediction at the picture's size.** `RFDETRPredictor(keep_picture_size=True)` passes each
-picture's `(H, W)` as `predict`'s own `shape` argument — the library's resize then changes nothing — grouping the
-pictures of a call by size (one `predict` per size, answers back in input order). Nothing of `predict` is copied, so
-its normalization, post-processing and mask upsampling stay the library's. The compiler's lowering mirrors it by
-skipping its own resize to the square: `predict(shape=(H, W))` at the picture's own size is the picture itself.
+**Addendum (2026-10-14): prediction at the picture's size.** `RFDETRPredictor(keep_picture_size=True)` makes
+`input_size(H, W)` (§13) answer `(H, W)`, so each picture's own `(H, W)` goes to `predict` as its `shape` argument — the
+library's resize then changes nothing — and the one-call-per-size grouping of §13 applies unchanged. Nothing of
+`predict` is copied, so its normalization, post-processing and mask upsampling stay the library's. The compiler's
+lowering reads the same `input_size`, so its resize to the picture's own size is the identity.

@@ -535,8 +535,10 @@ class RFDETRPredictor:
 
     * ``images``: a list of pictures of ANY size — ``[3, H, W]`` floats in ``[0, 1]``, ``H x W x 3``
       uint8 arrays, or a grey picture (``[H, W]`` / ``[1, H, W]``) read as its three equal channels, the
-      way training read a one-channel picture (``convert("RGB")``). RF-DETR resizes each to its resolution —
-      or, with ``keep_picture_size``, hands it to the network at its own size.
+      way training read a one-channel picture (``convert("RGB")``). RF-DETR resizes each to the size its
+      training validated on (:meth:`input_size`): the square of its resolution, or — a model trained with
+      ``square_resize_div_64: false``, which only the file's ``args`` record — the picture's own aspect. With
+      ``keep_picture_size`` it hands the picture to the network at its own size.
     * per picture: ``boxes`` ``[N, 4]`` xyxy and ``masks`` ``[N, H, W]`` bool, both in the INPUT
       picture's pixels; ``scores`` ``[N]``; ``labels`` ``[N]`` int64, 0-based into :attr:`class_names`.
       A label outside the vocabulary (RF-DETR's no-object slot) is dropped.
@@ -583,6 +585,8 @@ class RFDETRPredictor:
         # Lazy-init: the library and the file are touched on the first prediction (or `solidify()`).
         self._rf: Any = None
         self._device: str = "cpu"
+        # Whether the training kept each picture's aspect (`square_resize_div_64: false`), read with the file.
+        self._keeps_aspect: bool = False
 
     def solidify(self) -> Any:
         """Build (once) and return the library's ``RFDETR`` object, on the device last asked for."""
@@ -596,6 +600,7 @@ class RFDETRPredictor:
 
             logger.debug(f"RFDETRPredictor: loading {path} on {self._device}")
             rf = RFDETR.from_checkpoint(path, device=self._device)
+            self._keeps_aspect = _trained_keeping_aspect(path)
             if self.score_mode == "any_class":
                 # Typed `PostProcess` by the library; the wrapper only has to be CALLED like one (predict's one use).
                 rf.model.postprocess = cast(Any, _AnyClassPostProcess(rf.model.postprocess, self._counted_slots(rf)))
@@ -643,27 +648,45 @@ class RFDETRPredictor:
         """The weight artifact this predictor loads — the checkpoint file (stored config only, no build)."""
         return [file_model_ref(self.checkpoint_path)] if self.checkpoint_path else []
 
-    def _detections(self, rf: Any, pictures: List[Any]) -> List[Any]:
-        """RF-DETR's answer for each picture, in order: one ``predict`` call, or with ``keep_picture_size`` one call per
-        picture size, each told that size as its ``shape``."""
-        if not self.keep_picture_size:
-            found = rf.predict(pictures, threshold=self.score_threshold, include_source_image=False)
-            return found if isinstance(found, list) else [found]
-        by_size: Dict[Tuple[int, int], List[int]] = {}
-        for index, picture in enumerate(pictures):
-            by_size.setdefault(_picture_hw(picture), []).append(index)
-        answers: List[Any] = [None] * len(pictures)
-        for shape, indices in by_size.items():
-            found = rf.predict(
-                [pictures[i] for i in indices], threshold=self.score_threshold, include_source_image=False, shape=shape
-            )
-            for index, answer in zip(indices, found if isinstance(found, list) else [found]):
-                answers[index] = answer
-        return answers
+    def input_size(self, height: int, width: int) -> Tuple[int, int]:
+        """The ``(height, width)`` a ``height x width`` picture is resized to before the network (builds the model).
+
+        With ``keep_picture_size`` the picture's own size. Otherwise RF-DETR's default training
+        (``square_resize_div_64: true``) validated every picture at the square of its resolution. Trained keeping
+        the aspect, its validation resized the SHORT side to the resolution — the long side scaled with it and capped
+        at :data:`_VALIDATION_MAX_SIZE` — then padded the batch to whole blocks of
+        ``patch_size x num_windows``; ``predict`` takes only whole blocks, so each side is rounded UP to one (the
+        padding's size, stretched instead of padded): 1008 x 504 at a 504 resolution stays 1008 x 504.
+        """
+        if self.keep_picture_size:
+            return height, width
+        rf = self.solidify()
+        resolution = int(rf.model.resolution)
+        if not self._keeps_aspect:
+            return resolution, resolution
+        block = int(rf.model_config.patch_size) * int(rf.model_config.num_windows)
+        scale = min(resolution / min(height, width), _VALIDATION_MAX_SIZE / max(height, width))
+        return cast(Tuple[int, int], tuple(-(-round(side * scale) // block) * block for side in (height, width)))
 
     def __call__(self, images: List[Any]) -> List[Dict[str, Tensor]]:
         rf = self.solidify()
-        detections = self._detections(rf, [_rgb_picture(image) for image in images])
+        pictures = [_rgb_picture(image) for image in images]
+        # `predict` resizes one call's pictures to ONE size: the pictures go in one call per size they need, and their
+        # answers back in the order given.
+        by_size: Dict[Tuple[int, int], List[int]] = {}
+        for index, picture in enumerate(pictures):
+            height, width = picture.shape[-2:] if isinstance(picture, Tensor) else picture.shape[:2]
+            by_size.setdefault(self.input_size(int(height), int(width)), []).append(index)
+        detections: List[Any] = [None] * len(pictures)
+        for size, indices in by_size.items():
+            found_here = rf.predict(
+                [pictures[i] for i in indices],
+                threshold=self.score_threshold,
+                include_source_image=False,
+                shape=size,
+            )
+            for i, found in zip(indices, found_here if isinstance(found_here, list) else [found_here]):
+                detections[i] = found
         known = len(rf.class_names)
         outputs: List[Dict[str, Tensor]] = []
         for found in detections:
@@ -679,11 +702,21 @@ class RFDETRPredictor:
         return outputs
 
 
-def _picture_hw(picture: Any) -> Tuple[int, int]:
-    """``(height, width)`` of a picture as :func:`_rgb_picture` gives it: ``H x W x 3`` uint8 or ``[3, H, W]``."""
-    if isinstance(picture, np.ndarray):
-        return int(picture.shape[0]), int(picture.shape[1])
-    return int(picture.shape[-2]), int(picture.shape[-1])
+#: The longest side RF-DETR's validation resize allows a picture trained keeping its aspect (its ``max_size``).
+_VALIDATION_MAX_SIZE = 1333
+
+
+def _trained_keeping_aspect(path: str) -> bool:
+    """Whether the checkpoint at ``path`` was trained with ``square_resize_div_64: false`` (the aspect kept).
+
+    Only the file's ``args`` record it: ``RFDETR.from_checkpoint`` builds the model's args from the model config, so
+    the loaded model reports the library's default (True) whatever the file says (measured on rfdetr 1.13). Read
+    tensor-free (``weights_only``, memory-mapped: 0.02 s on a 142 MB checkpoint); a file without the key trained
+    with the default, square.
+    """
+    args = torch.load(path, map_location="cpu", weights_only=True, mmap=True).get("args") or {}
+    flag = args.get("square_resize_div_64", True) if isinstance(args, Mapping) else True
+    return not bool(flag)
 
 
 def _rgb_picture(image: Any) -> Any:

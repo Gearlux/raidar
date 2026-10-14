@@ -384,6 +384,18 @@ predicted one size at a time; RF-DETR refuses a side its backbone does not divid
 the same way: the network gets the picture as it is, never the model's square.
 
 
+**Pictures of ONE shape that is not square** (all 504 x 1008, say) need no cut: keep their aspect and turn RF-DETR's
+zoom-crop off — its cut is square, so beside the uncut 1:2 pictures a batch holds masks of two sizes. The stream
+passes `train_config`'s `scale_jitter` to RF-DETR's transforms as its own folder loader does (default on):
+
+```yaml
+  resolution: 504               # the SHORT side; the pictures train at 1248 x 624 (the largest multi-scale size)
+  train_config:
+    square_resize_div_64: false # the aspect kept — recorded in the checkpoint; RFDETRPredictor reads it back
+    scale_jitter: false         # on: 624 x 624 for half the pictures, and the seg matcher stops on the masks
+```
+
+
 `raidar evaluate --framework rfdetr` runs RF-DETR's native validation/test loop over a trained
 checkpoint (`weights:`). The wired `trackers:` receive the run's **record** (provenance, config,
 manifest, log file, final-metrics sidecar); RF-DETR's own per-step curves stay with its native
@@ -658,13 +670,19 @@ It answers the torchvision eval contract the prediction ops call — `eval()`, `
 
 | key | shape | meaning |
 |---|---|---|
-| `boxes` | `[N, 4]` float | xyxy in the INPUT picture's pixels (any size: RF-DETR resizes to its resolution and back) |
+| `boxes` | `[N, 4]` float | xyxy in the INPUT picture's pixels (any size: RF-DETR resizes as its training validated, and back) |
 | `scores` | `[N]` float | confidence |
 | `labels` | `[N]` int64 | 0-based into `predictor.class_names` (the checkpoint's own names); RF-DETR's no-object slot is dropped |
 | `masks` | `[N, H, W]` bool | each instance's mask at the input picture's size — a `seg-*` checkpoint only |
 
 A picture is `[3, H, W]` floats in `[0, 1]`, an `H x W x 3` uint8 array, or a grey one (`[H, W]`,
 `[1, H, W]`) read as its three equal channels — what training's reader made of a one-channel PNG.
+
+The size a picture reaches the network at is the training's, read off the file too (`predictor.input_size(h, w)`
+says it): the square of the resolution, or — a model trained with `square_resize_div_64: false` — the short side at
+the resolution and the long side scaled with it (capped at 1 333 px), both rounded up to whole blocks of
+`patch_size x num_windows`. A 1008 x 504 picture reaches a model trained so at 504 as 1008 x 504, a square-trained
+one's as 504 x 504; pictures of two sizes in one call go to the network in one call per size.
 The file is read on the first prediction, not at construction. It predicts only: training goes
 through the rfdetr backend, or `RFDETRModel` under the lightning backend.
 

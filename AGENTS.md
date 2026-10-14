@@ -75,15 +75,19 @@ hooks, model wrappers, the FCOS spec, registrations and configs.
   `variant`/`model_config` knob to it, and never open `RFDETRModel`'s variants to `seg-*` to predict masks (it is the
   lightning backend's training wrapper). Boxes and masks are in the INPUT picture's pixels, a label outside the
   vocabulary (the no-object slot) is dropped, a grey picture is read as three equal channels; the file is read at the
-  first prediction. §10. (`tests/test_rfdetr_predictor.py`)
+  first prediction. §10. (`tests/test_rfdetr_predictor.py`) The picture's size at the network is the TRAINING's,
+  read off the file's `args.square_resize_div_64` (tensor-free, at the build) — never off the loaded model's args,
+  which hold the library default, and never a size setting: square at the resolution, or the short side at it with
+  the long side scaled, capped at 1 333 and both rounded UP to a block (`input_size`, which the lowering calls too);
+  one `predict` call per size. §13. (`tests/test_rfdetr_predictor.py::TestTheTrainingsResize`)
 - `RFDETRPredictor.score_mode`: `class` (default) is the library's answer unchanged; `any_class` rewrites the
   `pred_logits` handed to the library's OWN post-processing (one slot per query: its best counted class carrying
   `1 - prod(1 - p)`), so selection, boxes and masks stay the library's — never override `PostProcess` internals or
   copy `predict`'s tail. The no-object slot never counts; an unknown `any_class_excludes` name is refused at the build.
   §11. (`tests/test_rfdetr_predictor.py::TestTheAnyClassRewrite`, `::TestAnyClassScoring`)
 - `raidar.lowering` (the `[compile]` extra, entry point `torpaido.lowerings`) lowers `RFDETRPredictor` for the package
-  compiler as the library's own inference path, fixed-size: `interpolate(bilinear, antialias=False)` to the model's
-  resolution (what `predict`'s `F.resize(antialias=False)` is), `(x - means) / stds`, the network, the library's
+  compiler as the library's own inference path, fixed-size: `interpolate(bilinear, antialias=False)` to the
+  predictor's `input_size` (what `predict`'s `F.resize(antialias=False)` is; read at the trace), `(x - means) / stds`, the network, the library's
   `PostProcess._select_topk` and `_gather_and_scale_boxes` on its own outputs, and `keep = score > threshold & label <
   known` in place of the row-dropping cut; `any_class` reuses `_any_class_logits` and `_counted_slots`; a `seg-*`
   model's `pred_masks` leave as the SELECTED rows' logits at the head's resolution (`mask_logits`), gathered as the
@@ -101,8 +105,11 @@ hooks, model wrappers, the FCOS spec, registrations and configs.
   `::test_the_batch_reaches_the_network_as_a_nested_tensor_built_without_a_per_image_loop`)
 - RF-DETR stream mode reads a record's labels in the SAME read as its picture, never walked ahead or cached, and a
   `seg-*` model gets each instance's mask from `Boxes.extras[POLYGONS]` through RF-DETR's own `ConvertCoco` (a box
-  without an outline masked by its rectangle). §12. (`tests/test_stream_rfdetr_dataset.py::test_a_pictures_labels_come_from_the_read_that_gave_the_picture`,
-  `::test_a_seg_model_gets_each_instances_mask_from_its_outline_and_a_box_without_one_is_its_box`)
+  without an outline masked by its rectangle), and its transforms take every argument RF-DETR's own folder loader
+  passes them — `scale_jitter` included (default on), the zoom-crop a non-square set turns off. §12, §13.
+  (`tests/test_stream_rfdetr_dataset.py::test_a_pictures_labels_come_from_the_read_that_gave_the_picture`,
+  `::test_a_seg_model_gets_each_instances_mask_from_its_outline_and_a_box_without_one_is_its_box`,
+  `::test_the_scale_jitter_setting_reaches_the_training_transforms_as_on_rfdetrs_own_loader`)
 - `RandomCropDetection` (`raidar/crop.py`) cuts in the picture's OWN pixels before RF-DETR's resize: exactly
   `height` x `width` out, boxes clipped and a box under `min_size_px` dropped, outlines clipped exactly, a smaller
   picture padded with its median and never stretched; `random` draws from Python's `random` (seeded per loader
