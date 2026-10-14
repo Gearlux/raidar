@@ -75,15 +75,19 @@ hooks, model wrappers, the FCOS spec, registrations and configs.
   `variant`/`model_config` knob to it, and never open `RFDETRModel`'s variants to `seg-*` to predict masks (it is the
   lightning backend's training wrapper). Boxes and masks are in the INPUT picture's pixels, a label outside the
   vocabulary (the no-object slot) is dropped, a grey picture is read as three equal channels; the file is read at the
-  first prediction. §10. (`tests/test_rfdetr_predictor.py`)
+  first prediction. §10. (`tests/test_rfdetr_predictor.py`) The picture's size at the network is the TRAINING's,
+  read off the file's `args.square_resize_div_64` (tensor-free, at the build) — never off the loaded model's args,
+  which hold the library default, and never a size setting: square at the resolution, or the short side at it with
+  the long side scaled, capped at 1 333 and both rounded UP to a block (`input_size`, which the lowering calls too);
+  one `predict` call per size. §13. (`tests/test_rfdetr_predictor.py::TestTheTrainingsResize`)
 - `RFDETRPredictor.score_mode`: `class` (default) is the library's answer unchanged; `any_class` rewrites the
   `pred_logits` handed to the library's OWN post-processing (one slot per query: its best counted class carrying
   `1 - prod(1 - p)`), so selection, boxes and masks stay the library's — never override `PostProcess` internals or
   copy `predict`'s tail. The no-object slot never counts; an unknown `any_class_excludes` name is refused at the build.
   §11. (`tests/test_rfdetr_predictor.py::TestTheAnyClassRewrite`, `::TestAnyClassScoring`)
 - `raidar.lowering` (the `[compile]` extra, entry point `torpaido.lowerings`) lowers `RFDETRPredictor` for the package
-  compiler as the library's own inference path, fixed-size: `interpolate(bilinear, antialias=False)` to the model's
-  resolution (what `predict`'s `F.resize(antialias=False)` is), `(x - means) / stds`, the network, the library's
+  compiler as the library's own inference path, fixed-size: `interpolate(bilinear, antialias=False)` to the
+  predictor's `input_size` (what `predict`'s `F.resize(antialias=False)` is; read at the trace), `(x - means) / stds`, the network, the library's
   `PostProcess._select_topk` and `_gather_and_scale_boxes` on its own outputs, and `keep = score > threshold & label <
   known` in place of the row-dropping cut; `any_class` reuses `_any_class_logits` and `_counted_slots`; a `seg-*`
   model's `pred_masks` leave as the SELECTED rows' logits at the head's resolution (`mask_logits`), gathered as the
@@ -101,14 +105,33 @@ hooks, model wrappers, the FCOS spec, registrations and configs.
   `::test_the_batch_reaches_the_network_as_a_nested_tensor_built_without_a_per_image_loop`)
 - RF-DETR stream mode reads a record's labels in the SAME read as its picture, never walked ahead or cached, and a
   `seg-*` model gets each instance's mask from `Boxes.extras[POLYGONS]` through RF-DETR's own `ConvertCoco` (a box
-  without an outline masked by its rectangle). §12. (`tests/test_stream_rfdetr_dataset.py::test_a_pictures_labels_come_from_the_read_that_gave_the_picture`,
-  `::test_a_seg_model_gets_each_instances_mask_from_its_outline_and_a_box_without_one_is_its_box`)
+  without an outline masked by its rectangle), and its transforms take every argument RF-DETR's own folder loader
+  passes them — `scale_jitter` included (default on), the zoom-crop a non-square set turns off. §12, §13.
+  (`tests/test_stream_rfdetr_dataset.py::test_a_pictures_labels_come_from_the_read_that_gave_the_picture`,
+  `::test_a_seg_model_gets_each_instances_mask_from_its_outline_and_a_box_without_one_is_its_box`,
+  `::test_the_scale_jitter_setting_reaches_the_training_transforms_as_on_rfdetrs_own_loader`)
 - `RandomCropDetection` (`raidar/crop.py`) cuts in the picture's OWN pixels before RF-DETR's resize: exactly
   `height` x `width` out, boxes clipped and a box under `min_size_px` dropped, outlines clipped exactly, a smaller
   picture padded with its median and never stretched; `random` draws from Python's `random` (seeded per loader
   worker and epoch), never an instance RNG (pickled into every worker it would repeat). Never move the cut into
   RF-DETR's `aug_config` — it runs after the resize and its 1 333 px cap. §12.
   (`tests/test_crop.py`, `tests/test_stream_rfdetr_dataset.py::test_cut_pictures_of_any_height_batch_into_masks_of_one_size`)
+- `RFDETRDetector(keep_picture_size=True)` skips RF-DETR's resize and NOTHING else: the augmentation RF-DETR routes
+  `aug_config` to (`None` its flip, `{}` none, else its Albumentations stack) and its normalization stay
+  (`stream_rfdetr_dataset._unresized_transforms`); a second picture size is refused where it is read, naming both and
+  the record's `file`; stream mode only (a disk dataset is refused). Never pad or resize there to make sizes agree —
+  a crop before it does. (`tests/test_stream_rfdetr_dataset.py::test_a_kept_picture_reaches_the_model_at_its_own_size_where_the_resize_would_change_it`,
+  `::test_a_kept_picture_of_another_size_is_refused_naming_both_sizes_and_the_file`,
+  `tests/test_rfdetr_detector.py::test_keep_picture_size_is_refused_on_a_disk_dataset`)
+  Its prediction twin is `RFDETRPredictor(keep_picture_size=True)`: RF-DETR's OWN `predict` with `shape=` the
+  picture's `(H, W)`, one call per picture size, answers in input order — never a resize or post-processing of
+  raidar's; `raidar.lowering` skips its resize to the square for it, the network getting the pictures as they are
+  (`tests/test_rfdetr_predictor.py::TestKeepPictureSize`,
+  `tests/test_lowering.py::test_a_predictor_that_keeps_the_picture_size_runs_the_network_on_the_picture_as_it_is`).
+- `RFDETRDetector.mps_low_watermark` is a BODY slot (not a constructor param), handed to
+  `matrainer.torch.apply_mps_low_watermark` FIRST in `run()`, before RF-DETR touches the GPU — the same setting
+  matrainer's torch trainers carry; never a raidar copy of the helper
+  (`tests/test_rfdetr_detector.py::test_mps_low_watermark_is_handed_to_torch_before_the_task`).
 - `YoloSink.layout` is the only difference between the Ultralytics folder (`images/<split>`) and
   RF-DETR's (`<split>/images`, the COCO sidecar at `<split>/_annotations.coco.json`); the default
   stays `ultralytics`. (`tests/test_yolo_sink.py::test_the_rfdetr_layout_is_what_rfdetr_reads_and_the_default_is_not`)

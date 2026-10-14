@@ -7,6 +7,15 @@ All notable changes to this project are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- **`RFDETRDetector.mps_low_watermark`** — on Apple's GPU, torch gives its cached memory back above that share of the
+  GPU's working set (`PYTORCH_MPS_LOW_WATERMARK_RATIO`, set before the model is built); settable in a config or on
+  the command line (`runnable.mps_low_watermark=0.5`). Unset leaves torch's default.
+- **`RFDETRDetector(keep_picture_size=True)`** hands every picture to the model at its own size in stream mode —
+  RF-DETR's resize (a square, or a long side capped at 1333 px) skipped, its augmentation and normalization kept;
+  every picture must be one size, a second size refused naming both (`README.md`).
+- **`RFDETRPredictor(keep_picture_size=True)`** predicts each picture at its own size (RF-DETR's `predict` told the
+  picture's shape), as a model trained with `keep_picture_size` saw them; its lowering for the package compiler
+  skips the resize to the square the same way.
 - **`raidar.crop.RandomCropDetection`** cuts a picture to one `height` x `width` piece with its boxes and mask
   outlines, before a detector's own resize: `placement: random` (a new piece each epoch) or `centre`; a smaller
   picture is padded with its median, a box cut under `min_size_px` dropped. Pictures of any height then train an
@@ -15,7 +24,11 @@ All notable changes to this project are documented here. The format follows
   box without one masked by its rectangle; a picture's labels are read with the picture, per item.
 - **`raidar.RFDETRPredictor`** predicts from one of RF-DETR's own checkpoint files, the model rebuilt
   from what the file records (variant, resolution, query groups, head, class names): boxes, scores and
-  labels in the input picture's pixels, and each instance's mask for a `seg-*` checkpoint.
+  labels in the input picture's pixels, and each instance's mask for a `seg-*` checkpoint. A model trained keeping its pictures' aspect
+  (`square_resize_div_64: false`, read off the file's `args`) is shown each picture at that aspect — the short side
+  at its resolution — and `input_size(height, width)` says the size.
+- **RF-DETR stream mode passes `train_config`'s `scale_jitter`** to RF-DETR's transforms, as RF-DETR's own folder
+  loader does: off, pictures that keep a non-square aspect train a `seg-*` model in batches.
 - **`RFDETRPredictor(score_mode="any_class")`** keeps one detection per query, scored by the chance that any of
   its classes is right (`1 - prod(1 - p)`) and named by its best class — a query torn between classes is found
   where a per-class cut drops it. `any_class_excludes` leaves named classes out of the score. `score_mode="class"`,

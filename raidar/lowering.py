@@ -1,7 +1,8 @@
 """The compiler's view of raidar's RF-DETR predictor: the library's own inference path as torch, fixed-size.
 
 Installed by the ``[compile]`` extra and listed under the entry-point group ``torpaido.lowerings``. The lowering
-mirrors ``RFDETR.predict`` step for step — the bilinear resize to the model's resolution without antialiasing,
+mirrors ``RFDETR.predict`` step for step — the bilinear resize to the predictor's ``input_size`` without antialiasing
+(the picture's own size for a predictor with ``keep_picture_size``, where the resize changes nothing),
 the ImageNet normalization, the network, the library's own top-k selection and box scaling — and replaces the
 one thing an exported program cannot do, the score filter that changes the row count, with a ``keep`` mask over
 the fixed ``num_select`` rows. A segmenting model's mask logits leave as the selected rows' ``[B, K, Hm, Wm]``
@@ -68,18 +69,15 @@ def traceable(network: nn.Module) -> nn.Module:
 
 @lowers_model(RFDETRPredictor)
 def lower_rfdetr_predictor(model: RFDETRPredictor, pictures: Tensor, ctx: Context) -> Dict[str, Any]:
-    if model.keep_picture_size:
-        raise ValueError(
-            "torpaido: RFDETRPredictor(keep_picture_size=True) predicts each picture at its own size — not lowered "
-            "yet: this lowering resizes to the model's square, so the artifact would answer another picture than the "
-            "package does"
-        )
     rf = model.solidify()
     network = ctx.module("network", traceable(rf.model.model))
-    resolution = int(rf.model.resolution)
     batch = pictures.shape[0]
+    # The size the predictor resizes to: the square of the resolution, or the picture's aspect for a model trained
+    # keeping it. A picture's size is fixed in a compiled package (the picture step resizes to it), so it is read
+    # once, at the trace.
+    size = model.input_size(int(pictures.shape[-2]), int(pictures.shape[-1]))
     resized = torch.nn.functional.interpolate(
-        pictures, size=(resolution, resolution), mode="bilinear", align_corners=False, antialias=False
+        pictures, size=size, mode="bilinear", align_corners=False, antialias=False
     )
     mean = ctx.buffer("mean", lambda: torch.tensor(list(rf.means), dtype=torch.float32).view(1, -1, 1, 1))
     std = ctx.buffer("std", lambda: torch.tensor(list(rf.stds), dtype=torch.float32).view(1, -1, 1, 1))

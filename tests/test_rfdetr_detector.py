@@ -79,6 +79,14 @@ def test_fit_stream_requires_both_train_and_val() -> None:
         RFDETRDetector(train_set=[], num_classes=2, class_names={0: "a"})._validate_fit_inputs()
 
 
+def test_keep_picture_size_is_refused_on_a_disk_dataset() -> None:
+    """A disk dataset is read by RF-DETR's own loader, whose resize this runnable does not build."""
+    with pytest.raises(ValueError, match=r"keep_picture_size works on train_set/val_set streams only"):
+        RFDETRDetector(data="/d", keep_picture_size=True)._validate_fit_inputs()
+    with pytest.raises(ValueError, match=r"keep_picture_size works on train_set/val_set streams only"):
+        RFDETRDetector(data="/d", weights="/w.pth", keep_picture_size=True)._validate_eval_inputs()
+
+
 def test_eval_requires_weights() -> None:
     with pytest.raises(ValueError, match="weights"):
         RFDETRDetector(val_set=[], num_classes=2, class_names={0: "a"})._validate_eval_inputs()
@@ -219,7 +227,9 @@ def test_eval_loads_checkpoint_via_pretrain_weights_and_validates(monkeypatch: A
 
     import raidar.stream_rfdetr_dataset as frd
 
-    monkeypatch.setattr(frd, "StreamRFDETRDataModule", lambda *a, **k: SimpleNamespace())
+    monkeypatch.setattr(
+        frd, "StreamRFDETRDataModule", lambda *a, **k: captured.update(keep=k["keep_picture_size"]) or SimpleNamespace()
+    )
 
     # A real (indexable) stand-in: the runnable now PREPARES its stream slots (flow +
     # ensure_materialized), so a bare `object()` would fail the materialization read.
@@ -235,6 +245,39 @@ def test_eval_loads_checkpoint_via_pretrain_weights_and_validates(monkeypatch: A
     assert fake_model_config.pretrain_weights == "/ckpt/best.pth"  # checkpoint loaded the supported way
     assert captured.get("validate") and "test" not in captured  # validate (not test) on task="evaluate"
     assert d.computed_metrics == {"val/map": pytest.approx(0.3)}  # the @output carries the result
+    assert captured["keep"] is False  # the datamodule is told the runnable's keep_picture_size (default off)
+
+
+def test_a_stream_fit_hands_keep_picture_size_to_its_datamodule(monkeypatch: Any) -> None:
+    import rfdetr.training as rftrain
+
+    import raidar.rfdetr as rfmod
+    import raidar.rfdetr_detector as mod
+    import raidar.stream_rfdetr_dataset as frd
+
+    captured: dict = {}
+    fake_rf = SimpleNamespace(
+        model_config=SimpleNamespace(),
+        get_train_config=lambda **kw: SimpleNamespace(resume=None, **kw),
+        model=SimpleNamespace(model=None),
+    )
+    monkeypatch.setattr(rfmod, "_build_rfdetr", lambda *a, **k: fake_rf)
+    monkeypatch.setattr(rftrain, "RFDETRModelModule", lambda mc, cfg: SimpleNamespace(model="trained"))
+    trainer = SimpleNamespace(fit=lambda *a, **k: None, callback_metrics={})
+    monkeypatch.setattr(rftrain, "build_trainer", lambda cfg, mc, **k: trainer)
+    monkeypatch.setattr(mod, "_trainer_device_kwargs", lambda device: {})
+    monkeypatch.setattr(
+        frd, "StreamRFDETRDataModule", lambda *a, **k: captured.update(keep=k["keep_picture_size"]) or SimpleNamespace()
+    )
+    d = RFDETRDetector(
+        train_set=[{"image": None}],
+        val_set=[{"image": None}],
+        num_classes=2,
+        class_names={0: "a", 1: "b"},
+        keep_picture_size=True,
+    )
+    d._fit_stream_mode()
+    assert captured["keep"] is True
 
 
 # ---------------------------------------------------------------------------
@@ -357,3 +400,19 @@ def _first_call_line(fn_node: Any, name: str) -> Any:
             if called == name:
                 return node.lineno
     return None
+
+
+def test_mps_low_watermark_is_handed_to_torch_before_the_task(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A body slot a config names; `run()` applies it before the entry point builds anything."""
+    from confluid import load, to_pydantic
+
+    from raidar import rfdetr_detector
+
+    order: List[Any] = []
+    monkeypatch.setattr(rfdetr_detector, "apply_mps_low_watermark", lambda value: order.append(("watermark", value)))
+    monkeypatch.setattr(rfdetr_detector, "run_entrypoint", lambda runnable, task: order.append(("task", task)))
+    assert RFDETRDetector().mps_low_watermark is None
+    assert "mps_low_watermark" in to_pydantic(RFDETRDetector).model_fields
+    detector = load("runnable: !class:raidar.rfdetr_detector.RFDETRDetector\n  mps_low_watermark: 0.5\n")["runnable"]
+    detector.run()
+    assert order == [("watermark", 0.5), ("task", "fit")]

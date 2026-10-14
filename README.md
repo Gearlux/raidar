@@ -289,6 +289,25 @@ runnable: !class:raidar.RFDETRDetector
 Seeded, two runs land identically **on cpu**. On mps they still differ — that residual is Apple's
 MPS backend rather than the config, so mps is the faster option and cpu is the reproducible one.
 
+**On a Mac, let torch give the GPU's memory back.** By default torch keeps the memory it has cached
+on Apple's GPU, which on a Mac is the machine's memory: a seg-nano smoke run (504 x 504, batch 1)
+held 11 GB on an 18 GB laptop, swapped, and its epoch took 8 min 42 s. With `mps_low_watermark: 0.5`
+torch releases its cache above half the GPU's working set: 9.1-9.5 GB and 2 min 45 s for the whole
+run (measured 2026-10-14). Set it in the config or on the command line:
+
+```yaml
+runnable: !class:raidar.RFDETRDetector
+  mps_low_watermark: 0.5               # unset: torch's default (1.4); ignored off Apple's GPU
+```
+
+```bash
+recordstream run cfg.yaml runnable.mps_low_watermark=0.5
+```
+
+It is `PYTORCH_MPS_LOW_WATERMARK_RATIO`, set before RF-DETR first uses the GPU; that variable
+already in the shell wins. The same setting is on every matrainer torch trainer (matrainer README →
+`matrainer.torch`).
+
 **A segmentation variant trains from the same boxes.** `variant: seg-nano` … `seg-xlarge` build
 RF-DETR's instance-segmentation models; in disk mode with `dataset_file: yolo` RF-DETR reads a box
 label as its four-corner polygon, so a box dataset is enough (a label line with ≥ 3 points is read
@@ -329,6 +348,52 @@ runnable: !class:raidar.RFDETRDetector
 Measured (2026-10-12, seg-nano at 504, one epoch over 130 + 65 pictures 504 px wide and 100, 1 008 or 3 000 rows
 tall): it trains — mask losses and `val/segm_mAP_*` written. Without the cut, the same folder read by RF-DETR's
 shape-keeping resize stops on the masks' sizes, and a 504 x 3000 picture reaches the model 224 px wide.
+
+### A picture at its own size — `RFDETRDetector(keep_picture_size=True)`
+
+RF-DETR always resizes: to a `resolution` x `resolution` square, or (`square_resize_div_64: false`) to a short side of
+`resolution` and a long side of at most 1333 px — a constant of the library, not a setting. A tall picture therefore
+never reaches the model whole: 504 x 2040 trains as 330 x 1333. `keep_picture_size: true` (stream mode) skips that
+resize and keeps everything else of RF-DETR's pipeline — its augmentation (`aug_config`: unset, a horizontal flip at
+0.5; `{}`, none; otherwise its Albumentations stack) and its normalization — so each picture reaches the model at its
+own size:
+
+```yaml
+runnable: !class:raidar.RFDETRDetector
+  variant: seg-medium
+  resolution: 504                # sizes the model; the pictures keep their own size
+  keep_picture_size: true
+  train_set: !class:recordstream.core.stream.Stream
+    source: !class:raidar.YoloSource {root: ./runs/pictures, split: train}   # every picture 504 x 2040
+  ...
+```
+
+| | `keep_picture_size: false` (default) | `true` |
+|---|---|---|
+| a 504 x 2040 picture reaches the model as | 330 x 1333 (`square_resize_div_64: false`) or 504 x 504 (square) | 504 x 2040 |
+| pictures of two sizes | resized alike | refused where the second is read: `keep_picture_size: picture 1 (…png) is 48 x 216 (width x height), the first was 48 x 204 — …` |
+
+Every picture must be ONE size (a seg batch joins masks of one size) — cut them to one with `RandomCropDetection`
+first if they are not. Each side should be a multiple of the backbone's block (patch x windows: 24 for `seg-small` and
+up, 12 for `seg-nano`): RF-DETR's batch pads a picture up to one, so 512 x 2048 trains as 528 x 2064 with the extra
+rows and columns padding. A disk dataset (`data`) is read by RF-DETR's own loader, so the setting is refused there.
+
+A model trained this way is RUN the same way: `RFDETRPredictor(keep_picture_size=True)` tells RF-DETR's `predict`
+each picture's own shape, so its resize to the model's square changes nothing (pictures of several sizes are
+predicted one size at a time; RF-DETR refuses a side its backbone does not divide). The package compiler lowers it
+the same way: the network gets the picture as it is, never the model's square.
+
+
+**Pictures of ONE shape that is not square** (all 504 x 1008, say) need no cut: keep their aspect and turn RF-DETR's
+zoom-crop off — its cut is square, so beside the uncut 1:2 pictures a batch holds masks of two sizes. The stream
+passes `train_config`'s `scale_jitter` to RF-DETR's transforms as its own folder loader does (default on):
+
+```yaml
+  resolution: 504               # the SHORT side; the pictures train at 1248 x 624 (the largest multi-scale size)
+  train_config:
+    square_resize_div_64: false # the aspect kept — recorded in the checkpoint; RFDETRPredictor reads it back
+    scale_jitter: false         # on: 624 x 624 for half the pictures, and the seg matcher stops on the masks
+```
 
 
 `raidar evaluate --framework rfdetr` runs RF-DETR's native validation/test loop over a trained
@@ -605,13 +670,19 @@ It answers the torchvision eval contract the prediction ops call — `eval()`, `
 
 | key | shape | meaning |
 |---|---|---|
-| `boxes` | `[N, 4]` float | xyxy in the INPUT picture's pixels (any size: RF-DETR resizes to its resolution and back) |
+| `boxes` | `[N, 4]` float | xyxy in the INPUT picture's pixels (any size: RF-DETR resizes as its training validated, and back) |
 | `scores` | `[N]` float | confidence |
 | `labels` | `[N]` int64 | 0-based into `predictor.class_names` (the checkpoint's own names); RF-DETR's no-object slot is dropped |
 | `masks` | `[N, H, W]` bool | each instance's mask at the input picture's size — a `seg-*` checkpoint only |
 
 A picture is `[3, H, W]` floats in `[0, 1]`, an `H x W x 3` uint8 array, or a grey one (`[H, W]`,
 `[1, H, W]`) read as its three equal channels — what training's reader made of a one-channel PNG.
+
+The size a picture reaches the network at is the training's, read off the file too (`predictor.input_size(h, w)`
+says it): the square of the resolution, or — a model trained with `square_resize_div_64: false` — the short side at
+the resolution and the long side scaled with it (capped at 1 333 px), both rounded up to whole blocks of
+`patch_size x num_windows`. A 1008 x 504 picture reaches a model trained so at 504 as 1008 x 504, a square-trained
+one's as 504 x 504; pictures of two sizes in one call go to the network in one call per size.
 The file is read on the first prediction, not at construction. It predicts only: training goes
 through the rfdetr backend, or `RFDETRModel` under the lightning backend.
 
