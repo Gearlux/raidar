@@ -488,9 +488,12 @@ by class, the union of both folders' picture scales in `data.yaml`, each record'
 becomes a fixed-size torch program — the library's own bilinear resize to the model's resolution, its ImageNet
 normalization, the network, its top-k selection and box scaling — with the score cut turned into a `keep` mask over
 the `num_select` rows, and the `any_class` score mode applied as the predictor applies it. A detection op that holds
-the predictor compiles through it; nothing in `raidar.rfdetr` changes. The lowering is held to the library's own
-pieces on a stand-in network (`tests/test_lowering.py`) and, with `RAIDAR_RFDETR_CHECKPOINT` naming a checkpoint, to
-the predictor itself.
+the predictor compiles through it; nothing in `raidar.rfdetr` changes. A segmenting model's head runs its depthwise
+convolution through a custom autograd function (a cuDNN workaround for GPU training) that TorchScript cannot
+serialize; the lowering runs the same convolution directly (`raidar.lowering.traceable`), identical under `no_grad`,
+and hands the network its batch as a `NestedTensor` built in one step (`raidar.lowering.nested`), so a traced
+artifact takes any batch size — any number of picture pieces. The lowering is held to the library's own pieces on a stand-in network (`tests/test_lowering.py`) and, with
+`RAIDAR_RFDETR_CHECKPOINT` naming a checkpoint, to the predictor itself.
 
 ## Detector catalogue
 

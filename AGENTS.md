@@ -88,8 +88,17 @@ hooks, model wrappers, the FCOS spec, registrations and configs.
   known` in place of the row-dropping cut; `any_class` reuses `_any_class_logits` and `_counted_slots`; a `seg-*`
   model's `pred_masks` leave as the SELECTED rows' logits at the head's resolution (`mask_logits`), gathered as the
   library gathers them — the upsample and the cut at zero are the consumer's. Never copy the library's post-processing
-  — call it. Pinned against the library's pieces on a stand-in network, and against the
-  predictor on a real checkpoint when `RAIDAR_RFDETR_CHECKPOINT` is set (slow). (`tests/test_lowering.py`)
+  — call it. The network runs in its TRACEABLE form (`lowering.traceable`, 2026-10-13): the segmentation head's
+  `DepthwiseConvBlock` routes its depthwise convolution through a custom autograd Function (cuDNN off in forward and
+  backward, a GPU training workaround) that `torch.jit.save` refuses (`Could not export Python function call
+  '_DepthwiseConvWithoutCuDNN'`, measured on a real D package); `traceable` binds the same `F.conv2d` on each block in
+  place — identical under `no_grad`, how the predictor runs. The batch reaches the network as a `NestedTensor` built
+  directly (`lowering.nested`: the pictures and an all-False mask): the library's `nested_tensor_from_tensor_list`
+  copies image by image and a trace bakes that loop's count (measured: `Expected 5 elements in a list but found 3` on
+  the next capture's piece count). Pinned against the library's pieces on a stand-in network, and against the
+  predictor on a real checkpoint when `RAIDAR_RFDETR_CHECKPOINT` is set (slow).
+  (`tests/test_lowering.py`, `::test_the_segmentation_head_s_depthwise_convolution_is_traced_as_a_plain_convolution`,
+  `::test_the_batch_reaches_the_network_as_a_nested_tensor_built_without_a_per_image_loop`)
 - RF-DETR stream mode reads a record's labels in the SAME read as its picture, never walked ahead or cached, and a
   `seg-*` model gets each instance's mask from `Boxes.extras[POLYGONS]` through RF-DETR's own `ConvertCoco` (a box
   without an outline masked by its rectangle). §12. (`tests/test_stream_rfdetr_dataset.py::test_a_pictures_labels_come_from_the_read_that_gave_the_picture`,

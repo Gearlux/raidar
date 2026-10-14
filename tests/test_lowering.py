@@ -14,7 +14,7 @@ from recordstream import Image
 from torch import nn
 from torpaido.lowering import model_lowering_for
 
-from raidar.lowering import lower_rfdetr_predictor
+from raidar.lowering import lower_rfdetr_predictor, nested, traceable
 from raidar.rfdetr import RFDETRPredictor, _AnyClassPostProcess
 
 rfdetr_postprocess = pytest.importorskip("rfdetr.models.postprocess")
@@ -35,7 +35,10 @@ class _Network(nn.Module):
         self.head = nn.Linear(3, QUERIES * CLASSES + QUERIES * 4)
         self.mask_head = nn.Linear(3, QUERIES * MASK_SIDE * MASK_SIDE) if masks else None
 
-    def forward(self, x: torch.Tensor) -> Dict[str, torch.Tensor]:
+    def forward(self, x: Any) -> Dict[str, torch.Tensor]:
+        if hasattr(x, "tensors"):  # the library's NestedTensor, as the lowering hands it over
+            self.seen = (type(x).__name__, x.mask)
+            x = x.tensors
         colour = x.mean(dim=(2, 3))
         out = self.head(colour)
         logits = out[:, : QUERIES * CLASSES].view(-1, QUERIES, CLASSES) * 4.0
@@ -106,6 +109,15 @@ def _kept(found: Dict[str, Any], index: int) -> Dict[str, torch.Tensor]:
 
 def test_the_lowering_is_registered_for_the_predictor() -> None:
     assert model_lowering_for(RFDETRPredictor(checkpoint_path="x")) is lower_rfdetr_predictor
+
+
+def test_a_predictor_that_keeps_the_picture_size_is_refused_until_lowered() -> None:
+    """The lowering resizes to the model's square, as ``predict`` does by default; a predictor told to keep each
+    picture's size would compile into an artifact that answers another picture than the package's."""
+    predictor = RFDETRPredictor(checkpoint_path="unused.pth", keep_picture_size=True)
+    predictor._rf = _fake_rf()
+    with pytest.raises(ValueError, match=r"keep_picture_size=True.*not lowered yet"):
+        lower_rfdetr_predictor(predictor, _pictures(), _Context())  # type: ignore[arg-type]
 
 
 def test_the_kept_rows_are_the_library_s_detections() -> None:
@@ -185,6 +197,77 @@ def test_a_segmenting_model_s_mask_logits_are_the_library_s_selected_masks() -> 
         cut = found["mask_logits"][index][keep] > 0.0
         assert torch.equal(cut, expected[index]["masks"][:, 0]), "the kept rows' masks at the head's resolution"
     assert any(bool(found["keep"][i].any()) for i in range(2))
+
+
+def test_the_segmentation_head_s_depthwise_convolution_is_traced_as_a_plain_convolution(tmp_path: Any) -> None:
+    """The library's ``DepthwiseConvBlock`` runs its depthwise convolution through a custom autograd Function (cuDNN
+    disabled in forward and backward, a GPU training workaround), which TorchScript cannot serialize — measured
+    2026-10-13 on the real option D package: ``Could not export Python function call '_DepthwiseConvWithoutCuDNN'``
+    at ``torch.jit.save``. ``traceable`` runs the same convolution directly — identical under ``no_grad``, how the
+    predictor and the compiler run the network (with autograd on the Function's path is one float32 ulp away,
+    measured) — and the trace saves."""
+    segmentation = pytest.importorskip("rfdetr.models.heads.segmentation")
+    torch.manual_seed(0)
+    block = segmentation.DepthwiseConvBlock(dim=4).eval()
+    x = torch.rand(1, 4, 6, 5)
+    with torch.no_grad():
+        before = block(x)
+    with pytest.raises(RuntimeError, match="_DepthwiseConvWithoutCuDNN"):
+        torch.jit.save(torch.jit.trace(block, x), str(tmp_path / "before.pt"))
+
+    assert traceable(block) is block
+    with torch.no_grad():
+        assert torch.equal(block(x), before), "the same convolution"
+    torch.jit.save(torch.jit.trace(block, x), str(tmp_path / "after.pt"))
+    with torch.no_grad():
+        assert torch.equal(torch.jit.load(str(tmp_path / "after.pt"))(x), before)
+    assert traceable(block) is block, "a second pass changes nothing"
+
+
+def test_the_batch_reaches_the_network_as_a_nested_tensor_built_without_a_per_image_loop(tmp_path: Any) -> None:
+    """The library's ``nested_tensor_from_tensor_list`` copies image by image, so a trace bakes the batch size:
+    traced on two pictures it refuses three (measured 2026-10-13 on the real D package, 5 pieces at trace time, 3 on
+    another capture: ``Expected 5 elements in a list but found 3``). ``nested`` builds the ``NestedTensor`` directly
+    — the pictures and an all-False mask — and the trace follows the batch."""
+    tensors = pytest.importorskip("rfdetr.utilities.tensors")
+
+    class ByTheLibrary(nn.Module):
+        def forward(self, x: torch.Tensor) -> torch.Tensor:
+            held = tensors.nested_tensor_from_tensor_list(list(x))
+            total: torch.Tensor = held.tensors.sum(dim=(1, 2, 3)) + held.mask.sum(dim=(1, 2))
+            return total
+
+    class Direct(nn.Module):
+        def forward(self, x: torch.Tensor) -> torch.Tensor:
+            held = nested(x)
+            total: torch.Tensor = held.tensors.sum(dim=(1, 2, 3)) + held.mask.sum(dim=(1, 2))
+            return total
+
+    two, three = _pictures(count=2), _pictures(seed=1, count=3)
+    with pytest.raises(RuntimeError, match="Expected 2 elements in a list but found 3"):
+        torch.jit.trace(ByTheLibrary(), two)(three)
+    traced = torch.jit.trace(Direct(), two)
+    assert torch.allclose(traced(three), three.sum(dim=(1, 2, 3)))
+    nested_two = nested(two)
+    assert type(nested_two).__name__ == "NestedTensor" and nested_two.tensors is two
+    assert (
+        nested_two.mask.shape == (2, 37, 53) and nested_two.mask.dtype == torch.bool and not bool(nested_two.mask.any())
+    )
+
+
+def test_the_lowering_runs_the_network_in_its_traceable_form() -> None:
+    segmentation = pytest.importorskip("rfdetr.models.heads.segmentation")
+    predictor = RFDETRPredictor(checkpoint_path="unused.pth")
+    predictor._rf = _fake_rf(masks=True)
+    network = predictor._rf.model.model
+    network.block = segmentation.DepthwiseConvBlock(dim=3)  # a head block beside the stand-in's own layers
+    context = _Context()
+
+    lower_rfdetr_predictor(predictor, _pictures(), context)  # type: ignore[arg-type]
+
+    assert context.held["network"] is network and getattr(network.block, "_plain_depthwise_conv", False)
+    name, mask = network.seen
+    assert name == "NestedTensor" and mask.shape == (2, RESOLUTION, RESOLUTION) and not bool(mask.any())
 
 
 def test_a_box_only_model_gives_no_mask_logits() -> None:
