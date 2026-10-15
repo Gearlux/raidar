@@ -153,14 +153,14 @@ def test_metadata_jsonl_provenance(tmp_path: Path) -> None:
 
 
 def test_jsonable_metadata_sanitizes_complex_and_large_arrays() -> None:
-    # Live crash: Record.metadata carried StreamStudio's internal `__taidal_stash_*` snapshot — a
-    # complex IQ array — so `json.dumps(...)` raised "Object of type complex is not JSON serializable".
+    # Live crash: Record.metadata carried a complex IQ array, so `json.dumps(...)` raised
+    # "Object of type complex is not JSON serializable".
     meta = {
         "pack_id": "X",  # plain provenance kept as-is
         "snr_db": np.float32(12.5),  # numpy scalar -> python float
         "center_freq": 1 + 2j,  # complex scalar -> string
         "boxes": np.array([[0, 0, 4, 4]]),  # small array -> listed element-wise
-        "__taidal_stash_436:424_input": np.arange(2048, dtype=np.complex64),  # large complex -> summary
+        "iq_snapshot": np.arange(2048, dtype=np.complex64),  # large complex -> summary
     }
     out = _jsonable_metadata(meta)
     json.dumps(out)  # MUST be fully encodable — this is exactly what YoloSink.write does
@@ -168,7 +168,7 @@ def test_jsonable_metadata_sanitizes_complex_and_large_arrays() -> None:
     assert out["snr_db"] == 12.5
     assert isinstance(out["center_freq"], str)
     assert out["boxes"] == [[0, 0, 4, 4]]
-    assert out["__taidal_stash_436:424_input"].startswith("<array shape=(2048,)")
+    assert out["iq_snapshot"].startswith("<array shape=(2048,)")
 
 
 def test_jsonable_metadata_small_complex_array_becomes_strings() -> None:
@@ -179,14 +179,14 @@ def test_jsonable_metadata_small_complex_array_becomes_strings() -> None:
     assert all(isinstance(x, str) for x in out["iq"])
 
 
-def test_metadata_jsonl_survives_complex_stash_array(tmp_path: Path) -> None:
-    # End-to-end regression: a record carrying a complex `__taidal_stash_*` snapshot must write
+def test_metadata_jsonl_survives_a_large_complex_array(tmp_path: Path) -> None:
+    # End-to-end regression: a record whose metadata carries a large complex array must write
     # without crashing the sink, with the big array summarised (not dumped) into the label JSON.
     out = tmp_path / "out"
-    stream = Stream(source=[_make_record(metadata={"__taidal_stash_x_input": np.arange(4096, dtype=np.complex64)})])
+    stream = Stream(source=[_make_record(metadata={"iq_snapshot": np.arange(4096, dtype=np.complex64)})])
     _convert(stream, out, class_names={1: "drone-signal"})
     entry = json.loads((out / "metadata.jsonl").read_text().strip())
-    assert entry["source_metadata"]["__taidal_stash_x_input"].startswith("<array shape=(4096,)")
+    assert entry["source_metadata"]["iq_snapshot"].startswith("<array shape=(4096,)")
 
 
 # --- multi-split merge / append (the key new behaviour) ---------------------

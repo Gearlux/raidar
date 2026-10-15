@@ -417,12 +417,11 @@ _MAX_META_ARRAY_ELEMS = 256
 def _jsonable_metadata(metadata: Any, *, max_array_elems: int = _MAX_META_ARRAY_ELEMS) -> Any:
     """Best-effort JSON-friendly conversion of a record's metadata payload — NEVER raises.
 
-    Source metadata can carry values ``json.dumps`` cannot encode: NumPy/torch arrays, **complex**
-    IQ samples, and StreamStudio's internal ``__taidal_stash_*`` snapshots (a stashed complex signal
-    from a DAG→sequential fan-out). So this:
+    Source metadata can carry values ``json.dumps`` cannot encode: NumPy/torch arrays and **complex**
+    IQ samples — a step upstream may keep a whole complex signal in the metadata. So this:
       * converts a ``complex`` scalar to a string (JSON has no complex type);
       * summarises a LARGE array (> ``max_array_elems``) as ``<array shape=… dtype=…>`` — a 1.2M-element
-        complex IQ stash must not be dumped verbatim into every per-image label JSON (bloat AND the
+        complex IQ array must not be dumped verbatim into every per-image label JSON (bloat AND the
         un-encodable complex values that crashed the sink);
       * lists a SMALL array element-wise and RECURSES, so nested complex / NumPy scalars from
         ``.tolist()`` are sanitised too (the bug: the old code returned ``.tolist()`` un-recursed, so
@@ -462,7 +461,7 @@ def _jsonable_metadata(metadata: Any, *, max_array_elems: int = _MAX_META_ARRAY_
     return str(metadata)
 
 
-# category="sink": surfaced as a StreamStudio sink node (RECORDSTREAM_OBJECT:sink → DatasetProcessor.sink).
+# category="sink": listed among the sinks of a graph editor's catalogue, and wired into DatasetProcessor.sink.
 @configurable(category="sink")
 class YoloSink(Storage):
     """DataSink that materialises one split of a detection Stream to a YOLO dataset dir.
