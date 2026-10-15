@@ -206,6 +206,7 @@ with open('isort-checkstyle.xml', 'w') as f:
 
         stage('Unit Tests') {
             steps {
+                sh 'rm -f test-report.xml coverage.xml'
                 script {
                     if (fileExists('tests') && sh(script: "find tests -name '*.py' | grep -q .", returnStatus: true) == 0) {
                         sh "${VENV_BIN}/pytest tests -m 'not slow' --junitxml=test-report.xml --cov=raidar --cov-report=xml:coverage.xml --cov-report=term"
@@ -234,6 +235,7 @@ with open('isort-checkstyle.xml', 'w') as f:
 
         stage('Slow Tests') {
             steps {
+                sh 'rm -f slow-test-report.xml'
                 script {
                     // 5 = the marker is registered but nothing is currently marked — valid, not a failure.
                     def rc = sh(script: "${VENV_BIN}/pytest tests -m slow --junitxml=slow-test-report.xml", returnStatus: true)
