@@ -547,6 +547,74 @@ Measured: a folder of 3 pictures named `drone-signal` / `ignore` and one of 6 na
 by class, the union of both folders' picture scales in `data.yaml`, each record's origin folder in
 `metadata.jsonl`.
 
+`YoloSource.class_names` is the folder's class list in label order (the vocabulary's, given one) — what a
+consumer reads off the source without walking a record.
+
+#### Reading a COCO folder — `raidar.CocoSource`
+
+The COCO twin of `YoloSource`: one split as records of `image` and `target` plus `coco_source: {annotations,
+split, image}`. The COCO file is looked for in three places, in this order:
+
+| layout | COCO file | pictures |
+|---|---|---|
+| RF-DETR / Roboflow (the sink's `layout: rfdetr`) | `<split>/_annotations.coco.json` | `<split>/images/` or beside the file |
+| the sink's default layout | `annotations/<split>.json` | `images/<split>/` |
+| the official dataset | `annotations/instances_<split>*.json` (`instances_val2017.json`) | `val2017/` or `images/val2017/` |
+
+Labels are numbered by the categories' ORDER (sorted by id), so the official ids 1 … 90 with their gaps give
+labels 0 … 79 and a class list without blanks (`class_names`). A polygon `segmentation` is read as the
+instance's polygons in `target.extras["polygons"]`; a run-length one leaves the instance's entry `[]`. Two
+official files for one split are refused naming both.
+
+```yaml
+source: !class:raidar.CocoSource {root: $DATA_ROOT/coco2017, split: val}
+```
+
+#### A folder labelled either way — `raidar.CocoOrYoloSource`
+
+A dataset folder read without saying how it is labelled — a folder the sink wrote with its COCO sidecar
+holds both:
+
+| the folder holds | `labels: yolo` (default) | `labels: coco` |
+|---|---|---|
+| `data.yaml` and a COCO file for the split | the YOLO labels | the COCO file |
+| `data.yaml` only | the YOLO labels | the YOLO labels |
+| a COCO file only | the COCO file | the COCO file |
+| neither | refused: `… holds neither a YOLO dataset (data.yaml) nor a COCO file for split 'val'` | same |
+
+```yaml
+source: !class:raidar.CocoOrYoloSource
+  folder: $DATA_ROOT/signal_detection/pictures/d    # ~ and $VAR expanded
+  split: val                                        # train | val | test
+  labels: yolo                                      # yolo | coco — read only when the folder holds both
+```
+
+A wrong folder, a split the folder lacks (`… has no split 'test' (neither images/test nor test/images)`) and an
+unset variable are refused as `raidar.coco_or_yolo_source.DatasetFolderError`, a `ValueError`. The settings are
+read on every use, so a changed folder or split is the next read's; the records are named after the folder and
+the split (`dataset_uri`: `<folder>?split=val`).
+
+#### Loading a dataset in the annotation workspace
+
+raidar ships the source graph of the annotation workspace's `detection` type
+([annotaide](https://github.com/Gearlux/annotaide)): a `CocoOrYoloSource` whose settings are the whole of loading a
+dataset. In a detection workspace, **tools ▾ → load a COCO or YOLO dataset…** opens those settings — the folder
+(with a folder browser, starting at `$DATA_ROOT`), the split and the labels — beside the records, and each setting
+you change is applied: the list shows the split's pictures with their boxes and the dataset's class names. The
+settings land in the workspace's `source.settings.yaml`:
+
+```yaml
+dataset.folder: $DATA_ROOT/signal_detection/pictures/d
+dataset.split: val
+```
+
+Nothing is loaded until a folder is chosen. The graph stays a graph: **graphs… → source** opens it on the canvas,
+to put ops after the dataset or another source in its place.
+
+Measured on a sink-written folder holding both label kinds (33 classes, 9 400 train and 1 880 val pictures): the
+same pictures, boxes and class list either way; listing a split took 4.1 s (YOLO, `train`) and 1.6 s (COCO,
+`train`), a record 5-9 ms.
+
 ## Compiling the RF-DETR predictor
 
 `pip install raidar[compile]` adds the predictor's lowering for the workspace's package compiler: `RFDETRPredictor`

@@ -780,3 +780,45 @@ or a pad added to this path to make sizes agree — a crop in the stream does th
 library's resize then changes nothing — and the one-call-per-size grouping of §13 applies unchanged. Nothing of
 `predict` is copied, so its normalization, post-processing and mask upsampling stay the library's. The compiler's
 lowering reads the same `input_size`, so its resize to the picture's own size is the identity.
+
+## 15. A dataset folder is read whichever way it is labelled, and loaded by its settings alone (2026-10-16)
+
+**Context.** The detection pictures a sink writes hold YOLO labels and a COCO sidecar for the same pictures, and
+outside datasets come as either. A person reviewing one in the annotation workspace had to draw a source graph — a
+reader node, a stream, the class list wired into the graph's root — before seeing a single picture. Two facts shaped
+the answer, both measured: an annotation workspace adds only FILES through a tool (each file then read by its files
+graph, which has no labels), so a tool listing pictures shows no boxes; and its source graph, applied from its
+settings alone, lists records with their boxes and class names (a two-picture copy of a real split: `detection
+source: 2 recording(s), 33 class(es)`, six named boxes on the first).
+
+**Decision.** `CocoSource` reads one split of a COCO folder in the three places a COCO file sits, numbering classes
+by the categories' order (the official ids have gaps). `CocoOrYoloSource` picks the reader from what the folder holds
+— `labels` decides only when both are there — and DECLARES `class_names`, as `YoloSource` and `CocoSource` now do, so
+a graph's class list is the source itself (`classes: !ref:dataset`) rather than a list typed or evaluated by an
+editor. raidar ships the workspace's `detection` source graph wrapping it: three settings (folder, split, labels), and
+an `app: {tools: …}` line the workspace lists in its tools menu, which opens those settings. Every folder refusal is a
+`DatasetFolderError`, a `ValueError`: the workspace reports a `ValueError` from a source as a wrong setting, and
+anything else escapes its sync.
+
+Rejected: a tool adding the pictures as files plus a files graph that finds each picture's labels by its path —
+every dropped picture would run raidar's files graph, and a COCO file would be searched per picture; the person chose
+the source graph.
+
+**Consequences.** A detection workspace loads one split of one dataset at a time, replacing what its source listed.
+With raidar installed, the detection type's source is this graph instead of an empty starter; its canvas still opens.
+Run from inside `raidar/`, the folder's gitignored `raidar.egg-info` shadows the installed metadata — an entry point
+added without regenerating it is invisible there (measured: the workspace ran the type's empty source).
+
+**Example.**
+
+```python
+from raidar.coco_or_yolo_source import CocoOrYoloSource
+
+source = CocoOrYoloSource(folder="$DATA_ROOT/signal_detection/pictures/d", split="val")
+len(source), source.class_names[:2]     # (1880, ['5GNR', 'LTE'])
+source.labels = "coco"                   # the same pictures, from val/_annotations.coco.json
+```
+
+**What you may change.** Another place a COCO file sits (one more candidate, in order), another label kind (one more
+branch, with its refusal). Not: a refusal that is not a `ValueError` (the workspace would crash on a wrong folder), or
+a class numbering by the categories' ids.

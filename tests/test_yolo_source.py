@@ -116,6 +116,15 @@ class TestTheVocabulary:
         boxes = source[0]["target"]
         assert np.asarray(boxes.labels).tolist() == [1, 0] and boxes.classes == ["ignore", "signal", "other"]
 
+    def test_the_source_declares_its_class_names(self, folder: Path) -> None:
+        """What a consumer reads off the SOURCE (a graph's class list) is the list each record's boxes carry."""
+        assert YoloSource(root=str(folder)).class_names == ["signal", "ignore"]
+        assert YoloSource(root=str(folder), classes={0: "ignore", 2: "other", 1: "signal"}).class_names == [
+            "ignore",
+            "signal",
+            "other",
+        ]
+
     def test_an_unknown_name_is_refused(self, folder: Path) -> None:
         with pytest.raises(ValueError, match="'ignore'.*signal"):
             YoloSource(root=str(folder), classes={0: "signal"})[0]

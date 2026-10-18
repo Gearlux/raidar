@@ -143,6 +143,23 @@ hooks, model wrappers, the FCOS spec, registrations and configs.
   vocabulary given and an unknown name is refused, never renumbered; construction touches no disk.
   Merging folders is readers + `ConcatSource` + the sink in `append` (`examples/merge_yolo.yaml`).
   (`tests/test_yolo_source.py`)
+- `CocoSource` is its COCO twin: the file looked for in `<split>/_annotations.coco.json`, `annotations/<split>.json`,
+  then `annotations/instances_<split>*.json` (two of those refused, naming both); labels numbered by the categories'
+  ORDER sorted by id, never by the ids (the official 1 … 90 have gaps); a polygon `segmentation` read into
+  `extras[POLYGONS]`, a run-length one `[]`. Both readers DECLARE `class_names` (a graph's class list reads it
+  without walking a record). (`tests/test_coco_source.py`, `tests/test_yolo_source.py::TestTheVocabulary`) §15.
+- `CocoOrYoloSource` reads a folder labelled either way: both present → `labels` picks (YOLO by default), one
+  present → that one whatever `labels` says. Every folder refusal (empty, unset `$VAR`, missing, a file, a split the
+  folder lacks, labels of neither kind) is a `DatasetFolderError` — a `ValueError`, because a host reports only a
+  `ValueError` as a wrong setting and lets anything else escape; check a split's folder explicitly, never let the
+  reader's `FileNotFoundError` through. Settings are read on every use (the reader cached per settings).
+  (`tests/test_coco_or_yolo_source.py`) §15.
+- raidar ships the annotation workspace's `detection` SOURCE graph (`raidar/annotation/`, entry point
+  `annotaide.templates`): `CocoOrYoloSource` with `image_key: input`, its `classes` the source itself, `app:` asking
+  folder/split/labels and `tools: load a COCO or YOLO dataset` (the workspace's tools menu opens its settings).
+  raidar imports nothing of annotaide; the workspace checks run where it is installed and skip elsewhere.
+  Run from `raidar/`, Python reads the gitignored `raidar.egg-info` before the installed metadata: after an
+  entry-point change, regenerate it too or the new entry point is invisible there. (`tests/test_annotation_source.py`) §15.
 - Instance masks ride `Boxes.extras[raidar.POLYGONS]`: per box a LIST of non-overlapping polygons
   (≥ 3 `[x, y]` pixel points, first point not repeated), `[]`/`None` meaning the box rectangle; the
   contract is `yolo_sink`'s module docstring. `YoloSink` writes ONE YOLO-seg ring per instance (YOLO-seg

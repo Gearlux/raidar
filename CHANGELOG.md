@@ -7,6 +7,14 @@ All notable changes to this project are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- **`raidar.CocoSource`** reads one split of a COCO dataset folder as detection records — the COCO file in
+  `<split>/_annotations.coco.json`, `annotations/<split>.json` or the official `annotations/instances_<split>*.json`,
+  classes numbered by the categories' order, polygon segmentations as `extras["polygons"]` (`README.md`).
+- **`raidar.CocoOrYoloSource`** reads a dataset folder labelled either way: `labels: yolo | coco` picks when the
+  folder holds both; a wrong folder or a split it lacks is a `DatasetFolderError` (a `ValueError`).
+- **`YoloSource.class_names`** — the folder's class list in label order, declared on the source.
+- **The annotation workspace's detection source**: in a detection workspace, *tools ▾ → load a COCO or YOLO
+  dataset…* opens a folder, split and labels setting, and the list shows that split with its boxes and classes.
 - **`RFDETRDetector.mps_low_watermark`** — on Apple's GPU, torch gives its cached memory back above that share of the
   GPU's working set (`PYTORCH_MPS_LOW_WATERMARK_RATIO`, set before the model is built); settable in a config or on
   the command line (`runnable.mps_low_watermark=0.5`). Unset leaves torch's default.

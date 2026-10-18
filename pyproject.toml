@@ -200,6 +200,12 @@ raidar = "raidar.cli:app"
 [project.entry-points."torpaido.lowerings"]
 raidar = "raidar.lowering"
 
+# ANNOTATION WORKSPACE: an annotation workspace scans this group for `templates()` — the graphs a domain ships
+# per workspace type. raidar ships the `detection` type's source: a COCO or YOLO dataset loaded by its settings
+# (raidar/annotation/). raidar imports nothing of the workspace. Reinstall the editable after a change, as above.
+[project.entry-points."annotaide.templates"]
+raidar = "raidar.annotation"
+
 [project.entry-points."confluid.configurables"]
 raidar-lightning = "raidar.lightning_detector"
 raidar-torch = "raidar.torch_detector"
@@ -226,6 +232,8 @@ raidar-mlx = "raidar.mlx_detector"
 raidar-torchvision-detection = "raidar.torchvision_detection"
 raidar-yolo-sink = "raidar.yolo_sink"
 raidar-yolo-source = "raidar.yolo_source"   # the folder reader beside the sink (merging = read + append)
+raidar-coco-source = "raidar.coco_source"   # the COCO twin of the YOLO reader
+raidar-coco-or-yolo-source = "raidar.coco_or_yolo_source"   # a dataset folder read whichever way it is labelled
 raidar-crop = "raidar.crop"   # RandomCropDetection: one piece size for a detector, cut before its own resize
 
 [tool.setuptools.packages.find]
@@ -234,6 +242,8 @@ include = ["raidar*"]
 
 [tool.setuptools.package-data]
 raidar = ["py.typed"]
+# The annotation workspace's graphs are YAML documents beside raidar/annotation/__init__.py.
+"raidar.annotation" = ["*.yaml"]
 
 [tool.mypy]
 # Untyped third-party packages (torchvision, tensorflow, yaml, tqdm) are not errors — the same

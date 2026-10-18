@@ -70,6 +70,9 @@ _BACKEND_NAMES = {
     # `import raidar` imports NOTHING. Its "extra" is the core install itself.
     "YoloSink": ("raidar.yolo_sink", ""),
     "YoloSource": ("raidar.yolo_source", ""),
+    # Its COCO twin, and the reader of a folder labelled either way (the annotation workspace's dataset source).
+    "CocoSource": ("raidar.coco_source", ""),
+    "CocoOrYoloSource": ("raidar.coco_or_yolo_source", ""),
     # The key a producer puts each instance's polygons under in `Boxes.extras` (a constant, not a class).
     "POLYGONS": ("raidar.yolo_sink", ""),
 }
