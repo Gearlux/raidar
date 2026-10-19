@@ -8,3 +8,11 @@ workspace root `TASKS.md`. Completed items are not archived here — git history
 - [ ] **`test_every_flowed_slot_is_declared_lazy` passes vacuously for `LightningDetector`** @small @tests — `raidar/tests/test_lazy_slots.py:39-43` reads `flow(self.<slot>` only from the concrete class's own module, but the flows moved to `raidar/raidar/detection_base.py:105-115` and `raidar/raidar/detection_keras.py:102,192` (and into matrainer): `grep -n "flow(self\." raidar/raidar/lightning_detector.py` → no hit, so the check finds nothing to verify. `RUNNABLES` (`:29-34`) also omits `KerasDetector`, `TensorFlowDetector`, `JaxDetector` and `MlxDetector`. Scan the whole class hierarchy and list every runnable.
 
 - [ ] **`YoloSink(layout="rfdetr")` writes a COCO sidecar RF-DETR's COCO reader cannot open the pictures of** @small @bug — the sidecar sits at `<split>/_annotations.coco.json` (where `build_roboflow_from_coco` looks) but its `file_name` is the bare `000000.png` while the pictures are in `<split>/images/`: `rfdetr.datasets.coco.CocoDetection(<out>/train, <out>/train/_annotations.coco.json)[0]` → `FileNotFoundError: .../train/000000.png`. The YOLO reader (`dataset_file: yolo`, the one the layout is for) is unaffected. Decide: `file_name: images/000000.png` in this layout, or document the sidecar as not trainable from.
+
+- [ ] **The energy finder: a class-free dense detector for spectrogram pictures** @medium @feature — a fully convolutional
+  model with a U-Net trunk (the shape of deltaid's U-Net spec, at the picture's resolution) and two heads per cell — occupancy
+  (focal binary loss) and the log distances to the instance's four edges (the FCOS rectangle head, one class, an overlap
+  loss on occupied cells) — decoded by fusing the occupied cells' rectangle votes (overlap ≥ 0.5, occupancy-weighted
+  mean, the mask the voters) and dropping instances under a cell count; output in `DetectionModelPredict`'s contract
+  (`boxes`, `scores`, `labels`, `masks`). Torch first, the other engines when asked. The design and its measurement are
+  waivefront's `docs/two-stage-detection.md`; scope as code first (root rule). @2026-10-18
