@@ -43,7 +43,7 @@ dataset trades startup cost for faster epochs and lets third-party tools
 Generic over any detection Stream whose input-key value is an image
 (``[3,H,W]`` / ``[H,W,3]`` / ``[H,W]``, float ``[0,1]`` or ``uint8``, numpy or
 torch) and whose target-key value is ``{"boxes": [N,4] xyxy-pixel float32, "labels": [N] int64}``
-— i.e. exactly what :class:`waivefront.targets.RegionsToDetectionBoxes`
+— i.e. exactly what a regions-to-detection-boxes target op
 produces. (No ``ultralytics`` import — it only writes the on-disk layout.)
 
 **Instance masks — the** ``polygons`` **contract.** A producer MAY put each instance's polygons in

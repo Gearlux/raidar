@@ -670,8 +670,8 @@ step lives in raidar because it is an augmentation (recordstream ships none) and
 
 **Consequences.** A folder of any picture heights trains a seg model: one epoch of seg-nano at 504 over 130 + 65
 pictures 504 wide and 100 / 1 008 / 3 000 tall wrote its mask losses and `val/segm_mAP_*` (2026-10-12). A model
-trained on pieces should be RUN on pieces — the review workspaces still run it on the whole picture (a follow-up,
-waivefront's `TASKS.md`). Stream mode starts sooner (nothing is walked up front); a picture is decoded once per item,
+trained on pieces should be RUN on pieces — the review workspaces still run it on the whole picture (a follow-up
+in the consuming project's backlog). Stream mode starts sooner (nothing is walked up front); a picture is decoded once per item,
 as before.
 
 **Example.**
