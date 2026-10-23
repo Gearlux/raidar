@@ -41,7 +41,7 @@ hooks, model wrappers, the FCOS spec, registrations and configs.
   also `_callbacks`, `_compile`, `initialize`). Machinery changes go into matrainer with every
   consumer updated. (`tests/test_tracking_parity.py`) §5.
 - A new backend touches: `raidar/<name>_detector.py`, a `FRAMEWORKS` row, a scope block in the
-  example, an entry point, `_BACKEND_NAMES` + an extra + `[tool.aisland] frameworks`,
+  example, an entry point, `_BACKEND_NAMES` + an extra + a choice of `[tool.aisland.selection.framework]`,
   `BACKENDS`/`METRIC_BRIDGES` in `tests/test_tracking_parity.py`, and a `sweep.yaml` row. §1.
 - A backend gets its own module only when upstream ships a training loop worth driving; it
   drives that loop and adds only a Dataset/DataModule bridge. No adapter layer, no

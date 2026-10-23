@@ -52,8 +52,8 @@ Issues = "https://github.com/Gearlux/raidar/issues"
 Changelog = "https://github.com/Gearlux/raidar/blob/main/CHANGELOG.md"
 
 [project.optional-dependencies]
-# One extra per training backend. `aisland framework set lightning …` installs the ones the
-# workspace has selected across every project that declares them (see [tool.aisland] below).
+# One extra per training backend. `aisland workspace configure framework set lightning …` installs the
+# ones the workspace has chosen, in every project that offers them (see [tool.aisland.selection.framework] below).
 #
 # `torch` is the BASE of the torch-family backends (lightning / torch / fastai): it carries the
 # native model contract's stack — torchvision detectors, the torchmetrics detection metric set,
@@ -145,8 +145,8 @@ rfdetr = [
 ]
 # TRACKING BACKENDS. Tracking runs through matrainer — raidar imports neither mlflow nor
 # tensorboard directly — so each extra forwards to the backend that implements it. They must
-# exist because `[tool.aisland] trackers` below NAMES them: `aisland tracker set mlflow`
-# intersects that declaration with the operator's selection and installs `raidar[mlflow]`,
+# exist because `[tool.aisland.selection.tracker]` below NAMES them: choosing `mlflow` intersects that menu
+# with the operator's choice and installs `raidar[mlflow]`,
 # and an extra that is declared but never defined makes uv warn and install nothing.
 mlflow = ["matrainer[mlflow]>=0.1.0a1"]
 tensorboard = ["matrainer[tensorboard]>=0.1.0a1"]
@@ -166,13 +166,15 @@ dev = [
     "pytest-cov>=4.0.0,<7.0.0",
 ]
 
-# Which training backends this project OFFERS. `aisland framework list` reads it; what actually
-# installs is the workspace-wide selection in the committed `config.toml`, so a machine that has
+# Which training backends this project OFFERS. `aisland workspace configure framework` lists it; what actually
+# installs is the workspace-wide choice committed in `workspace.toml`, so a machine that has
 # not selected a backend builds raidar without it. `ultralytics` is NOT here: that backend is the
 # raidar-ultralytics SIBLING package (AGPL isolation), not an extra of this one.
-[tool.aisland]
-frameworks = ["torch", "lightning", "fastai", "huggingface", "rfdetr", "keras", "tensorflow", "jax", "mlx"]
-trackers = ["mlflow", "tensorboard"]
+[tool.aisland.selection.framework]
+choices = ["torch", "lightning", "fastai", "huggingface", "rfdetr", "keras", "tensorflow", "jax", "mlx"]
+
+[tool.aisland.selection.tracker]
+choices = ["mlflow", "tensorboard"]
 
 [project.scripts]
 raidar = "raidar.cli:main"
