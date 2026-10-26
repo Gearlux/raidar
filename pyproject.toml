@@ -237,6 +237,7 @@ raidar-yolo-source = "raidar.yolo_source"   # the folder reader beside the sink 
 raidar-coco-source = "raidar.coco_source"   # the COCO twin of the YOLO reader
 raidar-coco-or-yolo-source = "raidar.coco_or_yolo_source"   # a dataset folder read whichever way it is labelled
 raidar-crop = "raidar.crop"   # RandomCropDetection: one piece size for a detector, cut before its own resize
+raidar-relabel = "raidar.relabel"   # RelabelLabels: a YOLO/COCO folder's classes remapped by name from its kept original
 
 [tool.setuptools.packages.find]
 where = ["."]

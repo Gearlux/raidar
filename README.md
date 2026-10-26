@@ -615,6 +615,20 @@ Measured on a sink-written folder holding both label kinds (33 classes, 9 400 tr
 same pictures, boxes and class list either way; listing a split took 4.1 s (YOLO, `train`) and 1.6 s (COCO,
 `train`), a record 5-9 ms.
 
+#### Relabelling a folder — `raidar.relabel.RelabelLabels`
+
+A YOLO or COCO folder's classes remapped by name, many to one, always from the original labels the first remap
+keeps (`labels.orig/`, `data.orig.yaml`, `<stem>.orig.json`); `mode: restore` puts them back byte for byte:
+
+```bash
+recordstream run examples/relabel.yaml                       # every name to its family
+recordstream run examples/relabel.yaml --scope one_class     # every name to `signal`
+recordstream run examples/relabel.yaml --scope original      # the folder as it was written
+```
+
+The settings, what each file becomes and the refusals:
+[`docs/relabel.md`](https://github.com/Gearlux/raidar/blob/main/docs/relabel.md).
+
 ## Compiling the RF-DETR predictor
 
 `pip install raidar[compile]` adds the predictor's lowering for the workspace's package compiler: `RFDETRPredictor`

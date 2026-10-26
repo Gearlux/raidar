@@ -148,6 +148,13 @@ hooks, model wrappers, the FCOS spec, registrations and configs.
   ORDER sorted by id, never by the ids (the official 1 … 90 have gaps); a polygon `segmentation` read into
   `extras[POLYGONS]`, a run-length one `[]`. Both readers DECLARE `class_names` (a graph's class list reads it
   without walking a record). (`tests/test_coco_source.py`, `tests/test_yolo_source.py::TestTheVocabulary`) §15.
+- `RelabelLabels` (`raidar/relabel.py`) remaps a folder's classes BY NAME from the original it keeps on the first run
+  (`labels.orig/` renamed once, `data.orig.yaml` / `<stem>.orig.json` copied once) — every remap starts from it,
+  never from the previous remap; a YOLO line changes only its class id (every other character and its place kept: a
+  mask numbering instances by line still matches) and is built in `labels.new/` first; a name of the original
+  vocabulary the map leaves out (no `"*"`), a class not in `classes` and an id outside the original are refused as
+  `RelabelError` (a `DatasetFolderError`), naming the file and line; `mode: restore` leaves no `.orig` behind.
+  Never a remap of a remap, never a dropped line. (`tests/test_relabel.py`) §16.
 - `CocoOrYoloSource` reads a folder labelled either way: both present → `labels` picks (YOLO by default), one
   present → that one whatever `labels` says. Every folder refusal (empty, unset `$VAR`, missing, a file, a split the
   folder lacks, labels of neither kind) is a `DatasetFolderError` — a `ValueError`, because a host reports only a

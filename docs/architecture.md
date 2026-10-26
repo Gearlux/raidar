@@ -822,3 +822,36 @@ source.labels = "coco"                   # the same pictures, from val/_annotati
 **What you may change.** Another place a COCO file sits (one more candidate, in order), another label kind (one more
 branch, with its refusal). Not: a refusal that is not a `ValueError` (the workspace would crash on a wrong folder), or
 a class numbering by the categories' ids.
+
+## 16. A folder is relabelled from the original it keeps, never from its last remap (2026-10-26)
+
+**Context.** A dataset is written once, in the finest vocabulary its writer knows (a waveform generator's standard,
+not its family), and different trainers want different vocabularies of it: one class, a family per standard, the
+finest names. A trainer that reads class ids from the files (a YOLO folder's label lines, a COCO file's
+`category_id`) needs the files remapped; done in place without a record of the original, a remap to one class would
+lose every name for good.
+
+**Decision.** `raidar.relabel.RelabelLabels` keeps the original on the first remap — `labels/` renamed to
+`labels.orig/` (instant, every file at once), `data.yaml` copied to `data.orig.yaml`, a COCO file to
+`<stem>.orig.json` — and every remap writes the labels anew FROM it; `mode: restore` moves it back. The labels are
+rewritten in place rather than into a new tree because readers find a sample's other trees by replacing the `labels`
+part of the label path. Only a YOLO line's class id changes and no line moves: a mask that numbers instances by line
+stays right. A map must cover every original name (`"*"` for the rest): a forgotten name is refused, never mapped to
+nothing. COCO annotations carry their original class as `original_label`.
+
+**Consequences.** A remap after a remap still reaches the finest names; a folder is never more than one remap away
+from its original. A tree is built in `labels.new/` before it replaces `labels/`, so an interrupted run is finished by
+running it again. A folder being read by a trainer must not be remapped (the tree is replaced under it).
+
+**Example.**
+
+```yaml
+runnable: !class:raidar.relabel.RelabelLabels
+  root: $DATA_ROOT/pictures/b
+  label_map: {APCO25: LMR, DMR: LMR, "802.11ax HE": WLAN, "802.11n HT": WLAN}
+  classes: {0: WLAN, 1: LMR}
+```
+
+**What you may change.** More layouts, a dry run, the refusals' words. What must hold: the original is kept once and
+never written again, every remap starts from it, no line is dropped or moved, restore is byte for byte. Pin:
+`tests/test_relabel.py`.

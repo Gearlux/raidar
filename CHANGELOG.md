@@ -7,6 +7,10 @@ All notable changes to this project are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- **`raidar.relabel.RelabelLabels`** remaps a YOLO or COCO dataset folder's classes by name, many to one, always from
+  the original labels the first remap keeps (`labels.orig/`, `data.orig.yaml`, `<stem>.orig.json`; each remapped
+  COCO annotation names its `original_label`); `mode: restore` puts the folder back byte for byte
+  (`docs/relabel.md`, `examples/relabel.yaml`).
 - **`raidar.CocoSource`** reads one split of a COCO dataset folder as detection records — the COCO file in
   `<split>/_annotations.coco.json`, `annotations/<split>.json` or the official `annotations/instances_<split>*.json`,
   classes numbered by the categories' order, polygon segmentations as `extras["polygons"]` (`README.md`).
