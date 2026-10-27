@@ -800,6 +800,15 @@ scratch loaded no artifact and records nothing. Reading the identity is free and
 model; adding one to your own wrapper is a single `model_refs` property — see
 [matrainer's `uri` module](https://github.com/Gearlux/matrainer).
 
+## Environment variables
+
+Listed with defaults in [`env.complete`](https://github.com/Gearlux/raidar/blob/main/env.complete).
+
+| variable | meaning |
+| --- | --- |
+| `KERAS_BACKEND` | `torch`, `tensorflow` or `jax` — the engine the `keras` backend runs on; raidar never sets it for you |
+| `DATA_ROOT` | folder holding the datasets; configs write paths as `$DATA_ROOT/<dataset>` |
+
 ## License
 
 MIT.
