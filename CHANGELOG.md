@@ -7,6 +7,8 @@ All notable changes to this project are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- **The wheel ships the example configs** (`examples/*.yaml`) under `share/raidar/examples/`, where
+  `pkg://raidar/examples/<file>.yaml` names them from any install.
 - **`raidar.relabel.RelabelLabels`** remaps a YOLO or COCO dataset folder's classes by name, many to one, always from
   the original labels the first remap keeps (`labels.orig/`, `data.orig.yaml`, `<stem>.orig.json`; each remapped
   COCO annotation names its `original_label`); `mode: restore` puts the folder back byte for byte
