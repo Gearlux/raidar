@@ -116,6 +116,12 @@ hooks, model wrappers, the FCOS spec, registrations and configs.
   worker and epoch), never an instance RNG (pickled into every worker it would repeat). Never move the cut into
   RF-DETR's `aug_config` — it runs after the resize and its 1 333 px cap. §12.
   (`tests/test_crop.py`, `tests/test_stream_rfdetr_dataset.py::test_cut_pictures_of_any_height_batch_into_masks_of_one_size`)
+- `PieceSource` (`raidar/crop.py`) is a validation set of EVERY piece of every picture: side by side at whole
+  multiples of the piece, never overlapping (each pixel in exactly one piece), the piece past an edge padded with the
+  median, each piece `RandomCropDetection.cut_at` at its place — never a second cut. It is a SOURCE, indexable with a
+  length (a step making several records from one makes a stream iterable-only, and RF-DETR's loader indexes); it never
+  merges finds across pieces — a whole-picture score is an inference graph's, outside the loop. §17.
+  (`tests/test_crop.py`, the `PieceSource` block)
 - `RFDETRDetector(keep_picture_size=True)` skips RF-DETR's resize and NOTHING else: the augmentation RF-DETR routes
   `aug_config` to (`None` its flip, `{}` none, else its Albumentations stack) and its normalization stay
   (`stream_rfdetr_dataset._unresized_transforms`); a second picture size is refused where it is read, naming both and

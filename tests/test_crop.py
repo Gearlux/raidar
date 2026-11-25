@@ -12,7 +12,7 @@ import torch
 from recordstream import Boxes, Image, Record
 from recordstream.core import Stream
 
-from raidar.crop import RandomCropDetection
+from raidar.crop import PieceSource, RandomCropDetection
 from raidar.yolo_sink import POLYGONS
 
 
@@ -208,3 +208,128 @@ def test_a_grey_picture_is_cut_and_padded_too() -> None:
     record = {"image": Image(np.full((20, 40), 7, dtype=np.uint8), layout="HW")}
     pixels = _pixels(CENTRE(record))
     assert pixels.shape == (40, 40) and (pixels == 7).all()
+
+
+# -- PieceSource: every piece of every picture, side by side ----------------------------------------------------------
+
+
+class _Pictures:
+    """An indexable source of records that counts how often each picture is read."""
+
+    def __init__(self, records: Sequence[Record], class_names: Optional[Sequence[str]] = None) -> None:
+        self.records = list(records)
+        self.reads = [0] * len(self.records)
+        if class_names is not None:
+            self.class_names = list(class_names)
+
+    def __len__(self) -> int:
+        return len(self.records)
+
+    def __getitem__(self, index: int) -> Record:
+        self.reads[index] += 1
+        return self.records[index]
+
+
+def _spread(height: int, width: int, seed: int = 5) -> Record:
+    """A picture of random grey levels (every piece different) without boxes."""
+    pixels = np.random.default_rng(seed).integers(0, 256, size=(height, width, 3), dtype=np.uint8)
+    return {"image": Image(pixels, layout="HWC")}
+
+
+def test_a_piece_source_lists_every_piece_of_every_picture_side_by_side_the_last_padded_with_its_median() -> None:
+    """A 10 x 25 picture in 10 x 10 pieces is three — at columns 0, 10 and 20, the last holding columns 20-24 and five
+    columns of the picture's median —, a 10 x 10 picture one: four pieces, never an overlap."""
+    wide, square = _spread(10, 25), _spread(10, 10, seed=6)
+    source = PieceSource(source=_Pictures([wide, square]), height=10, width=10)
+    assert len(source) == 4
+    places = [source[i]["piece"] for i in range(4)]
+    assert places == [
+        {"picture": 0, "top": 0, "left": 0},
+        {"picture": 0, "top": 0, "left": 10},
+        {"picture": 0, "top": 0, "left": 20},
+        {"picture": 1, "top": 0, "left": 0},
+    ]
+    assert all(_pixels(source[i]).shape == (10, 10, 3) for i in range(4))
+    last = _pixels(source[2])
+    picture = _pixels(wide)
+    assert np.array_equal(last[:, :5], picture[:, 20:25])
+    median = np.median(picture.reshape(-1, 3), axis=0).astype(np.uint8)
+    assert (last[:, 5:] == median).all()
+
+
+def test_the_pieces_put_back_together_are_the_picture_rows_cut_as_columns_are() -> None:
+    """A 25 x 37 picture in 10 x 10 pieces: 3 rows of 4 pieces, and every pixel lies in exactly one of them."""
+    picture = _pixels(_spread(25, 37))
+    source = PieceSource(source=_Pictures([_spread(25, 37)]), height=10, width=10)
+    assert len(source) == 12
+    rebuilt = np.zeros((30, 40, 3), dtype=np.uint8)
+    covered = np.zeros((30, 40), dtype=int)
+    for index in range(len(source)):
+        piece = source[index]
+        top, left = piece["piece"]["top"], piece["piece"]["left"]
+        rebuilt[top : top + 10, left : left + 10] = _pixels(piece)
+        covered[top : top + 10, left : left + 10] += 1
+    assert (covered == 1).all()
+    assert np.array_equal(rebuilt[:25, :37], picture)
+
+
+def test_a_box_across_a_piece_edge_is_cut_into_each_piece_and_a_sliver_is_dropped() -> None:
+    """Columns 5-15 cross the edge at 10: columns 5-10 in the first piece, 0-5 in the second. Columns 8.5-21 leave a
+    1.5-column sliver in the first piece (under 3: dropped), 0-10 in the second, a 1-column sliver in the third."""
+    record = _record(10, 30, [[5, 2, 15, 8], [8.5, 2, 21, 8]])
+    source = PieceSource(source=_Pictures([record]), height=10, width=10)
+    first, second, third = (source[i]["target"] for i in range(3))
+    np.testing.assert_allclose(first.boxes, [[5, 2, 10, 8]])
+    assert first.labels.tolist() == [0]
+    np.testing.assert_allclose(second.boxes, [[0, 2, 5, 8], [0, 2, 10, 8]])
+    assert second.labels.tolist() == [0, 1]
+    assert len(third.boxes) == 0 and third.labels.tolist() == []
+    assert first.canvas == (10, 10) and first.classes == ["a", "b", "c", "d"]
+
+
+def test_a_piece_is_the_crops_own_cut_at_its_place() -> None:
+    """The piece at columns 10-19 is what ``RandomCropDetection`` cuts there: one cut, written once."""
+    record = _record(10, 30, [[5, 2, 15, 8]], polygons=[[[[5, 2], [15, 2], [15, 8], [5, 8]]]])
+    piece = PieceSource(source=_Pictures([record]), height=10, width=10)[1]
+    cut = RandomCropDetection(height=10, width=10).cut_at(record, 0, 10)
+    assert np.array_equal(_pixels(piece), _pixels(cut))
+    np.testing.assert_allclose(piece["target"].boxes, cut["target"].boxes)
+    assert piece["target"].extras[POLYGONS] == cut["target"].extras[POLYGONS]
+
+
+def test_a_picture_is_read_once_to_count_its_pieces_and_once_for_its_pieces_in_order() -> None:
+    pictures = _Pictures([_spread(10, 25), _spread(10, 25, seed=6)])
+    source = PieceSource(source=pictures, height=10, width=10)
+    assert len(source) == 6 and pictures.reads == [1, 1]
+    for index in range(len(source)):
+        source[index]
+    assert pictures.reads == [2, 2]
+
+
+def test_building_reads_nothing_and_a_piece_past_the_end_is_refused() -> None:
+    pictures = _Pictures([_spread(10, 10)])
+    source = PieceSource(source=pictures, height=10, width=10)
+    assert pictures.reads == [0]
+    with pytest.raises(IndexError, match="piece 1 of 1"):
+        source[1]
+
+
+def test_it_builds_with_no_arguments_and_refuses_a_missing_size_or_source_when_used() -> None:
+    with pytest.raises(ValueError, match="height and width must be set"):
+        len(PieceSource(source=_Pictures([_spread(10, 10)])))
+    with pytest.raises(TypeError, match="PieceSource: source must be indexable"):
+        len(PieceSource(height=10, width=10))
+
+
+def test_it_declares_its_sources_class_names() -> None:
+    source = PieceSource(source=_Pictures([], class_names=["drone", "ignore"]), height=10, width=10)
+    assert source.class_names == ["drone", "ignore"]
+
+
+def test_a_piece_source_loads_from_a_config_and_feeds_a_stream_by_index() -> None:
+    """A stream over it keeps its length and indexing — what RF-DETR's data loader asks of a validation set."""
+    source = confluid.load("!class:raidar.crop.PieceSource {height: 10, width: 10}")
+    source.source = _Pictures([_spread(10, 25)])
+    stream = Stream(source=source)
+    assert len(stream) == 3
+    assert _pixels(stream[1]).shape == (10, 10, 3)

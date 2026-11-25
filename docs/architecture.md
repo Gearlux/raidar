@@ -855,3 +855,38 @@ runnable: !class:raidar.relabel.RelabelLabels
 **What you may change.** More layouts, a dry run, the refusals' words. What must hold: the original is kept once and
 never written again, every remap starts from it, no line is dropped or moved, restore is byte for byte. Pin:
 `tests/test_relabel.py`.
+
+## 17. A validation set of every piece is a source, not a step (2026-11-24)
+
+**Context.** §12's cut gives one piece a picture: a random one for training, the middle one for validation. On
+pictures much larger than the piece the middle one is a small, fixed sample: spectrogram pictures of 100 ms radio
+windows (819 x 19 530 px, 819 px pieces) held 262 of their 5 124 validation boxes there, and a class whose bursts
+missed the middle stretch read AP 0 on its one box while the model found 92 % of its boxes over the whole windows. The
+best checkpoint and early stopping were chosen on that sample.
+
+**Decision.** `raidar.crop.PieceSource` wraps an indexable picture source and lists every piece of every picture,
+side by side along rows and columns, at whole multiples of the piece: no overlap, so each pixel is scored once, and
+the piece past an edge padded with the picture's median. Each piece is `RandomCropDetection.cut_at` at its place —
+the one cut, written once. It is a SOURCE because a step that makes several records from one turns a stream
+iterable-only (recordstream refuses `len` and indexing), and RF-DETR's data loader reads a validation set by index.
+The finds are not merged across pieces: a box across an edge is one truth per piece, as training's random cut clips
+it; a merged whole-picture score is the inference graph's, outside the loop (§2: raidar drives the loop and adds only
+a dataset bridge).
+
+**Consequences.** Validation costs a pass over every piece: 5 112 pieces in 1.1 min (RF-DETR small at 832, M4 Max).
+The count of truths grows by the boxes the edges split (the smoke folder: 55 boxes in its two pictures, 64 in their
+48 pieces). The pieces are counted on first use by reading every picture once.
+
+**Example.**
+
+```yaml
+val_set: !class:recordstream.core.stream.Stream
+  source: !class:raidar.crop.PieceSource
+    source: !class:raidar.YoloSource {root: ./runs/pictures, split: val}
+    height: 819
+    width: 819
+```
+
+**What you may change.** How pictures are counted (a size read without decoding), how many pictures are kept for
+their pieces. What must hold: every pixel in exactly one piece, each piece the crop's own cut, indexable with a length.
+Pin: `tests/test_crop.py` (the `PieceSource` block).

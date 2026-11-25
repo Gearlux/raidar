@@ -7,6 +7,9 @@ All notable changes to this project are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- **`raidar.crop.PieceSource`** — a validation set of every piece of every picture, side by side (no overlap, the
+  piece past an edge padded with the median), each piece cut as `RandomCropDetection` cuts it; indexable, so RF-DETR's
+  loader reads it. `RandomCropDetection.cut_at(record, top, left)` is the cut both make (`README.md`).
 - **The wheel ships the example configs** (`examples/*.yaml`) under `share/raidar/examples/`, where
   `pkg://raidar/examples/<file>.yaml` names them from any install.
 - **`raidar.relabel.RelabelLabels`** remaps a YOLO or COCO dataset folder's classes by name, many to one, always from

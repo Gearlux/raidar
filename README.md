@@ -349,6 +349,26 @@ Measured (2026-10-12, seg-nano at 504, one epoch over 130 + 65 pictures 504 px w
 tall): it trains — mask losses and `val/segm_mAP_*` written. Without the cut, the same folder read by RF-DETR's
 shape-keeping resize stops on the masks' sizes, and a 504 x 3000 picture reaches the model 224 px wide.
 
+**Validate on every piece — `raidar.crop.PieceSource`.** The middle piece of a picture much larger than the piece is a
+small sample of it: on pictures 19 530 px wide cut to 819 px pieces, the middle pieces held 262 of 5 124 validation
+boxes, and one class's AP stood on a single box. `PieceSource` makes the same cut at every place of every picture,
+side by side: one record per piece, the pieces never overlapping (each pixel scored once), a piece reaching past the
+picture's edge padded with its median, a box across a piece edge cut into each piece it crosses (a sliver under
+`min_size_px` dropped). It is a source — a data loader reads a validation set by index, and a step that makes several
+records from one would make the stream iterable-only:
+
+```yaml
+  val_set: !class:recordstream.core.stream.Stream
+    source: !class:raidar.crop.PieceSource
+      source: !class:raidar.YoloSource {root: ./runs/pictures, split: val}
+      height: 504
+      width: 504
+```
+
+Each piece's record names its place, `piece: {picture, top, left}`. The pieces are counted on first use by reading
+every picture once; a picture is then read once for a run of its pieces read in order. Measured (2026-11-24, RF-DETR
+small at 832 on an M4 Max): 5 112 pieces of 819 x 819 in 1.1 min a validation pass.
+
 ### A picture at its own size — `RFDETRDetector(keep_picture_size=True)`
 
 RF-DETR always resizes: to a `resolution` x `resolution` square, or (`square_resize_div_64: false`) to a short side of
