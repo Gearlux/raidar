@@ -918,3 +918,50 @@ def test_the_ring_is_the_walk_its_description_gives_ties_included(seed: int) -> 
         for _ in range(int(rng.integers(1, 13)))
     ]
     assert np.array_equal(_bridged_ring(polygons), _walked_ring(polygons))
+
+
+# --- split_in_name: file names that differ between the splits ---------------
+#
+# Every split numbers its pictures from zero, so two splits of one folder both hold a ``000000.png``. A tool that
+# pairs a picture with its annotation by file name alone then puts one split's boxes on the other's picture.
+
+
+def test_split_in_name_makes_the_file_names_of_two_splits_differ(tmp_path: Path) -> None:
+    out = tmp_path / "out"
+    _convert(_train_stream(), out, split="train", layout="rfdetr", split_in_name=True)
+    _convert(
+        Stream(source=[_make_record(boxes_xyxy=[[0, 0, 40, 40]], labels=[1])]),
+        out,
+        split="val",
+        layout="rfdetr",
+        split_in_name=True,
+    )
+
+    train = sorted(p.name for p in (out / "train" / "images").iterdir())
+    val = sorted(p.name for p in (out / "val" / "images").iterdir())
+    assert train == ["train_000000.png", "train_000001.png"] and val == ["val_000000.png"]
+    # the label, the COCO entry and the metadata line all name the picture the same way
+    assert sorted(p.name for p in (out / "train" / "labels").iterdir()) == ["train_000000.txt", "train_000001.txt"]
+    coco = json.loads((out / "val" / "_annotations.coco.json").read_text())
+    assert [image["file_name"] for image in coco["images"]] == ["val_000000.png"]
+    lines = [json.loads(line) for line in (out / "metadata.jsonl").read_text().strip().splitlines()]
+    assert {line["image"] for line in lines} == {
+        "train/images/train_000000.png",
+        "train/images/train_000001.png",
+        "val/images/val_000000.png",
+    }
+    assert {line["label"] for line in lines if line["split"] == "val"} == {"val/labels/val_000000.txt"}
+
+
+def test_split_in_name_is_off_unless_asked(tmp_path: Path) -> None:
+    out = tmp_path / "out"
+    _convert(_train_stream(), out, split="train")
+    assert sorted(p.name for p in (out / "images" / "train").iterdir()) == ["000000.png", "000001.png"]
+
+
+def test_an_append_continues_after_the_last_split_named_picture(tmp_path: Path) -> None:
+    out = tmp_path / "out"
+    _convert(_train_stream(), out, split_in_name=True)
+    _convert(_train_stream(), out, mode="append", split_in_name=True)
+    names = sorted(p.name for p in (out / "images" / "train").iterdir())
+    assert names == [f"train_{i:06d}.png" for i in range(4)]

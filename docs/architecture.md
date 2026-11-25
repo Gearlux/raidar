@@ -662,7 +662,10 @@ target once at construction (a projection walk) and reused it each epoch.
 in the stream, so RF-DETR only ever sees squares and keeps its defaults (square resize, zoom-crop, flip): boxes
 moved and clipped (a box under `min_size_px` dropped), outlines clipped exactly (Sutherland–Hodgman against the
 piece), a smaller picture padded with its median, never stretched — the tiled pictures' rule. `random` placement
-draws from Python's `random`, which the data loader seeds per worker and per epoch; `centre` is validation's.
+draws from Python's `random`, which the data loader seeds per worker and per epoch; `centre` is validation's;
+`densest` is the piece that keeps the most boxes — for a folder of smaller pictures, one piece a picture. It counts a
+box by the cut's own keep rule, breaks a tie by the box area kept and then by the distance to the picture's middle,
+and tries only the places where a piece edge meets a box edge (the count and the area change nowhere else).
 `StreamRFDETRDataset` reads a record's labels in the same read as its picture and, for a seg model
 (`segmentation_head`), hands RF-DETR each instance's outlines as COCO polygons (its box rectangle when it has none),
 rasterised by RF-DETR's own `ConvertCoco`, so the masks follow its later resize and crop as the disk path's do. The

@@ -496,6 +496,10 @@ class YoloSink(Storage):
         image_format: ``"png"`` (lossless, default — spectrogram detail quantises poorly under JPEG) or ``"jpg"``.
         jpeg_quality: PIL JPEG quality (1-95); ignored for PNG.
         index_padding: Zero-padding width for the per-split sequential filenames (``6`` → ``000000.png``).
+        split_in_name: ``True`` puts the split in front of every file name (``train_000000.png``, its label
+            ``train_000000.txt``). Each split numbers from zero, so without it two splits of a folder both hold a
+            ``000000.png`` — and a tool that pairs a picture with its annotation by file name alone (an upload of
+            both splits at once) puts one split's boxes on the other's picture. Default ``False``.
         write_coco: Also write ``annotations/<split>.json`` in COCO format alongside the YOLO-txt labels.
         input_key: Record key carrying the input image (default ``"image"``).
         target_key: Record key carrying the detection target ``Boxes`` (default ``"target"``).
@@ -512,6 +516,7 @@ class YoloSink(Storage):
         image_format: Literal["png", "jpg"] = "png",
         jpeg_quality: int = 95,
         index_padding: int = 6,
+        split_in_name: bool = False,
         write_coco: bool = True,
         input_key: str = "image",
         target_key: str = "target",
@@ -532,6 +537,7 @@ class YoloSink(Storage):
         self.image_format = image_format
         self.jpeg_quality = int(jpeg_quality)
         self.index_padding = int(index_padding)
+        self.split_in_name = bool(split_in_name)
         self.write_coco = bool(write_coco)
         self.input_key = str(input_key)
         self.target_key = str(target_key)
@@ -617,11 +623,16 @@ class YoloSink(Storage):
         self._writing = deque()
         return self
 
+    def _name_prefix(self) -> str:
+        """What stands before a picture's number in its file name: the split (``split_in_name``) or nothing."""
+        return f"{self.split}_" if self.split_in_name else ""
+
     def _next_index(self) -> int:
         """The index after the last picture of this split — 0 on an empty split."""
         assert self._images_dir is not None
-        stems = [p.stem for p in self._images_dir.iterdir() if p.is_file() and p.stem.isdigit()]
-        return 1 + max((int(stem) for stem in stems), default=-1)
+        prefix = self._name_prefix()
+        stems = [p.stem[len(prefix) :] for p in self._images_dir.iterdir() if p.is_file() and p.stem.startswith(prefix)]
+        return 1 + max((int(stem) for stem in stems if stem.isdigit()), default=-1)
 
     def _check_vocabulary(self) -> None:
         """An append must name every class the folder already names the same way."""
@@ -650,7 +661,7 @@ class YoloSink(Storage):
         image = _to_uint8_hwc(_record_image(record, self.input_key))
         h, w = int(image.shape[0]), int(image.shape[1])
         pixels = _grey(image, idx) if self.image_mode == "grey" else image
-        stem = f"{idx:0{self.index_padding}d}"
+        stem = f"{self._name_prefix()}{idx:0{self.index_padding}d}"
         image_filename = f"{stem}.{self.image_format}"
 
         # The target is read (and a malformed polygon list refused) before anything is written.

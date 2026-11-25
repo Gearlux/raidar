@@ -5,8 +5,9 @@ seg model's masks are batched: its batch pads the pictures to one size but joins
 pictures of different shapes in a batch stop the run (``Sizes of tensors must match except in dimension 0``). A
 picture of a whole capture — 504 columns of band, as many rows as the capture has time — is any height from 100 to
 7 000 rows. This step cuts every picture to ONE size BEFORE the loop sees it, in the picture's own pixels: a piece
-``height`` x ``width`` at a random place (training) or the middle one (validation, the same every epoch); a picture
-shorter or narrower than the piece is padded with its median, never stretched (the tiled pictures' rule). Its boxes
+``height`` x ``width`` at a random place (training), the middle one (validation, the same every epoch) or the one
+that keeps the most boxes (``densest`` — a dataset of smaller pictures, one piece a picture); a picture shorter
+or narrower than the piece is padded with its median, never stretched (the tiled pictures' rule). Its boxes
 move with the piece and are clipped to it, a box left smaller than ``min_size_px`` either way dropped with its label;
 its mask outlines (``Boxes.extras[POLYGONS]``, :mod:`raidar.yolo_sink`'s contract) are clipped exactly to the piece.
 
@@ -30,8 +31,9 @@ from recordstream.items import NDArrayItem, with_data
 
 from raidar.yolo_sink import POLYGONS
 
-#: Where the piece is cut: anywhere (training), or the middle (validation — the same piece every epoch).
-Placement = Literal["random", "centre"]
+#: Where the piece is cut: anywhere (training), the middle (validation — the same piece every epoch), or where it
+#: keeps the most boxes (the same piece every call).
+Placement = Literal["random", "centre", "densest"]
 
 Ring = List[List[float]]
 
@@ -90,7 +92,10 @@ class RandomCropDetection(Transform):
     Args:
         height: The piece's height in pixels (time rows of a waterfall); required at use (``0`` = unset).
         width: The piece's width in pixels (frequency columns); required at use (``0`` = unset).
-        placement: ``random`` — anywhere the piece fits, ends included; ``centre`` — the middle piece, every call.
+        placement: ``random`` — anywhere the piece fits, ends included; ``centre`` — the middle piece, every call;
+            ``densest`` — the piece that keeps the most boxes (a box counts when the cut leaves it ``min_size_px``
+            both ways), every call the same one. Pieces keeping as many are told apart by the box area they keep,
+            then by how near the picture's middle they start. A picture without boxes gets the middle piece.
         min_size_px: A box the cut leaves narrower or lower than this many pixels is dropped with its label.
         input_key: Record key carrying the picture (default ``"image"``).
         target_key: Record key carrying the ``Boxes``; a record without it has its picture cut alone.
@@ -124,6 +129,51 @@ class RandomCropDetection(Transform):
             return 0
         return random.randint(0, room) if self.placement == "random" else room // 2
 
+    def _starts(self, low: np.ndarray, high: np.ndarray, size: int, piece: int) -> np.ndarray:
+        """The places along an axis of ``size`` pixels a densest piece can start at, for boxes spanning
+        ``low``..``high`` there. The boxes a piece keeps, and the area it keeps of them, change only where a piece
+        edge meets a box edge (or comes ``min_size_px`` inside it) — so the best piece starts at one of those places,
+        the axis's two ends or its middle."""
+        room = size - piece
+        if room <= 0:
+            return np.zeros(1, dtype=int)
+        edges = np.concatenate([low + self.min_size_px - piece, high - piece, low, high - self.min_size_px])
+        starts = np.concatenate([np.floor(edges), np.ceil(edges), [0, room // 2, room]])
+        return np.unique(starts.clip(0, room).astype(int))
+
+    @staticmethod
+    def _inside(low: np.ndarray, high: np.ndarray, starts: np.ndarray, piece: int) -> np.ndarray:
+        """``[start, box]``: how many pixels of each box a piece starting at ``start`` keeps along the axis — the
+        clip :meth:`_cut_boxes` makes."""
+        kept: np.ndarray = (high - starts[:, None]).clip(0.0, piece) - (low - starts[:, None]).clip(0.0, piece)
+        return kept
+
+    def _densest(self, target: Boxes, rows: int, columns: int) -> Tuple[int, int]:
+        """``(top, left)`` of the piece that keeps the most of ``target``'s boxes (class docstring)."""
+        boxes = self._xyxy(target)
+        tops = self._starts(boxes[:, 1], boxes[:, 3], rows, self.height)
+        lefts = self._starts(boxes[:, 0], boxes[:, 2], columns, self.width)
+        high = self._inside(boxes[:, 1], boxes[:, 3], tops, self.height)
+        wide = self._inside(boxes[:, 0], boxes[:, 2], lefts, self.width)
+        high_kept, wide_kept = high >= self.min_size_px, wide >= self.min_size_px
+        # [top, left]: a box is kept when both axes keep it, so the count and the kept area are products over boxes
+        count = high_kept.astype(float) @ wide_kept.astype(float).T
+        area = (high * high_kept) @ (wide * wide_kept).T
+        off_middle = (
+            np.abs(tops - max(rows - self.height, 0) / 2)[:, None]
+            + np.abs(lefts - max(columns - self.width, 0) / 2)[None, :]
+        )
+        # most boxes, then most box area, then nearest the middle; what is left equal, the first top then left
+        best = np.lexsort((off_middle.ravel(), -area.ravel(), -count.ravel()))[0]
+        top, left = np.unravel_index(best, count.shape)
+        return int(tops[top]), int(lefts[left])
+
+    @staticmethod
+    def _xyxy(target: Boxes) -> np.ndarray:
+        """``target``'s boxes as an ``[n, 4]`` float array."""
+        boxes = np.asarray(target.boxes.detach().cpu() if is_torch_tensor(target.boxes) else target.boxes, dtype=float)
+        return boxes.reshape(-1, 4)
+
     def _cut(self, pixels: np.ndarray, top: int, left: int) -> np.ndarray:
         """The piece of ``pixels`` at ``(top, left)``, padded with the picture's median where it falls short."""
         piece = pixels[top : top + self.height, left : left + self.width]
@@ -136,8 +186,7 @@ class RandomCropDetection(Transform):
         return out
 
     def _cut_boxes(self, target: Boxes, top: int, left: int) -> Boxes:
-        boxes = np.asarray(target.boxes.detach().cpu() if is_torch_tensor(target.boxes) else target.boxes, dtype=float)
-        boxes = boxes.reshape(-1, 4) - np.array([left, top, left, top], dtype=float)
+        boxes = self._xyxy(target) - np.array([left, top, left, top], dtype=float)
         boxes[:, 0::2] = boxes[:, 0::2].clip(0.0, self.width)
         boxes[:, 1::2] = boxes[:, 1::2].clip(0.0, self.height)
         keep = ((boxes[:, 2] - boxes[:, 0]) >= self.min_size_px) & ((boxes[:, 3] - boxes[:, 1]) >= self.min_size_px)
@@ -207,7 +256,13 @@ class RandomCropDetection(Transform):
 
     def __call__(self, record: Record) -> Record:
         _, pixels = self._picture(record)
-        return self.cut_at(record, self._start(pixels.shape[0], self.height), self._start(pixels.shape[1], self.width))
+        rows, columns = pixels.shape[:2]
+        target = record.get(self.target_key)
+        if self.placement == "densest" and isinstance(target, Boxes):
+            top, left = self._densest(target, rows, columns)
+        else:
+            top, left = self._start(rows, self.height), self._start(columns, self.width)
+        return self.cut_at(record, top, left)
 
 
 @configurable(category="source")

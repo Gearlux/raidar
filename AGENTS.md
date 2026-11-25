@@ -113,7 +113,9 @@ hooks, model wrappers, the FCOS spec, registrations and configs.
 - `RandomCropDetection` (`raidar/crop.py`) cuts in the picture's OWN pixels before RF-DETR's resize: exactly
   `height` x `width` out, boxes clipped and a box under `min_size_px` dropped, outlines clipped exactly, a smaller
   picture padded with its median and never stretched; `random` draws from Python's `random` (seeded per loader
-  worker and epoch), never an instance RNG (pickled into every worker it would repeat). Never move the cut into
+  worker and epoch), never an instance RNG (pickled into every worker it would repeat); `densest` is the piece that
+  keeps the most boxes by the cut's own keep rule (then most kept box area, then nearest the middle), searched
+  exactly at the places a piece edge meets a box edge — never a sliding grid. Never move the cut into
   RF-DETR's `aug_config` — it runs after the resize and its 1 333 px cap. §12.
   (`tests/test_crop.py`, `tests/test_stream_rfdetr_dataset.py::test_cut_pictures_of_any_height_batch_into_masks_of_one_size`)
 - `PieceSource` (`raidar/crop.py`) is a validation set of EVERY piece of every picture: side by side at whole
@@ -145,6 +147,10 @@ hooks, model wrappers, the FCOS spec, registrations and configs.
   refuses a vocabulary that disagrees id for id BEFORE writing; `facts` lists distinct record entries
   in `data.yaml` (mixed picture scales are recorded, never refused — user ruling 2026-10-06).
   (`tests/test_yolo_sink.py`, the "append mode and facts" block)
+- `YoloSink.split_in_name` (default off) puts the split before the number in every file name
+  (`train_000000.png`, its label, the COCO `file_name`, the `metadata.jsonl` paths); an `append` continues
+  after the last picture so named. Never a second naming setting beside it.
+  (`tests/test_yolo_sink.py`, the "split_in_name" block)
 - `YoloSource` is the sink's mirror and reads both layouts; class ids are remapped by NAME to the
   vocabulary given and an unknown name is refused, never renumbered; construction touches no disk.
   Merging folders is readers + `ConcatSource` + the sink in `append` (`examples/merge_yolo.yaml`).

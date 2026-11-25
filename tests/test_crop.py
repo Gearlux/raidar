@@ -210,6 +210,91 @@ def test_a_grey_picture_is_cut_and_padded_too() -> None:
     assert pixels.shape == (40, 40) and (pixels == 7).all()
 
 
+# -- placement "densest": the piece that keeps the most boxes ---------------------------------------------------------
+
+DENSEST = RandomCropDetection(height=40, width=40, placement="densest")
+
+
+def test_densest_cuts_the_piece_that_keeps_the_most_boxes() -> None:
+    """One box near the left end, three within 38 columns near the right: the piece holds the three, whole."""
+    out = DENSEST(_record(40, 400, [[10, 5, 30, 35], [300, 5, 310, 35], [315, 5, 325, 35], [328, 5, 338, 35]]))
+    target = out["target"]
+    assert _pixels(out).shape == (40, 40, 3) and target.canvas == (40, 40)
+    assert target.labels.tolist() == [1, 2, 3]
+    # pieces starting at columns 298-300 hold all three whole; 298 is the nearest the picture's middle
+    np.testing.assert_allclose(target.boxes, [[2, 5, 12, 35], [17, 5, 27, 35], [30, 5, 40, 35]])
+
+
+def test_densest_counts_a_box_only_when_the_cut_keeps_it() -> None:
+    """Two boxes 38 columns apart: a 40-column piece reaches at most 2 pixels of the second, under the 3 a kept box
+    needs — one box, not two. The pair further on, both whole in one piece, wins."""
+    boxes = [[100, 5, 110, 35], [148, 5, 158, 35], [300, 5, 310, 35], [330, 5, 340, 35]]
+    assert DENSEST(_record(40, 400, boxes))["target"].labels.tolist() == [2, 3]
+
+
+def test_densest_keeps_a_lone_box_whole_not_a_sliver_of_it() -> None:
+    out = DENSEST(_record(40, 400, [[200, 5, 220, 35]]))["target"].boxes
+    assert float(out[0, 2] - out[0, 0]) == 20.0
+
+
+def test_densest_on_a_tie_keeps_the_most_box_area() -> None:
+    out = DENSEST(_record(40, 400, [[10, 5, 20, 35], [300, 5, 330, 35]]))["target"]
+    assert out.labels.tolist() == [1]
+    assert float(out.boxes[0, 2] - out.boxes[0, 0]) == 30.0
+
+
+def test_densest_on_a_tie_of_count_and_area_takes_the_piece_nearest_the_middle() -> None:
+    """Two equal boxes; the middle piece starts at column 180. Column 220 (the second box whole) is 40 away, column
+    20 (the first) 160."""
+    out = DENSEST(_record(40, 400, [[20, 5, 30, 35], [250, 5, 260, 35]]))["target"]
+    assert out.labels.tolist() == [1]
+    np.testing.assert_allclose(out.boxes, [[30, 5, 40, 35]])
+
+
+def test_densest_without_boxes_or_without_a_target_is_the_centre_piece() -> None:
+    assert int(_pixels(DENSEST(_record(200, 40, [])))[0, 0, 0]) == 80
+    record = _record(200, 40, [])
+    del record["target"]
+    assert int(_pixels(DENSEST(record))[0, 0, 0]) == 80
+
+
+def test_densest_is_the_same_piece_every_call() -> None:
+    boxes = [[5, 20, 30, 30], [5, 150, 30, 160], [5, 165, 30, 175]]
+    tops = {int(_pixels(DENSEST(_record(200, 40, boxes)))[0, 0, 0]) for _ in range(5)}
+    assert len(tops) == 1
+
+
+def test_densest_searches_rows_and_columns_together() -> None:
+    """Boxes that share a column range but not a row range are not one group: the piece is placed in both axes."""
+    boxes = [[150, 10, 160, 20], [150, 60, 160, 70], [150, 110, 160, 120], [20, 150, 30, 160], [35, 165, 45, 175]]
+    out = DENSEST(_record(200, 200, boxes))["target"]
+    assert out.labels.tolist() == [3, 4]
+
+
+def test_densest_pads_a_short_picture_and_places_the_piece_along_the_other_axis() -> None:
+    out = DENSEST(_record(20, 400, [[300, 2, 320, 12]]))
+    assert _pixels(out).shape == (40, 40, 3)
+    assert out["target"].labels.tolist() == [0]
+    assert float(out["target"].boxes[0, 1]) == 2.0  # no rows to choose: the picture's rows stay where they were
+
+
+def test_densest_keeps_as_many_boxes_as_any_piece_can() -> None:
+    """Against every piece of the picture, tried one by one."""
+    rng = np.random.default_rng(5)
+    brute = RandomCropDetection(height=40, width=40)
+    for _ in range(20):
+        x1, y1 = rng.uniform(0, 110, 12), rng.uniform(0, 70, 12)
+        boxes = np.stack([x1, y1, x1 + rng.uniform(1, 30, 12), y1 + rng.uniform(1, 30, 12)], axis=1)
+        record = _record(100, 140, boxes.tolist())
+        best = max(len(brute.cut_at(record, top, left)["target"].labels) for top in range(61) for left in range(101))
+        assert len(DENSEST(record)["target"].labels) == best
+
+
+def test_densest_loads_from_a_config() -> None:
+    crop = confluid.load("!class:raidar.crop.RandomCropDetection {height: 40, width: 40, placement: densest}")
+    assert crop(_record(40, 400, [[300, 5, 330, 35]]))["target"].labels.tolist() == [0]
+
+
 # -- PieceSource: every piece of every picture, side by side ----------------------------------------------------------
 
 

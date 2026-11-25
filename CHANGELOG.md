@@ -7,6 +7,11 @@ All notable changes to this project are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- **`YoloSink.split_in_name`** — `true` names every file after its split (`train_000000.png`, `val_000000.png`), so
+  two splits of one folder never hold a picture of the same name; off by default (`README.md`).
+- **`RandomCropDetection` placement `densest`** — the piece that keeps the most boxes, the same one every call: for a
+  dataset of smaller pictures, one piece a picture. Pieces keeping as many boxes are told apart by the box area they
+  keep, then by how near the picture's middle they start; a picture without boxes gets the middle piece (`README.md`).
 - **`raidar.crop.PieceSource`** — a validation set of every piece of every picture, side by side (no overlap, the
   piece past an edge padded with the median), each piece cut as `RandomCropDetection` cuts it; indexable, so RF-DETR's
   loader reads it. `RandomCropDetection.cut_at(record, top, left)` is the cut both make (`README.md`).

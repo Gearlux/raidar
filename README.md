@@ -327,7 +327,9 @@ and the long side is capped at 1333 px. `RandomCropDetection` cuts each picture 
 its own pixels, before RF-DETR sees it: its boxes moved and clipped (a box left under `min_size_px`, 3, in either
 direction dropped), its outlines clipped exactly, a picture smaller than the piece padded with its median — never
 stretched. `placement: random` cuts anywhere (Python's `random`, which the data loader seeds per worker and epoch: a
-new piece each epoch); `centre` the middle piece, every call — for validation. Read a folder with `YoloSource`:
+new piece each epoch); `centre` the middle piece, every call — for validation; `densest` the piece that keeps the
+most boxes, every call the same one — for writing a folder of smaller pictures, one piece a picture (see below). Read
+a folder with `YoloSource`:
 
 ```yaml
 runnable: !class:raidar.RFDETRDetector
@@ -344,6 +346,19 @@ runnable: !class:raidar.RFDETRDetector
     ops:
       - !class:raidar.crop.RandomCropDetection {height: 504, width: 504, placement: centre}
 ```
+
+**The piece with the most boxes — `placement: densest`.** A picture far larger than a labelling tool or a model takes
+can be written as ONE piece of it — the one that keeps the most boxes:
+
+```yaml
+ops:
+  - !class:raidar.crop.RandomCropDetection {height: 819, width: 2048, placement: densest}
+```
+
+A box counts when the cut keeps it — `min_size_px` left of it both ways, the rule that drops a box. Of the pieces
+keeping as many boxes, the one keeping the most box area wins (a box whole rather than a sliver of it), then the one
+starting nearest the picture's middle. A picture without boxes gets the middle piece. The search is exact: every place
+where a piece edge meets a box edge is tried, on both axes. The boxes outside the piece are not in the output.
 
 Measured (2026-10-12, seg-nano at 504, one epoch over 130 + 65 pictures 504 px wide and 100, 1 008 or 3 000 rows
 tall): it trains — mask losses and `val/segm_mAP_*` written. Without the cut, the same folder read by RF-DETR's
@@ -449,6 +464,7 @@ runnable: !class:recordstream.processing.DatasetProcessor
     layout: rfdetr
     mode: replace                             # replace (default): wipe this split first | append: continue it
     facts: [scale]                            # list the distinct values of these record entries in data.yaml
+    split_in_name: false                      # true: train_000000.png — file names that differ between the splits
     image_mode: rgb                           # rgb (default) | grey: one channel a picture whose three are equal
     image_threads: 4                          # threads encoding and writing the pictures (the files are the same)
 ```
@@ -461,6 +477,11 @@ runnable: !class:recordstream.processing.DatasetProcessor
 `facts` names record entries whose DISTINCT values `data.yaml` lists under `facts:` — a picture's
 scale, for instance: a folder of mixed scales is recorded, never refused. Every record's entries
 ride `metadata.jsonl` regardless.
+
+`split_in_name: true` puts the split in front of every file name (`train_000000.png`, `train_000000.txt`). Each split
+numbers its pictures from zero, so two splits of one folder otherwise both hold a `000000.png`, and a tool that pairs a
+picture with its annotation by file name alone — an upload of both splits at once — puts one split's boxes on the
+other's picture.
 
 `image_mode: grey` stores a grey picture (its three channels equal, a spectrogram's grey scale) as
 ONE channel: measured on 60 spectrogram pictures of 1024 x 1024, 12.5 ms and 0.52 MB a picture
