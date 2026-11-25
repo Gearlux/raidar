@@ -852,4 +852,4 @@ Listed with defaults in [`env.complete`](https://github.com/Gearlux/raidar/blob/
 
 ## License
 
-MIT.
+[PolyForm Noncommercial License 1.0.0](https://polyformproject.org/licenses/noncommercial/1.0.0) (the `LICENSE` file): free for personal, academic and other noncommercial use. Commercial use needs a separate licence from the author.
