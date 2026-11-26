@@ -6,6 +6,10 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+- **An RF-DETR run that raises ends its trackers' run** — as `failed`, or `interrupted` for a Ctrl-C, with the log
+  file uploaded; it was left running on the tracker for ever. The error is raised as before.
+
 ### Added
 - **`YoloSink.split_in_name`** — `true` names every file after its split (`train_000000.png`, `val_000000.png`), so
   two splits of one folder never hold a picture of the same name; off by default (`README.md`).

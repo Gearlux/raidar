@@ -307,12 +307,15 @@ class _RecordingTracker(Tracker):
 class _EpochTrainer:
     """RF-DETR's trainer as far as its loggers go: one epoch's values to every logger, then each finalized."""
 
-    def __init__(self, loggers: List[Any]) -> None:
+    def __init__(self, loggers: List[Any], raising: Any = None) -> None:
         self.loggers = loggers
+        self.raising = raising
         self.global_step = 4
         self.callback_metrics = {"val/mAP_50_95": torch.tensor(0.5)}
 
     def _epoch(self) -> None:
+        if self.raising is not None:
+            raise self.raising
         for logger in self.loggers:
             logger.log_metrics({"train/loss": 1.25, "val/mAP_50_95": 0.5}, step=0)
             logger.finalize("success")
@@ -338,7 +341,7 @@ class _OwnLogger:
         pass
 
 
-def _stream_run(monkeypatch: Any, trackers: Any, task: str = "fit") -> Any:
+def _stream_run(monkeypatch: Any, trackers: Any, task: str = "fit", raising: Any = None) -> Any:
     """A stream-mode ``RFDETRDetector`` whose RF-DETR pieces are stand-ins; returns it, its trainer and the calls."""
     pytest.importorskip("rfdetr.training")
     import rfdetr.training as rftrain
@@ -349,7 +352,7 @@ def _stream_run(monkeypatch: Any, trackers: Any, task: str = "fit") -> Any:
 
     seen: dict = {}
     own = _OwnLogger()
-    trainer = _EpochTrainer([own])
+    trainer = _EpochTrainer([own], raising)
     fake_rf = SimpleNamespace(
         model_config=SimpleNamespace(pretrain_weights=None),
         get_train_config=lambda **kw: SimpleNamespace(resume=None, **kw),
@@ -362,7 +365,9 @@ def _stream_run(monkeypatch: Any, trackers: Any, task: str = "fit") -> Any:
     monkeypatch.setattr(frd, "StreamRFDETRDataModule", lambda *a, **k: SimpleNamespace())
     monkeypatch.setattr(mod, "log_run_context", lambda trackers, runnable: "manifest")
     monkeypatch.setattr(
-        mod, "capture_log_file", lambda trackers, manifest, status: seen.update(log_file_to=list(trackers))
+        mod,
+        "capture_log_file",
+        lambda trackers, manifest, status: seen.update(log_file_to=list(trackers), status=status),
     )
     detector = RFDETRDetector(
         task=task,  # type: ignore[arg-type]
@@ -373,7 +378,11 @@ def _stream_run(monkeypatch: Any, trackers: Any, task: str = "fit") -> Any:
         class_names={0: "a", 1: "b"},
         trackers=trackers,
     )
-    detector.run()
+    if raising is not None:
+        with pytest.raises(type(raising)):
+            detector.run()
+    else:
+        detector.run()
     return detector, trainer, own, seen
 
 
@@ -401,6 +410,25 @@ def test_a_stream_evaluation_sends_its_values_to_the_trackers_own_run(monkeypatc
     _detector, trainer, own, _seen = _stream_run(monkeypatch, [tracker], task="evaluate")
     assert trainer.loggers[0] is own and len(trainer.loggers) == 2
     assert ("metrics", {"train/loss": 1.25, "val/mAP_50_95": 0.5}, 0) in tracker.calls
+
+
+@pytest.mark.parametrize("task", ["fit", "evaluate"])
+@pytest.mark.parametrize(
+    "raising, status", [(RuntimeError("training failed"), "failed"), (KeyboardInterrupt(), "interrupted")]
+)
+def test_a_run_that_raises_still_ends_its_trackers_run(monkeypatch: Any, task: str, raising: Any, status: str) -> None:
+    """A run that raised left its trackers open: MLflow showed it running for ever and the tracker's sampler was
+    never stopped. The trackers get the log file and the run's real ending, and the error still reaches the caller
+    (``_stream_run`` holds the run to raising it)."""
+    tracker = _RecordingTracker()
+    _detector, _trainer, _own, seen = _stream_run(monkeypatch, [tracker], task=task, raising=raising)
+    assert seen == {"log_file_to": [tracker], "status": status}
+
+
+def test_a_run_that_succeeds_ends_its_trackers_run_once_as_a_success(monkeypatch: Any) -> None:
+    tracker = _RecordingTracker()
+    _detector, _trainer, _own, seen = _stream_run(monkeypatch, [tracker])
+    assert seen["status"] == "success"
 
 
 # ---------------------------------------------------------------------------

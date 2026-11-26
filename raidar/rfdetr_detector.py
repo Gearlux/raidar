@@ -30,8 +30,9 @@ op (``CocoToTorchVisionDetection(label_offset=0)``), NOT the ``+1`` shift the to
 from __future__ import annotations
 
 import csv
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Dict, List, Literal, Optional, Sequence, Union, cast
+from typing import Any, Dict, Iterator, List, Literal, Optional, Sequence, Union, cast
 
 from confluid import Partial, configurable, flow, output
 from loggair import get_logger
@@ -317,16 +318,15 @@ class RFDETRDetector(TorchRunner, ProgressReporting):
         # the run RECORD — git state, config, manifest, log file — AND the final scores.
         trackers = self._live_trackers()
         manifest = log_run_context(trackers, runnable=self)
-        if self.data is not None:
-            self._fit_disk_mode()
-        else:
-            self._fit_stream_mode()
-        self._log_final_metrics(trackers)
-        write_metrics_sidecar(
-            self.metrics_sidecar_path, self._computed_metrics or {}, self.experiment_name, self.run_name
-        )
-        # Uploads the log file, stamps the manifest's terminal status AND finalizes every tracker.
-        capture_log_file(trackers, manifest=manifest, status="success")
+        with self._ending_the_run(trackers, manifest):
+            if self.data is not None:
+                self._fit_disk_mode()
+            else:
+                self._fit_stream_mode()
+            self._log_final_metrics(trackers)
+            write_metrics_sidecar(
+                self.metrics_sidecar_path, self._computed_metrics or {}, self.experiment_name, self.run_name
+            )
 
     @entrypoint("evaluate", role="evaluator")
     def evaluate(self) -> None:
@@ -337,6 +337,24 @@ class RFDETRDetector(TorchRunner, ProgressReporting):
         self._run_eval(run_test=True)
 
     # ---- tracking helpers ---------------------------------------------------- #
+    @contextmanager
+    def _ending_the_run(self, trackers: Sequence[Tracker], manifest: Any) -> Iterator[None]:
+        """End the run on every tracker however the work inside ends.
+
+        ``capture_log_file`` uploads the log file, stamps the manifest's terminal status AND finalizes
+        every tracker. A run that RAISED must reach it too — as ``failed``, or ``interrupted`` for a
+        Ctrl-C — or its tracker shows it running for ever and never stops its samplers. The error
+        is raised again.
+        """
+        try:
+            yield
+        except BaseException as exc:
+            capture_log_file(
+                trackers, manifest=manifest, status="interrupted" if isinstance(exc, KeyboardInterrupt) else "failed"
+            )
+            raise
+        capture_log_file(trackers, manifest=manifest, status="success")
+
     def _live_trackers(self) -> List[Tracker]:
         """Normalize and flow the wired trackers ONCE, writing the result back to the slot."""
         self.trackers = [flow(t) for t in as_tracker_list(self.trackers) or []]
@@ -517,15 +535,15 @@ class RFDETRDetector(TorchRunner, ProgressReporting):
         # atexit hook to relabel `interrupted` on a run that succeeded.
         trackers = self._live_trackers()
         manifest = log_run_context(trackers, runnable=self)
-        if self.data is not None:
-            self._eval_disk_mode(run_test)
-        else:
-            self._eval_stream_mode(run_test)
-        self._log_final_metrics(trackers)
-        write_metrics_sidecar(
-            self.metrics_sidecar_path, self._computed_metrics or {}, self.experiment_name, self.run_name
-        )
-        capture_log_file(trackers, manifest=manifest, status="success")
+        with self._ending_the_run(trackers, manifest):
+            if self.data is not None:
+                self._eval_disk_mode(run_test)
+            else:
+                self._eval_stream_mode(run_test)
+            self._log_final_metrics(trackers)
+            write_metrics_sidecar(
+                self.metrics_sidecar_path, self._computed_metrics or {}, self.experiment_name, self.run_name
+            )
 
     def _prepare_eval(self, dataset_dir: str, run_test: bool) -> Any:
         """Build the high-level RF-DETR + a checkpoint-loaded model_config + the eval TrainConfig."""
