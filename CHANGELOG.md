@@ -6,6 +6,11 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+- **`YoloSink` says what a run deletes** — `planned_changes()`: in `replace` mode, the split's picture folder and
+  label folder with their file count and size, when they are there. A plan of the run (`recordstream run --dry_run`)
+  lists them before anything is deleted.
+
 ### Fixed
 - **An RF-DETR run that raises ends its trackers' run** — as `failed`, or `interrupted` for a Ctrl-C, with the log
   file uploaded; it was left running on the tracker for ever. The error is raised as before.

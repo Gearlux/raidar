@@ -486,6 +486,14 @@ numbers its pictures from zero, so two splits of one folder otherwise both hold 
 picture with its annotation by file name alone — an upload of both splits at once — puts one split's boxes on the
 other's picture.
 
+A `replace` deletes the split's picture folder and label folder when the run opens the sink. `recordstream run
+<config> --dry_run` names them first and changes nothing:
+
+```text
+delete ./runs/dataset/images/train (2 files, 1.4M)
+delete ./runs/dataset/labels/train (2 files, 96B)
+```
+
 `image_mode: grey` stores a grey picture (its three channels equal, a spectrogram's grey scale) as
 ONE channel: measured on 60 spectrogram pictures of 1024 x 1024, 12.5 ms and 0.52 MB a picture
 against 27.6 ms and 0.80 MB in RGB. The readers turn it back into the same three channels — RF-DETR's

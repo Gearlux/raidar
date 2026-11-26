@@ -152,6 +152,10 @@ hooks, model wrappers, the FCOS spec, registrations and configs.
   refuses a vocabulary that disagrees id for id BEFORE writing; `facts` lists distinct record entries
   in `data.yaml` (mixed picture scales are recorded, never refused — user ruling 2026-10-06).
   (`tests/test_yolo_sink.py`, the "append mode and facts" block)
+- `YoloSink.planned_changes()` names what `open()` deletes in `replace` mode — the split's picture and label folders
+  that exist, each `delete <folder> (<n> files, <size>)` — read off the disk, nothing changed, `[]` for an `append`;
+  recordstream's `DatasetProcessor.plan()` lists them. A change to what `open()` deletes changes this in the same
+  commit. (`tests/test_yolo_sink_plan.py`)
 - `YoloSink.split_in_name` (default off) puts the split before the number in every file name
   (`train_000000.png`, its label, the COCO `file_name`, the `metadata.jsonl` paths); an `append` continues
   after the last picture so named. Never a second naming setting beside it.

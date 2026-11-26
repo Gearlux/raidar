@@ -461,6 +461,15 @@ def _jsonable_metadata(metadata: Any, *, max_array_elems: int = _MAX_META_ARRAY_
     return str(metadata)
 
 
+def _size_text(size: float) -> str:
+    """A byte count as ``du -sh`` writes it (``310.0K``, ``1.2G``)."""
+    for unit in ("B", "K", "M", "G"):
+        if size < 1024:
+            return f"{size:.0f}{unit}" if unit == "B" else f"{size:.1f}{unit}"
+        size /= 1024
+    return f"{size:.1f}T"
+
+
 # category="sink": listed among the sinks of a graph editor's catalogue, and wired into DatasetProcessor.sink.
 @configurable(category="sink")
 class YoloSink(Storage):
@@ -759,6 +768,22 @@ class YoloSink(Storage):
                 if not annotation.get("segmentation"):
                     x, y, w, h = annotation["bbox"]
                     annotation["segmentation"] = [[x, y, x + w, y, x + w, y + h, x, y + h]]
+
+    def planned_changes(self) -> List[str]:
+        """What opening this sink for a run would delete, a line each — ``delete <folder> (807 files, 1.2G)`` for
+        this split's picture folder and its label folder in ``replace`` mode, when they are there. An ``append``,
+        and a folder that is not there yet, give nothing. Read off the disk; nothing is changed. (A ``replace`` also
+        drops this split's lines of ``metadata.jsonl``, rewritten at the end of the run.)"""
+        if self.mode != "replace":
+            return []
+        root = Path(self.output_dir).expanduser()
+        lines = []
+        for folder in (root / self._images_rel(), root / self._labels_rel()):
+            if folder.exists():
+                files = [path for path in folder.rglob("*") if path.is_file()]
+                count = f"{len(files)} file" + ("" if len(files) == 1 else "s")
+                lines.append(f"delete {folder} ({count}, {_size_text(sum(path.stat().st_size for path in files))})")
+        return lines
 
     def _images_rel(self) -> str:
         """This split's image folder, relative to the root — the layout's spelling."""
