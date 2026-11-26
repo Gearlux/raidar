@@ -109,7 +109,7 @@ def test_run_dispatches_fit_then_disk_vs_stream(monkeypatch: Any) -> None:
     monkeypatch.setattr(d, "_fit_disk_mode", lambda: calls.append("disk"))
     monkeypatch.setattr(d, "_live_trackers", lambda: [])
     monkeypatch.setattr("raidar.rfdetr_detector.log_run_context", lambda trackers, runnable: None)
-    monkeypatch.setattr("raidar.rfdetr_detector.capture_log_file", lambda trackers, manifest, status: None)
+    monkeypatch.setattr("matrainer.tracking.provenance.capture_log_file", lambda trackers, manifest, status: None)
     d.run()
     s = RFDETRDetector(train_set=[], val_set=[], num_classes=2, class_names={0: "a", 1: "b"})
     monkeypatch.setattr(s, "_fit_stream_mode", lambda: calls.append("stream"))
@@ -130,7 +130,7 @@ def test_fit_hands_matrainer_the_runnable_and_finishes_the_manifest(monkeypatch:
         lambda trackers, runnable: seen.update(runnable=runnable) or "manifest",
     )
     monkeypatch.setattr(
-        "raidar.rfdetr_detector.capture_log_file",
+        "matrainer.tracking.provenance.capture_log_file",
         lambda trackers, manifest, status: seen.update(manifest=manifest, status=status),
     )
     d.run()
@@ -365,8 +365,7 @@ def _stream_run(monkeypatch: Any, trackers: Any, task: str = "fit", raising: Any
     monkeypatch.setattr(frd, "StreamRFDETRDataModule", lambda *a, **k: SimpleNamespace())
     monkeypatch.setattr(mod, "log_run_context", lambda trackers, runnable: "manifest")
     monkeypatch.setattr(
-        mod,
-        "capture_log_file",
+        "matrainer.tracking.provenance.capture_log_file",
         lambda trackers, manifest, status: seen.update(log_file_to=list(trackers), status=status),
     )
     detector = RFDETRDetector(

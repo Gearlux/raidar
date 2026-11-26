@@ -41,7 +41,8 @@ dependencies = [
     "loggair>=0.2.0",
     # matrainer is the TRACKING library (and the metric-slot rule + artifact writers). Its own
     # core install is light — no torch — so it belongs here rather than in a backend extra.
-    "matrainer>=0.1.0a1",
+    # 0.1.0a3: the first release with `ending_the_run`, which `rfdetr_detector` imports.
+    "matrainer>=0.1.0a3",
 ]
 requires-python = ">=3.12"
 

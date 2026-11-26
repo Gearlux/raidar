@@ -61,8 +61,8 @@ hooks, model wrappers, the FCOS spec, registrations and configs.
   RF-DETR's own checkpoint files); the run-name knob is
   `run_name`, never `run`, which would shadow `run()`
   (`tests/test_rfdetr_detector.py::test_run_name_does_not_shadow_run_method`);
-  `train_config:` merges verbatim over the floor, `model_config:` is the same pass-through to the model's build-time settings (`group_detr`, …; keys with a parameter of their own are refused: `tests/test_rfdetr_detector.py::test_model_config_refuses_a_key_with_its_own_parameter`); `fit` finishes its manifest with
-  `capture_log_file(..., status="success")`; Stream mode is drift-guarded by the gated
+  `train_config:` merges verbatim over the floor, `model_config:` is the same pass-through to the model's build-time settings (`group_detr`, …; keys with a parameter of their own are refused: `tests/test_rfdetr_detector.py::test_model_config_refuses_a_key_with_its_own_parameter`); `fit` and the evaluation run inside matrainer's
+  `ending_the_run`, which finishes the manifest — as `failed` when the run raises (`tests/test_rfdetr_detector.py::test_a_run_that_raises_still_ends_its_trackers_run`); Stream mode is drift-guarded by the gated
   `::test_stream_train_smoke`.
 - rfdetr stream mode (fit and evaluate): every wired tracker is ADDED to the loggers of RF-DETR's trainer through
   matrainer's `TrackerLogger` (`_log_to_trackers`), after RF-DETR's own, so a training is ONE tracker run; the final
