@@ -94,6 +94,10 @@ All notable changes to this project are documented here. The format follows
   `raidar.rfdetr._VARIANT_CLASSES`, names every variant; `RFDETRModel` keeps the four detectors.
 
 ### Changed
+- **raidar requires the newest workspace releases** — confluid 0.5.0 (was `>=0.3.1`), liquifai 0.4.0 (was
+  `>=0.3.0`), loggair 0.3.0 (was `>=0.2.0`), recordstream 0.1.0a4 (was `>=0.1.0a2`) and matrainer 0.1.0a3 (was
+  `>=0.1.0a1` in the extras), in the core and in every extra, and the `[compile]` extra's torpaido 0.1.0a1 (`>=0.1.0a1`,
+  was unversioned, before torpaido was on PyPI); the suite is tested against them.
 - **An RF-DETR run over streams logs every epoch to its trackers.** Each wired tracker is added to the loggers of
   RF-DETR's trainer, so the losses and mAP per epoch land in the same tracker run as the config, the log file and
   the final scores (one MLflow run, no `mlflow: true` in `train_config`). A run over a dataset folder (`data:`) is

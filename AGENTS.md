@@ -341,8 +341,9 @@ hooks, model wrappers, the FCOS spec, registrations and configs.
   bare `torch`, not `raidar[torch]`. Keep `_BACKEND_NAMES` in step with the extras.
   (`release.yml` smoke test)
 - `fastcore<2` and `fastprogress<1.1` are upstream breaks; see `pyproject.toml`.
-- Releases: hand-written `release.yml`; workspace specs read `>=0.1.0a1` (aisland
-  `tests/test_workspace_dependency_specs.py`); README links are absolute
+- Releases: hand-written `release.yml`; each release raises every workspace floor, core and extras, to the newest
+  release and runs the suite there, and a dependent's next release raises its `raidar>=` the same way (user choice
+  2026-11-26; aisland `tests/test_workspace_dependency_specs.py` checks each is satisfiable); README links are absolute
   (`tests/test_docs_links.py`); the newest CHANGELOG entry is the version (`tests/test_packaging.py`).
 - CI runs `mypy .` here with only its own extras: list extra-gated imports in
   `[[tool.mypy.overrides]]`. `--cov-branch` is required (`tests/test_coverage_config.py`).
