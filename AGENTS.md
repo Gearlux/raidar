@@ -64,6 +64,11 @@ hooks, model wrappers, the FCOS spec, registrations and configs.
   `train_config:` merges verbatim over the floor, `model_config:` is the same pass-through to the model's build-time settings (`group_detr`, …; keys with a parameter of their own are refused: `tests/test_rfdetr_detector.py::test_model_config_refuses_a_key_with_its_own_parameter`); `fit` finishes its manifest with
   `capture_log_file(..., status="success")`; Stream mode is drift-guarded by the gated
   `::test_stream_train_smoke`.
+- rfdetr stream mode (fit and evaluate): every wired tracker is ADDED to the loggers of RF-DETR's trainer through
+  matrainer's `TrackerLogger` (`_log_to_trackers`), after RF-DETR's own, so a training is ONE tracker run; the final
+  scores are logged at the trainer's last step, never without a step (a stray point at step 0). Never set RF-DETR's
+  `mlflow` knob beside a tracker for this — it opens a second run. Disk mode cannot (RF-DETR's `train()` builds the
+  trainer). (`tests/test_rfdetr_detector.py::test_a_stream_fit_sends_every_epochs_values_to_the_trackers_own_run`)
 - The RF-DETR variants are ONE table, `raidar.rfdetr._VARIANT_CLASSES`, and the two Literals are
   read off it: `VariantName` (the backend, every entry — the `seg-*` models train from the dataset
   on disk, a box label read as its four-corner polygon, a polygon line as that polygon, or from a stream whose

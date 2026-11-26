@@ -85,6 +85,10 @@ All notable changes to this project are documented here. The format follows
   `raidar.rfdetr._VARIANT_CLASSES`, names every variant; `RFDETRModel` keeps the four detectors.
 
 ### Changed
+- **An RF-DETR run over streams logs every epoch to its trackers.** Each wired tracker is added to the loggers of
+  RF-DETR's trainer, so the losses and mAP per epoch land in the same tracker run as the config, the log file and
+  the final scores (one MLflow run, no `mlflow: true` in `train_config`). A run over a dataset folder (`data:`) is
+  unchanged (`README.md`).
 - **The licence is now the PolyForm Noncommercial License 1.0.0** (`LICENSE`, `pyproject.toml`): free for personal, academic and other noncommercial use; commercial use needs a separate licence from the author. It was MIT; the versions released under MIT keep that licence.
 - `--framework ultralytics` loads the separate Ultralytics package as the `raidar.ultralytics`
   subpackage, and `examples/train_cppe5.yaml` names its trainer

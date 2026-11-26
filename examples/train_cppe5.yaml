@@ -380,8 +380,9 @@ ultralytics: !scope:framework=ultralytics
 # `trackers:` is the whole of a run's output wiring — there is no `logger:` slot. Each tracker IS
 # a metric sink (adapted to Lightning's logger interface on the lightning backend), and also
 # receives the git provenance, the resolved config and the run manifest. On the rfdetr backend
-# the trackers carry the run RECORD, while per-step curves stay with RF-DETR's own
-# `mlflow`/`tensorboard` knobs.
+# a stream-mode run's trackers are loggers of RF-DETR's own loop too (one run holds the curves and
+# the record); a disk-mode run's trackers carry the run RECORD, its curves staying with RF-DETR's
+# own `mlflow`/`tensorboard` knobs.
 #
 # trackers:
 #   - !class:matrainer.MlflowTracker

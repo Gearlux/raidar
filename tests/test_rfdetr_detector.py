@@ -15,6 +15,7 @@ from typing import Any, List, get_args
 
 import pytest
 import torch
+from matrainer.tracking.base import Tracker
 from recordstream.runnable import entrypoint_tasks
 
 from raidar.rfdetr_detector import RFDETRDetector, RFDETRTask, _coerce_float, _scalar_payload
@@ -278,6 +279,128 @@ def test_a_stream_fit_hands_keep_picture_size_to_its_datamodule(monkeypatch: Any
     )
     d._fit_stream_mode()
     assert captured["keep"] is True
+
+
+# ---------------------------------------------------------------------------
+# One tracker run per training: the wired trackers are loggers of RF-DETR's trainer
+# ---------------------------------------------------------------------------
+
+
+class _RecordingTracker(Tracker):
+    """A tracker that writes down, in order, every call that reaches it."""
+
+    def __init__(self) -> None:
+        super().__init__("experiment", "run")
+        self.calls: List[Any] = []
+
+    @property
+    def experiment(self) -> Any:
+        return self
+
+    def log_hyperparams(self, params: Any) -> None:
+        self.calls.append(("hyperparams", dict(params)))
+
+    def log_metrics(self, metrics: Any, step: Any = None) -> None:
+        self.calls.append(("metrics", dict(metrics), step))
+
+
+class _EpochTrainer:
+    """RF-DETR's trainer as far as its loggers go: one epoch's values to every logger, then each finalized."""
+
+    def __init__(self, loggers: List[Any]) -> None:
+        self.loggers = loggers
+        self.global_step = 4
+        self.callback_metrics = {"val/mAP_50_95": torch.tensor(0.5)}
+
+    def _epoch(self) -> None:
+        for logger in self.loggers:
+            logger.log_metrics({"train/loss": 1.25, "val/mAP_50_95": 0.5}, step=0)
+            logger.finalize("success")
+
+    def fit(self, module: Any, datamodule: Any, ckpt_path: Any = None) -> None:
+        self._epoch()
+
+    def validate(self, module: Any, datamodule: Any) -> Any:
+        self._epoch()
+        return [{"val/mAP_50_95": 0.5}]
+
+
+class _OwnLogger:
+    """A logger RF-DETR itself put on the trainer (its CSV logger)."""
+
+    def __init__(self) -> None:
+        self.metrics: List[Any] = []
+
+    def log_metrics(self, metrics: Any, step: Any = None) -> None:
+        self.metrics.append((dict(metrics), step))
+
+    def finalize(self, status: str) -> None:
+        pass
+
+
+def _stream_run(monkeypatch: Any, trackers: Any, task: str = "fit") -> Any:
+    """A stream-mode ``RFDETRDetector`` whose RF-DETR pieces are stand-ins; returns it, its trainer and the calls."""
+    pytest.importorskip("rfdetr.training")
+    import rfdetr.training as rftrain
+
+    import raidar.rfdetr as rfmod
+    import raidar.rfdetr_detector as mod
+    import raidar.stream_rfdetr_dataset as frd
+
+    seen: dict = {}
+    own = _OwnLogger()
+    trainer = _EpochTrainer([own])
+    fake_rf = SimpleNamespace(
+        model_config=SimpleNamespace(pretrain_weights=None),
+        get_train_config=lambda **kw: SimpleNamespace(resume=None, **kw),
+        model=SimpleNamespace(model=None),
+    )
+    monkeypatch.setattr(rfmod, "_build_rfdetr", lambda *a, **k: fake_rf)
+    monkeypatch.setattr(rftrain, "RFDETRModelModule", lambda mc, cfg: SimpleNamespace(model="trained"))
+    monkeypatch.setattr(rftrain, "build_trainer", lambda cfg, mc, **k: trainer)
+    monkeypatch.setattr(mod, "_trainer_device_kwargs", lambda device: {})
+    monkeypatch.setattr(frd, "StreamRFDETRDataModule", lambda *a, **k: SimpleNamespace())
+    monkeypatch.setattr(mod, "log_run_context", lambda trackers, runnable: "manifest")
+    monkeypatch.setattr(
+        mod, "capture_log_file", lambda trackers, manifest, status: seen.update(log_file_to=list(trackers))
+    )
+    detector = RFDETRDetector(
+        task=task,  # type: ignore[arg-type]
+        weights="/ckpt/best.pth" if task != "fit" else None,
+        train_set=[{"image": None}],
+        val_set=[{"image": None}],
+        num_classes=2,
+        class_names={0: "a", 1: "b"},
+        trackers=trackers,
+    )
+    detector.run()
+    return detector, trainer, own, seen
+
+
+def test_a_stream_fit_sends_every_epochs_values_to_the_trackers_own_run(monkeypatch: Any) -> None:
+    """One run per training: a wired tracker is a logger of RF-DETR's trainer, so the epoch's losses and mAP reach
+    the SAME tracker that then gets the final scores and the log file — after RF-DETR's own loggers, which stay.
+    The final scores are logged at the step the trainer ended on, never as a stray point at step 0."""
+    tracker = _RecordingTracker()
+    _detector, trainer, own, seen = _stream_run(monkeypatch, [tracker])
+    assert trainer.loggers[0] is own and len(trainer.loggers) == 2
+    assert own.metrics == [({"train/loss": 1.25, "val/mAP_50_95": 0.5}, 0)]
+    logged = [call for call in tracker.calls if call[0] == "metrics"]
+    assert logged[0] == ("metrics", {"train/loss": 1.25, "val/mAP_50_95": 0.5}, 0)  # the epoch, at its step
+    assert logged[-1] == ("metrics", {"val/mAP_50_95": pytest.approx(0.5)}, 4)  # then the final scores
+    assert seen["log_file_to"] == [tracker]
+
+
+def test_a_stream_fit_without_trackers_keeps_rfdetrs_own_loggers(monkeypatch: Any) -> None:
+    _detector, trainer, own, _seen = _stream_run(monkeypatch, None)
+    assert trainer.loggers == [own]
+
+
+def test_a_stream_evaluation_sends_its_values_to_the_trackers_own_run(monkeypatch: Any) -> None:
+    tracker = _RecordingTracker()
+    _detector, trainer, own, _seen = _stream_run(monkeypatch, [tracker], task="evaluate")
+    assert trainer.loggers[0] is own and len(trainer.loggers) == 2
+    assert ("metrics", {"train/loss": 1.25, "val/mAP_50_95": 0.5}, 0) in tracker.calls
 
 
 # ---------------------------------------------------------------------------

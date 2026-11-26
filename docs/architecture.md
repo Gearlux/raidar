@@ -82,7 +82,10 @@ the bare LWDETR network for when you want OUR loop over RF-DETR's architecture.)
 classes — and a discovery service must navigate that rather than assume one trainer per task.
 Tracking differs honestly per loop ownership: the Lightning backend's trackers ARE its metric
 sinks; the RF-DETR and HF backends' trackers carry the run RECORD while per-step curves stay
-with the upstream loop's own reporting. Neither backend has a loss slot — the loss lives inside
+with the upstream loop's own reporting — except an RF-DETR run over streams, whose trainer raidar
+builds: there each tracker is added to the trainer's loggers (matrainer's `TrackerLogger`), because
+RF-DETR's own `mlflow` knob opens a second run and reads its server from the environment alone
+(2026-11-25: one training was two MLflow runs, the curves in one, the machine's load in the other). Neither backend has a loss slot — the loss lives inside
 the upstream model/loop, and a slot would accept a wired value that silently never fires.
 
 **Example.**

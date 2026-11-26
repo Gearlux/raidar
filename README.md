@@ -433,8 +433,11 @@ passes `train_config`'s `scale_jitter` to RF-DETR's transforms as its own folder
 
 `raidar evaluate --framework rfdetr` runs RF-DETR's native validation/test loop over a trained
 checkpoint (`weights:`). The wired `trackers:` receive the run's **record** (provenance, config,
-manifest, log file, final-metrics sidecar); RF-DETR's own per-step curves stay with its native
-`mlflow:` / `tensorboard:` knobs. There is no `predict` here — prediction runs through the
+manifest, log file, final-metrics sidecar). A run over streams (`train_set:` / `val_set:`) also makes
+each tracker a logger of RF-DETR's loop, so every epoch's losses and mAP land in the same tracker run
+— one MLflow run holds the curves, the config and the log. A run over a dataset folder (`data:`) is
+trained by RF-DETR's own `train()`, and its per-step curves stay with RF-DETR's native `mlflow:` /
+`tensorboard:` knobs (a run of their own). There is no `predict` here — prediction runs through the
 lightning backend with `raidar.RFDETRModel` (the native model module, which also loads RF-DETR
 checkpoints for evaluation under `LightningDetector`), or, for a checkpoint this backend trained —
 a `seg-*` one included, masks and all — through `raidar.RFDETRPredictor` (below).
