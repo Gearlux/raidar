@@ -9,7 +9,7 @@ and usage is in the [README](README.md) and the comments of `examples/train_cppe
 Object detection on ten backends, all driven by one config: `lightning`, `torch` (a
 hand-written loop), `fastai`, `huggingface`, `keras`, `tensorflow`, `jax`, `mlx`, `rfdetr`
 (RF-DETR's own loop), and `ultralytics`, which ships in a separate distribution. On PyPI as
-pre-release `0.1.0a1`; the repo is private.
+pre-release `0.1.0aN` (the version in `pyproject.toml`); the repo is public.
 
 Each runnable `<backend>_detector.py` = task hooks (here) + a matrainer machinery base + its
 own full flat `__init__` (§5):
