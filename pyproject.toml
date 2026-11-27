@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "raidar"
-version = "0.1.0a1"
+version = "0.1.0a2"
 description = "Object detection across training backends, driven by one config (torchvision, RF-DETR, HF detectors)."
 readme = "README.md"
 authors = [{name = "Gert Behiels"}]

@@ -6,16 +6,12 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.1.0a2] — 2026-11-27
+
 ### Added
 - **`YoloSink` says what a run deletes** — `planned_changes()`: in `replace` mode, the split's picture folder and
   label folder with their file count and size, when they are there. A plan of the run (`recordstream run --dry_run`)
   lists them before anything is deleted.
-
-### Fixed
-- **An RF-DETR run that raises ends its trackers' run** — as `failed`, or `interrupted` for a Ctrl-C, with the log
-  file uploaded; it was left running on the tracker for ever. The error is raised as before.
-
-### Added
 - **`YoloSink.split_in_name`** — `true` names every file after its split (`train_000000.png`, `val_000000.png`), so
   two splits of one folder never hold a picture of the same name; off by default (`README.md`).
 - **`RandomCropDetection` placement `densest`** — the piece that keeps the most boxes, the same one every call: for a
@@ -109,6 +105,10 @@ All notable changes to this project are documented here. The format follows
 - `--framework ultralytics` loads the separate Ultralytics package as the `raidar.ultralytics`
   subpackage, and `examples/train_cppe5.yaml` names its trainer
   `raidar.ultralytics.ultralytics_trainer.UltralyticsTrainer`.
+
+### Fixed
+- **An RF-DETR run that raises ends its trackers' run** — as `failed`, or `interrupted` for a Ctrl-C, with the log
+  file uploaded; it was left running on the tracker for ever. The error is raised as before.
 
 ## [0.1.0a1] — 2026-09-28
 
