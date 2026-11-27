@@ -456,6 +456,9 @@ folder it is:
 
 Measured with RF-DETR 1.9.3's own `is_valid_yolo_dataset`: the default layout answers `False` (it
 wants `train/` and `val/` folders holding `images` and `labels`), the `rfdetr` layout `True`.
+From RF-DETR 1.11.2 it follows the split paths `data.yaml` names and answers `True` for both. The
+`rfdetr` layout is for the older ones, which a uv install still gets: from 1.10.0 RF-DETR's `[train]`
+extra pins the pre-release `torch-hungarian==0.1.0rc0`, and uv skips it, stopping at RF-DETR 1.9.4.
 
 ```yaml
 runnable: !class:recordstream.processing.DatasetProcessor

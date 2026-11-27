@@ -8,6 +8,7 @@ exercise it directly (and through a Stream) since that's the same write path.
 
 import json
 import re
+from importlib.metadata import version
 from pathlib import Path
 from typing import Any, Dict, List, Literal, Tuple
 
@@ -15,6 +16,7 @@ import numpy as np
 import pytest
 import torch
 import yaml
+from packaging.version import Version
 from PIL import Image, ImageDraw
 from pydantic import ValidationError
 from recordstream import Boxes
@@ -278,7 +280,9 @@ def test_rfdetr_layout_second_split_merges_and_a_rerun_is_idempotent(tmp_path: P
     assert [m["split"] for m in meta] == ["val", "train", "train"]
 
 
-def test_the_rfdetr_layout_is_what_rfdetr_reads_and_the_default_is_not(tmp_path: Path) -> None:
+def test_rfdetr_reads_the_rfdetr_layout_and_the_default_one_from_1_11_2(tmp_path: Path) -> None:
+    # RF-DETR 1.11.2 made `is_valid_yolo_dataset` follow the split paths `data.yaml` names, so it accepts the default
+    # layout too. Before it, only `<split>/images` + `<split>/labels` passed — and a uv install still gets 1.9.4.
     yolo = pytest.importorskip("rfdetr.datasets.yolo")
     for layout in ("ultralytics", "rfdetr"):
         out = tmp_path / layout
@@ -286,8 +290,9 @@ def test_the_rfdetr_layout_is_what_rfdetr_reads_and_the_default_is_not(tmp_path:
         _convert(
             Stream(source=[_make_record(boxes_xyxy=[[0, 0, 40, 40]], labels=[1])]), out, split="val", layout=layout
         )
+    reads_the_default = Version(version("rfdetr")) >= Version("1.11.2")
     assert yolo.is_valid_yolo_dataset(str(tmp_path / "rfdetr")) is True
-    assert yolo.is_valid_yolo_dataset(str(tmp_path / "ultralytics")) is False
+    assert yolo.is_valid_yolo_dataset(str(tmp_path / "ultralytics")) is reads_the_default
 
 
 def test_an_unknown_layout_is_refused(tmp_path: Path) -> None:

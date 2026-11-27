@@ -147,7 +147,9 @@ hooks, model wrappers, the FCOS spec, registrations and configs.
   (`tests/test_rfdetr_detector.py::test_mps_low_watermark_is_handed_to_torch_before_the_task`).
 - `YoloSink.layout` is the only difference between the Ultralytics folder (`images/<split>`) and
   RF-DETR's (`<split>/images`, the COCO sidecar at `<split>/_annotations.coco.json`); the default
-  stays `ultralytics`. (`tests/test_yolo_sink.py::test_the_rfdetr_layout_is_what_rfdetr_reads_and_the_default_is_not`)
+  stays `ultralytics`. RF-DETR reads the default one only from 1.11.2 (it follows `data.yaml`'s split paths), and a
+  uv install stops at 1.9.4, so keep the `rfdetr` layout while raidar allows an older RF-DETR.
+  (`tests/test_yolo_sink.py::test_rfdetr_reads_the_rfdetr_layout_and_the_default_one_from_1_11_2`)
 - `YoloSink.mode`: `replace` (default) wipes the split, `append` continues it after the last stem and
   refuses a vocabulary that disagrees id for id BEFORE writing; `facts` lists distinct record entries
   in `data.yaml` (mixed picture scales are recorded, never refused — user ruling 2026-10-06).
