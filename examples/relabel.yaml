@@ -1,0 +1,42 @@
+# Remap a YOLO or COCO dataset folder's classes by name — always from the labels it was first written with.
+#
+#   recordstream run examples/relabel.yaml                       # every name to its family (the map below)
+#   recordstream run examples/relabel.yaml --scope one_class     # every name to `signal`
+#   recordstream run examples/relabel.yaml --scope original      # the folder as it was written, byte for byte
+#
+# The first remap renames labels/ to labels.orig/, copies data.yaml to data.orig.yaml and each COCO file to
+# <stem>.orig.json; every remap writes labels/ (and the COCO files) anew from those originals, so a remap never
+# loses a name. Each YOLO line keeps every character after its class id and its place in the file. A name of the
+# original vocabulary the map leaves out is refused. docs/relabel.md has the details.
+
+folder: ./runs/dataset_merged
+# Each vocabulary is a map (original name -> new class) and its classes (id -> name). A scope SWITCHES which one the
+# runnable reads: a mapping redefined inside a scope merges with the one above it, keys kept.
+families:
+  APCO25: LMR
+  DMR: LMR
+  "802.11ax HE": WLAN
+  "802.11n HT": WLAN
+family_classes:
+  0: WLAN
+  1: LMR
+everything_one_class:
+  "*": signal
+one_class_classes:
+  0: signal
+chosen_map: !ref:families
+chosen_classes: !ref:family_classes
+relabel_mode: remap
+
+one_class: !scope:one_class
+  chosen_map: !ref:everything_one_class
+  chosen_classes: !ref:one_class_classes
+
+original: !scope:original
+  relabel_mode: restore
+
+runnable: !class:raidar.relabel.RelabelLabels
+  root: !ref:folder
+  label_map: !ref:chosen_map
+  classes: !ref:chosen_classes
+  mode: !ref:relabel_mode

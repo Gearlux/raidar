@@ -5,11 +5,11 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "raidar"
-version = "0.1.0a1"
+version = "0.1.0a2"
 description = "Object detection across training backends, driven by one config (torchvision, RF-DETR, HF detectors)."
 readme = "README.md"
 authors = [{name = "Gert Behiels"}]
-license = "MIT"
+license = "PolyForm-Noncommercial-1.0.0"
 license-files = ["LICENSE"]
 classifiers = [
     "Development Status :: 3 - Alpha",
@@ -27,21 +27,20 @@ classifiers = [
 # machine that has not chosen a training framework never installs one. Every ML framework lives in
 # the extra of the backend that needs it (see `[project.optional-dependencies]`), and every
 # backend-owned name in `raidar/__init__.py` resolves lazily to match.
-# Floors are what the suite runs against in a clean venv resolving from PyPI alone (measured
-# 2026-09-28, before the first release). matrainer 0.1.0a1 itself requires confluid>=0.3.1,
-# liquifai>=0.3.0 and loggair>=0.2.0, so the older floors here named combinations nobody
-# could install.
+# Floors are what the suite runs against in a clean venv resolving from PyPI alone, and each release
+# raises every workspace floor to the newest release (user choice 2026-11-26). Measured 2026-11-26 at
+# confluid 0.5.0, liquifai 0.4.0, loggair 0.3.0, recordstream 0.1.0a4, matrainer 0.1.0a3 and (`[compile]`) torpaido
+# 0.1.0a1: the fast suite passed (687, 9 skipped).
 dependencies = [
-    "confluid>=0.3.1",
-    # recordstream ships as a pre-release. Under PEP 440 a plain `>=0.1.0` EXCLUDES every
-    # pre-release of 0.1.0, so it would resolve to nothing. 0.1.0a2 is the first release where
-    # `ToTensor` only converts — its example uses `ConvertMode` and `Scale` before `ToTensor`.
-    "recordstream>=0.1.0a2",
-    "liquifai>=0.3.0",
-    "loggair>=0.2.0",
+    # recordstream and matrainer ship as pre-releases: under PEP 440 a plain `>=0.1.0` EXCLUDES
+    # every pre-release of 0.1.0.
+    "confluid>=0.5.0",
+    "recordstream>=0.1.0a4",
+    "liquifai>=0.4.0",
+    "loggair>=0.3.0",
     # matrainer is the TRACKING library (and the metric-slot rule + artifact writers). Its own
     # core install is light — no torch — so it belongs here rather than in a backend extra.
-    "matrainer>=0.1.0a1",
+    "matrainer>=0.1.0a3",
 ]
 requires-python = ">=3.12"
 
@@ -52,15 +51,15 @@ Issues = "https://github.com/Gearlux/raidar/issues"
 Changelog = "https://github.com/Gearlux/raidar/blob/main/CHANGELOG.md"
 
 [project.optional-dependencies]
-# One extra per training backend. `aisland framework set lightning …` installs the ones the
-# workspace has selected across every project that declares them (see [tool.aisland] below).
+# One extra per training backend. `aisland workspace configure framework set lightning …` installs the
+# ones the workspace has chosen, in every project that offers them (see [tool.aisland.selection.framework] below).
 #
 # `torch` is the BASE of the torch-family backends (lightning / torch / fastai): it carries the
 # native model contract's stack — torchvision detectors, the torchmetrics detection metric set,
 # the batch plumbing — so each of those declares `raidar[torch]` rather than restating the list.
 torch = [
-    "matrainer[torch]>=0.1.0a1",
-    "recordstream[torch]>=0.1.0a2",
+    "matrainer[torch]>=0.1.0a3",
+    "recordstream[torch]>=0.1.0a4",
     "torch",
     "torchvision",
     # [detection] pulls pycocotools' torchmetrics glue; pycocotools restated because the
@@ -70,7 +69,7 @@ torch = [
 ]
 lightning = [
     "raidar[torch]",
-    "matrainer[lightning]>=0.1.0a1",
+    "matrainer[lightning]>=0.1.0a3",
     "pytorch-lightning",
 ]
 # TWO upper bounds, both upstream breaks measured in this workspace (2026-07-30, fastai 2.8.7)
@@ -106,15 +105,15 @@ huggingface = [
 keras = [
     "keras>=3.0",
     "torch",
-    "recordstream[keras,torch]>=0.1.0a2",
-    "matrainer[keras]>=0.1.0a1",
+    "recordstream[keras,torch]>=0.1.0a4",
+    "matrainer[keras]>=0.1.0a3",
 ]
 tensorflow = [
     "keras>=3.0",           # Keras 3 IS tf.keras in TF >= 2.16
     "tensorflow>=2.16",     # ...this extra's engine
     "torch",                # the detection target chain is torch-shaped (see the keras extra)
-    "recordstream[keras,torch]>=0.1.0a2",
-    "matrainer[keras]>=0.1.0a1",
+    "recordstream[keras,torch]>=0.1.0a4",
+    "matrainer[keras]>=0.1.0a3",
 ]
 # JAX brings NO detection zoo to wrap (`transformers` dropped Flax in v5), so this extra
 # installs only its framework and trains the shared FCOS spec. `torch` for the same target-chain
@@ -124,16 +123,16 @@ jax = [
     "flax>=0.8",            # NNX is the current Flax module API
     "optax>=0.2",           # the optimizers and the stable BCE the spec loss uses
     "torch",
-    "recordstream[keras,torch]>=0.1.0a2",
-    "matrainer>=0.1.0a1",
+    "recordstream[keras,torch]>=0.1.0a4",
+    "matrainer>=0.1.0a3",
 ]
 # MLX is Apple-silicon ONLY — a property of the framework. The platform marker keeps
 # `pip install raidar[mlx]` succeeding (and empty) elsewhere.
 mlx = [
     "mlx>=0.20; sys_platform == 'darwin' and platform_machine == 'arm64'",
     "torch",
-    "recordstream[keras,torch]>=0.1.0a2",
-    "matrainer>=0.1.0a1",
+    "recordstream[keras,torch]>=0.1.0a4",
+    "matrainer>=0.1.0a3",
 ]
 # RF-DETR's own training stack (Apache-2.0). rfdetr[train] pulls PTL + the native training loop
 # (`RFDETRModelModule` / `RFDETRDataModule` / `build_trainer`) that `RFDETRDetector` drives;
@@ -145,14 +144,14 @@ rfdetr = [
 ]
 # TRACKING BACKENDS. Tracking runs through matrainer — raidar imports neither mlflow nor
 # tensorboard directly — so each extra forwards to the backend that implements it. They must
-# exist because `[tool.aisland] trackers` below NAMES them: `aisland tracker set mlflow`
-# intersects that declaration with the operator's selection and installs `raidar[mlflow]`,
+# exist because `[tool.aisland.selection.tracker]` below NAMES them: choosing `mlflow` intersects that menu
+# with the operator's choice and installs `raidar[mlflow]`,
 # and an extra that is declared but never defined makes uv warn and install nothing.
-mlflow = ["matrainer[mlflow]>=0.1.0a1"]
-tensorboard = ["matrainer[tensorboard]>=0.1.0a1"]
+mlflow = ["matrainer[mlflow]>=0.1.0a3"]
+tensorboard = ["matrainer[tensorboard]>=0.1.0a3"]
 # The compiler's view of the RF-DETR predictor (raidar.lowering): the library's inference path as a fixed-size
 # torch program, found through the `torpaido.lowerings` entry point below. Needs `[rfdetr]` to run.
-compile = ["torpaido[torch]"]
+compile = ["torpaido[torch]>=0.1.0a1"]
 dev = [
     # Release tooling: `python -m build` produces the sdist + wheel, `twine check`
     # validates the metadata PyPI will re-validate on upload.
@@ -166,13 +165,15 @@ dev = [
     "pytest-cov>=4.0.0,<7.0.0",
 ]
 
-# Which training backends this project OFFERS. `aisland framework list` reads it; what actually
-# installs is the workspace-wide selection in the committed `config.toml`, so a machine that has
+# Which training backends this project OFFERS. `aisland workspace configure framework` lists it; what actually
+# installs is the workspace-wide choice committed in `workspace.toml`, so a machine that has
 # not selected a backend builds raidar without it. `ultralytics` is NOT here: that backend is the
 # raidar-ultralytics SIBLING package (AGPL isolation), not an extra of this one.
-[tool.aisland]
-frameworks = ["torch", "lightning", "fastai", "huggingface", "rfdetr", "keras", "tensorflow", "jax", "mlx"]
-trackers = ["mlflow", "tensorboard"]
+[tool.aisland.selection.framework]
+choices = ["torch", "lightning", "fastai", "huggingface", "rfdetr", "keras", "tensorflow", "jax", "mlx"]
+
+[tool.aisland.selection.tracker]
+choices = ["mlflow", "tensorboard"]
 
 [project.scripts]
 raidar = "raidar.cli:main"
@@ -200,6 +201,12 @@ raidar = "raidar.cli:app"
 [project.entry-points."torpaido.lowerings"]
 raidar = "raidar.lowering"
 
+# ANNOTATION WORKSPACE: an annotation workspace scans this group for `templates()` — the graphs a domain ships
+# per workspace type. raidar ships the `detection` type's source: a COCO or YOLO dataset loaded by its settings
+# (raidar/annotation/). raidar imports nothing of the workspace. Reinstall the editable after a change, as above.
+[project.entry-points."annotaide.templates"]
+raidar = "raidar.annotation"
+
 [project.entry-points."confluid.configurables"]
 raidar-lightning = "raidar.lightning_detector"
 raidar-torch = "raidar.torch_detector"
@@ -226,7 +233,10 @@ raidar-mlx = "raidar.mlx_detector"
 raidar-torchvision-detection = "raidar.torchvision_detection"
 raidar-yolo-sink = "raidar.yolo_sink"
 raidar-yolo-source = "raidar.yolo_source"   # the folder reader beside the sink (merging = read + append)
+raidar-coco-source = "raidar.coco_source"   # the COCO twin of the YOLO reader
+raidar-coco-or-yolo-source = "raidar.coco_or_yolo_source"   # a dataset folder read whichever way it is labelled
 raidar-crop = "raidar.crop"   # RandomCropDetection: one piece size for a detector, cut before its own resize
+raidar-relabel = "raidar.relabel"   # RelabelLabels: a YOLO/COCO folder's classes remapped by name from its kept original
 
 [tool.setuptools.packages.find]
 where = ["."]
@@ -234,6 +244,8 @@ include = ["raidar*"]
 
 [tool.setuptools.package-data]
 raidar = ["py.typed"]
+# The annotation workspace's graphs are YAML documents beside raidar/annotation/__init__.py.
+"raidar.annotation" = ["*.yaml"]
 
 [tool.mypy]
 # Untyped third-party packages (torchvision, tensorflow, yaml, tqdm) are not errors — the same
@@ -252,6 +264,9 @@ module = [
     "flax.*",
     "optax.*",
     "mlx.*",
+    # The annotation workspace is not a dependency (raidar only ships its source graph); the test that opens a
+    # workspace skips without it, and nothing installs it for CI.
+    "annotaide.*",
 ]
 ignore_missing_imports = true
 

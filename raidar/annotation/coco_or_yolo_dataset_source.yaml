@@ -1,0 +1,41 @@
+# ---------------------------------------------------------------------------------------------------
+# The DETECTION workspace type's SOURCE graph raidar ships (raidar.annotation.templates()): a COCO or
+# YOLO dataset folder as the workspace's records — the picture as `input`, its boxes as `target`, the
+# dataset's class names as the graph's class list.
+# HAND-WRITTEN: edit it in the graph editor or by hand.
+#
+# Loaded by its SETTINGS alone — `tools ▾` → "load a COCO or YOLO dataset…" (the `tools:` line of `app:`)
+# opens its settings form, and each setting saved applies the source. The settings land in the
+# workspace's `source.settings.yaml`, e.g.
+#
+#   dataset.folder: $DATA_ROOT/signal_detection/pictures/d
+#   dataset.split: val
+#   dataset.labels: yolo
+#
+# Until a folder is chosen it is $DATA_ROOT (the folder browser opens there) and nothing is applied.
+# The graph stays a graph: open its canvas to put ops after the dataset or another source in its place.
+# ---------------------------------------------------------------------------------------------------
+dataset:
+  _target_: CocoOrYoloSource
+  image_key: input
+stream:
+  _target_: Stream
+  source:
+    _ref_: dataset
+# The graph's ROOT — keyed `contract`, never after the slot (source): a top-level key is broadcast into every
+# sibling whose constructor takes a parameter of that name. `classes` is the dataset itself: it declares its
+# class names (CocoOrYoloSource.class_names), read when the graph is applied.
+contract: !class:recordstream.ops.contract.GraphContract
+  name: detection source
+  outputs: {stream: Stream, classes: "List[str]"}
+  records: {input: Image, target: Boxes}
+  delivered:
+    stream: !ref:stream
+    classes: !ref:dataset
+app:
+  inputs:
+    - [CocoOrYoloSource, folder]
+    - [CocoOrYoloSource, split]
+    - [CocoOrYoloSource, labels]
+  outputs: [Stream]
+  tools: load a COCO or YOLO dataset

@@ -38,8 +38,9 @@ from loggair import get_logger
 from matrainer.artifacts import write_metrics_sidecar
 from matrainer.metric_names import MetricNames, as_metric_names
 from matrainer.run_names import generate_run_name, run_prefix
+from matrainer.torch.device import apply_mps_low_watermark
 from matrainer.tracking.base import Tracker, as_tracker_list
-from matrainer.tracking.provenance import capture_log_file, log_run_context
+from matrainer.tracking.provenance import ending_the_run, log_run_context
 from recordstream import RecordSource, ensure_materialized
 from recordstream.runnable import ProgressReporting, TorchRunner, entrypoint, run_entrypoint
 
@@ -156,14 +157,21 @@ class RFDETRDetector(TorchRunner, ProgressReporting):
             ``resolution`` and the weights have parameters of their own and are refused here. A
             lower ``group_detr`` than the variant's default shrinks a segmentation run's mask
             memory (it scales with the groups) and loads the published weights only partly.
-        trackers: matrainer trackers — one or a list. RF-DETR's loop is upstream-owned, so they
-            receive the run's PROVENANCE (git state, resolved config, hyperparameters, manifest,
-            log file); RF-DETR's own logger knobs (via ``train_config``) keep the per-step curves.
+        trackers: matrainer trackers — one or a list. Each receives the run's PROVENANCE (git state,
+            resolved config, hyperparameters, manifest, log file) and its final scores. In stream mode each
+            is also a logger of RF-DETR's trainer, so every epoch's values land in the SAME run; in disk
+            mode RF-DETR builds its trainer itself, and the per-step curves stay with its own logger knobs
+            (via ``train_config``).
         metric_names: How the recorded final metrics are named — see
             :class:`~matrainer.metric_names.MetricNames` (RF-DETR's loop IS PyTorch Lightning,
             so the translation declares ``source="lightning"``).
         metrics_sidecar_path: Optional JSON sidecar for the final metrics
             (written through ``matrainer.artifacts.write_metrics_sidecar``).
+        keep_picture_size: Train and evaluate each picture at its OWN size: RF-DETR's resize — a square of
+            ``resolution``, or a short side of ``resolution`` and a long side of at most 1333 — is skipped, its
+            augmentation and normalization kept. Every picture must be one size, each side a multiple of the
+            backbone's block (patch x windows: 24 for seg-small and up, 12 for seg-nano) or the batch pads it to one.
+            ``resolution`` still sizes the model. Stream mode only (a disk dataset is read by RF-DETR's own loader).
     """
 
     def __init__(
@@ -190,6 +198,7 @@ class RFDETRDetector(TorchRunner, ProgressReporting):
         trackers: Optional[Union[Partial[Tracker], List[Partial[Tracker]]]] = None,
         metric_names: Optional[Partial[MetricNames]] = None,
         metrics_sidecar_path: Optional[str] = None,
+        keep_picture_size: bool = False,
     ) -> None:
         # Store config ONLY — no functional work (zero-arg / lazy-init mandate).
         self.data = data
@@ -215,7 +224,13 @@ class RFDETRDetector(TorchRunner, ProgressReporting):
         self.trackers: Optional[Union[Partial[Tracker], List[Partial[Tracker]]]] = trackers
         self.metric_names: Optional[Partial[MetricNames]] = metric_names
         self.metrics_sidecar_path = metrics_sidecar_path
+        self.keep_picture_size = bool(keep_picture_size)
+        # A BODY slot, as on matrainer's torch trainers: a config or the command line sets
+        # `runnable.mps_low_watermark: 0.5`; `run()` hands it to torch before RF-DETR touches the GPU.
+        self.mps_low_watermark: Optional[float] = None
         self._computed_metrics: Optional[Dict[str, float]] = None
+        # The step RF-DETR's trainer ended on, once a tracker is one of its loggers (`_log_to_trackers`).
+        self._final_step: Optional[int] = None
 
     @property
     def __needs_autograd__(self) -> bool:  # type: ignore[override]  # dynamic per-task override of the marker
@@ -224,6 +239,8 @@ class RFDETRDetector(TorchRunner, ProgressReporting):
 
     # ---- run dispatch ------------------------------------------------------- #
     def run(self) -> None:
+        # Before anything is built: torch reads the Apple-GPU allocator's watermark when the GPU is first used.
+        apply_mps_low_watermark(self.mps_low_watermark)
         # The `@entrypoint` markers below ARE the dispatch table — a hand-written
         # {task: method} dict restates them and drifts (recordstream `docs/runnable.md`).
         run_entrypoint(self, self.task)
@@ -232,7 +249,15 @@ class RFDETRDetector(TorchRunner, ProgressReporting):
     def _stream_wired(self) -> bool:
         return self.train_set is not None or self.val_set is not None
 
+    def _refuse_kept_size_on_disk(self) -> None:
+        if self.keep_picture_size and self.data is not None:
+            raise ValueError(
+                "RFDETRDetector: keep_picture_size works on train_set/val_set streams only — a disk dataset (`data`) "
+                "is read by RF-DETR's own loader, which always resizes"
+            )
+
     def _validate_fit_inputs(self) -> None:
+        self._refuse_kept_size_on_disk()
         stream = self._stream_wired()
         if self.data is not None and stream:
             raise ValueError(
@@ -249,6 +274,7 @@ class RFDETRDetector(TorchRunner, ProgressReporting):
     def _validate_eval_inputs(self) -> None:
         if not self.weights:
             raise ValueError("RFDETRDetector: `weights` (trained checkpoint path) is required for evaluate/test.")
+        self._refuse_kept_size_on_disk()
         stream = self.val_set is not None
         if self.data is not None and stream:
             raise ValueError("RFDETRDetector: pass EITHER `data` (disk dir) OR `val_set` (Stream) — not both.")
@@ -291,16 +317,15 @@ class RFDETRDetector(TorchRunner, ProgressReporting):
         # the run RECORD — git state, config, manifest, log file — AND the final scores.
         trackers = self._live_trackers()
         manifest = log_run_context(trackers, runnable=self)
-        if self.data is not None:
-            self._fit_disk_mode()
-        else:
-            self._fit_stream_mode()
-        self._log_final_metrics(trackers)
-        write_metrics_sidecar(
-            self.metrics_sidecar_path, self._computed_metrics or {}, self.experiment_name, self.run_name
-        )
-        # Uploads the log file, stamps the manifest's terminal status AND finalizes every tracker.
-        capture_log_file(trackers, manifest=manifest, status="success")
+        with ending_the_run(trackers, manifest):
+            if self.data is not None:
+                self._fit_disk_mode()
+            else:
+                self._fit_stream_mode()
+            self._log_final_metrics(trackers)
+            write_metrics_sidecar(
+                self.metrics_sidecar_path, self._computed_metrics or {}, self.experiment_name, self.run_name
+            )
 
     @entrypoint("evaluate", role="evaluator")
     def evaluate(self) -> None:
@@ -316,6 +341,34 @@ class RFDETRDetector(TorchRunner, ProgressReporting):
         self.trackers = [flow(t) for t in as_tracker_list(self.trackers) or []]
         return cast(List[Tracker], self.trackers)
 
+    def _log_to_trackers(self, trainer: Any) -> None:
+        """Make every wired tracker a logger of RF-DETR's trainer, after the loggers RF-DETR put there.
+
+        RF-DETR builds its trainer with its own loggers (its CSV file, and the ones its ``tensorboard`` /
+        ``mlflow`` knobs add); its ``mlflow`` knob opens a run of ITS OWN, so a tracked training was two MLflow
+        runs — the tracker's with the config, the log file and the machine's load, RF-DETR's with the curves —
+        and RF-DETR's reads its server from the environment alone (measured 2026-11-25). Through matrainer's
+        ``TrackerLogger`` — the adapter the lightning backend's trainer gets — each epoch's values land in the
+        tracker's own run, on whatever backend it is.
+        """
+        trackers = as_tracker_list(self.trackers) or []
+        if not trackers:
+            return
+        from matrainer.lightning import TrackerLogger
+
+        names = as_metric_names(self.metric_names)
+        trainer.loggers = [*trainer.loggers, *(TrackerLogger(tracker, metric_names=names) for tracker in trackers)]
+
+    def _note_final_step(self, trainer: Any) -> None:
+        """Remember the step the trainer ended on, so the final scores join the curves' last point.
+
+        A tracker that is a logger of the trainer already holds every epoch's values by step; final scores
+        logged with no step would land at step 0 — a second point at the START of each curve (measured
+        2026-11-25 on MLflow: ``val/loss`` at steps 4 and 0).
+        """
+        step = getattr(trainer, "global_step", None)
+        self._final_step = int(step) if as_tracker_list(self.trackers) and step is not None else None
+
     def _record_metrics(self, metrics: Any) -> None:
         """Coerce + translate one run's final metrics and remember them for the sidecar/@output.
 
@@ -328,11 +381,12 @@ class RFDETRDetector(TorchRunner, ProgressReporting):
     def _log_final_metrics(self, trackers: Sequence[Tracker]) -> None:
         """Put this run's final scores on the trackers, not only in the sidecar.
 
-        RF-DETR owns the per-step CURVES — its own logger knobs ride ``train_config``, and this
-        class deliberately does not duplicate them — but the run's final metrics are computed HERE
-        (:meth:`_record_metrics`), so without this call a tracked run records its provenance and
-        its log file while its ``mAP`` never reaches the tracker at all: the score is on disk, in
-        the sidecar, and invisible in every UI and every cross-backend comparison.
+        A disk-mode run's per-step CURVES stay with RF-DETR's own logger knobs (they ride
+        ``train_config``), but the run's final metrics are computed HERE (:meth:`_record_metrics`), so
+        without this call such a run records its provenance and its log file while its ``mAP`` never
+        reaches the tracker at all: the score is on disk, in the sidecar, and invisible in every UI and
+        every cross-backend comparison. A stream-mode run's trackers already hold every epoch
+        (:meth:`_log_to_trackers`); its final scores are logged at the step the trainer ended on.
 
         The sibling restoration project hit exactly this on its ``transformers.Trainer`` backend,
         where a backend sweep showed a completely BLANK row beside a log printing the score.
@@ -340,7 +394,7 @@ class RFDETRDetector(TorchRunner, ProgressReporting):
         if not trackers or not self._computed_metrics:
             return
         for tracker in trackers:
-            tracker.log_metrics(dict(self._computed_metrics))
+            tracker.log_metrics(dict(self._computed_metrics), self._final_step)
 
     def _prepare_stream(self, source: Optional[Partial[RecordSource]]) -> Optional[Any]:
         """Flow a wired Stream slot LIVE and materialize it in THIS process.
@@ -436,9 +490,12 @@ class RFDETRDetector(TorchRunner, ProgressReporting):
             val_stream=self.val_set,
             test_stream=self.test_set,
             class_names=names,
+            keep_picture_size=self.keep_picture_size,
         )
         trainer = build_trainer(cfg, rf.model_config, **_trainer_device_kwargs(self.device))
+        self._log_to_trackers(trainer)
         trainer.fit(module, datamodule, ckpt_path=cfg.resume or None)
+        self._note_final_step(trainer)
         rf.model.model = module.model  # sync trained weights back for predict/export parity
         self._record_metrics(dict(trainer.callback_metrics))
 
@@ -459,15 +516,15 @@ class RFDETRDetector(TorchRunner, ProgressReporting):
         # atexit hook to relabel `interrupted` on a run that succeeded.
         trackers = self._live_trackers()
         manifest = log_run_context(trackers, runnable=self)
-        if self.data is not None:
-            self._eval_disk_mode(run_test)
-        else:
-            self._eval_stream_mode(run_test)
-        self._log_final_metrics(trackers)
-        write_metrics_sidecar(
-            self.metrics_sidecar_path, self._computed_metrics or {}, self.experiment_name, self.run_name
-        )
-        capture_log_file(trackers, manifest=manifest, status="success")
+        with ending_the_run(trackers, manifest):
+            if self.data is not None:
+                self._eval_disk_mode(run_test)
+            else:
+                self._eval_stream_mode(run_test)
+            self._log_final_metrics(trackers)
+            write_metrics_sidecar(
+                self.metrics_sidecar_path, self._computed_metrics or {}, self.experiment_name, self.run_name
+            )
 
     def _prepare_eval(self, dataset_dir: str, run_test: bool) -> Any:
         """Build the high-level RF-DETR + a checkpoint-loaded model_config + the eval TrainConfig."""
@@ -483,7 +540,9 @@ class RFDETRDetector(TorchRunner, ProgressReporting):
         from rfdetr.training import build_trainer
 
         trainer = build_trainer(cfg, model_config, **_trainer_device_kwargs(self.device))
+        self._log_to_trackers(trainer)
         results = trainer.test(module, datamodule) if run_test else trainer.validate(module, datamodule)
+        self._note_final_step(trainer)
         metrics = results[0] if results else dict(trainer.callback_metrics)
         self._record_metrics(metrics)
 
@@ -510,6 +569,7 @@ class RFDETRDetector(TorchRunner, ProgressReporting):
             val_stream=self.val_set,
             test_stream=self.val_set if run_test else None,
             class_names=names,
+            keep_picture_size=self.keep_picture_size,
         )
         self._evaluate(module, datamodule, rf.model_config, cfg, run_test)
 

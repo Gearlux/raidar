@@ -14,7 +14,7 @@ from recordstream import Image
 from torch import nn
 from torpaido.lowering import model_lowering_for
 
-from raidar.lowering import lower_rfdetr_predictor
+from raidar.lowering import lower_rfdetr_predictor, nested, traceable
 from raidar.rfdetr import RFDETRPredictor, _AnyClassPostProcess
 
 rfdetr_postprocess = pytest.importorskip("rfdetr.models.postprocess")
@@ -35,7 +35,10 @@ class _Network(nn.Module):
         self.head = nn.Linear(3, QUERIES * CLASSES + QUERIES * 4)
         self.mask_head = nn.Linear(3, QUERIES * MASK_SIDE * MASK_SIDE) if masks else None
 
-    def forward(self, x: torch.Tensor) -> Dict[str, torch.Tensor]:
+    def forward(self, x: Any) -> Dict[str, torch.Tensor]:
+        if hasattr(x, "tensors"):  # the library's NestedTensor, as the lowering hands it over
+            self.seen = (type(x).__name__, x.mask)
+            x = x.tensors
         colour = x.mean(dim=(2, 3))
         out = self.head(colour)
         logits = out[:, : QUERIES * CLASSES].view(-1, QUERIES, CLASSES) * 4.0
@@ -55,7 +58,11 @@ def _fake_rf(num_select: int = 5, masks: bool = False) -> Any:
         args=SimpleNamespace(num_classes=CLASSES - 1),
     )
     return SimpleNamespace(
-        model=model, class_names=["a", "b", "c"], means=[0.485, 0.456, 0.406], stds=[0.229, 0.224, 0.225]
+        model=model,
+        class_names=["a", "b", "c"],
+        means=[0.485, 0.456, 0.406],
+        stds=[0.229, 0.224, 0.225],
+        model_config=SimpleNamespace(patch_size=4, num_windows=2),  # blocks of 8 px
     )
 
 
@@ -81,10 +88,12 @@ def _pictures(seed: int = 0, count: int = 2, height: int = 37, width: int = 53) 
 
 
 def _library_reference(
-    rf: Any, pictures: torch.Tensor, threshold: float, any_class: Any = None
+    rf: Any, pictures: torch.Tensor, threshold: float, any_class: Any = None, size: Any = None
 ) -> List[Dict[str, Any]]:
-    """What ``RFDETR.predict`` computes on tensors: its resize, its normalization, its post-processing, its cut."""
-    resized = torch.stack([TF.resize(p, [RESOLUTION, RESOLUTION], antialias=False) for p in pictures])
+    """What ``RFDETR.predict`` computes on tensors: its resize (``shape=size``; the pictures' own shape
+    for ``keep_picture_size``), its normalization, its post-processing, its cut."""
+    target = list(size) if size is not None else [RESOLUTION, RESOLUTION]
+    resized = torch.stack([TF.resize(p, target, antialias=False) for p in pictures])
     normalized = TF.normalize(resized, rf.means, rf.stds)
     with torch.no_grad():
         outputs = rf.model.model(normalized)
@@ -106,6 +115,28 @@ def _kept(found: Dict[str, Any], index: int) -> Dict[str, torch.Tensor]:
 
 def test_the_lowering_is_registered_for_the_predictor() -> None:
     assert model_lowering_for(RFDETRPredictor(checkpoint_path="x")) is lower_rfdetr_predictor
+
+
+def test_a_predictor_that_keeps_the_picture_size_runs_the_network_on_the_picture_as_it_is() -> None:
+    """``keep_picture_size``: the network gets the 48 x 24 pictures themselves (``predict(shape=(H, W))``), never the
+    model's 32 x 32 square, and the kept rows are the library's answer on them."""
+    predictor = RFDETRPredictor(checkpoint_path="unused.pth", score_threshold=0.3, keep_picture_size=True)
+    predictor._rf = _fake_rf()
+    pictures = _pictures(seed=5, height=48, width=24)
+
+    found = lower_rfdetr_predictor(predictor, pictures, _Context())  # type: ignore[arg-type]
+    expected = _library_reference(predictor._rf, pictures, 0.3, size=pictures.shape[-2:])
+
+    assert tuple(predictor._rf.model.model.seen[1].shape[-2:]) == (48, 24), "the picture's own size"
+    for index in range(2):
+        kept = _kept(found, index)
+        assert kept["labels"].tolist() == expected[index]["labels"].tolist()
+        assert torch.allclose(kept["scores"], expected[index]["scores"], atol=1e-6)
+        assert torch.allclose(kept["boxes"], expected[index]["boxes"], atol=1e-4)
+    square = RFDETRPredictor(checkpoint_path="unused.pth", score_threshold=0.3)
+    square._rf = predictor._rf
+    lower_rfdetr_predictor(square, pictures, _Context())  # type: ignore[arg-type]
+    assert tuple(predictor._rf.model.model.seen[1].shape[-2:]) == (RESOLUTION, RESOLUTION), "the default: the square"
 
 
 def test_the_kept_rows_are_the_library_s_detections() -> None:
@@ -185,6 +216,100 @@ def test_a_segmenting_model_s_mask_logits_are_the_library_s_selected_masks() -> 
         cut = found["mask_logits"][index][keep] > 0.0
         assert torch.equal(cut, expected[index]["masks"][:, 0]), "the kept rows' masks at the head's resolution"
     assert any(bool(found["keep"][i].any()) for i in range(2))
+
+
+def test_the_segmentation_head_s_depthwise_convolution_is_traced_as_a_plain_convolution(tmp_path: Any) -> None:
+    """The library's ``DepthwiseConvBlock`` runs its depthwise convolution through a custom autograd Function (cuDNN
+    disabled in forward and backward, a GPU training workaround), which TorchScript cannot serialize — measured
+    2026-10-13 on the real option D package: ``Could not export Python function call '_DepthwiseConvWithoutCuDNN'``
+    at ``torch.jit.save``. ``traceable`` runs the same convolution directly — identical under ``no_grad``, how the
+    predictor and the compiler run the network (with autograd on the Function's path is one float32 ulp away,
+    measured) — and the trace saves."""
+    segmentation = pytest.importorskip("rfdetr.models.heads.segmentation")
+    torch.manual_seed(0)
+    block = segmentation.DepthwiseConvBlock(dim=4).eval()
+    x = torch.rand(1, 4, 6, 5)
+    with torch.no_grad():
+        before = block(x)
+    with pytest.raises(RuntimeError, match="_DepthwiseConvWithoutCuDNN"):
+        torch.jit.save(torch.jit.trace(block, x), str(tmp_path / "before.pt"))
+
+    assert traceable(block) is block
+    with torch.no_grad():
+        assert torch.equal(block(x), before), "the same convolution"
+    torch.jit.save(torch.jit.trace(block, x), str(tmp_path / "after.pt"))
+    with torch.no_grad():
+        assert torch.equal(torch.jit.load(str(tmp_path / "after.pt"))(x), before)
+    assert traceable(block) is block, "a second pass changes nothing"
+
+
+def test_the_batch_reaches_the_network_as_a_nested_tensor_built_without_a_per_image_loop(tmp_path: Any) -> None:
+    """The library's ``nested_tensor_from_tensor_list`` copies image by image, so a trace bakes the batch size:
+    traced on two pictures it refuses three (measured 2026-10-13 on the real D package, 5 pieces at trace time, 3 on
+    another capture: ``Expected 5 elements in a list but found 3``). ``nested`` builds the ``NestedTensor`` directly
+    — the pictures and an all-False mask — and the trace follows the batch."""
+    tensors = pytest.importorskip("rfdetr.utilities.tensors")
+
+    class ByTheLibrary(nn.Module):
+        def forward(self, x: torch.Tensor) -> torch.Tensor:
+            held = tensors.nested_tensor_from_tensor_list(list(x))
+            total: torch.Tensor = held.tensors.sum(dim=(1, 2, 3)) + held.mask.sum(dim=(1, 2))
+            return total
+
+    class Direct(nn.Module):
+        def forward(self, x: torch.Tensor) -> torch.Tensor:
+            held = nested(x)
+            total: torch.Tensor = held.tensors.sum(dim=(1, 2, 3)) + held.mask.sum(dim=(1, 2))
+            return total
+
+    two, three = _pictures(count=2), _pictures(seed=1, count=3)
+    with pytest.raises(RuntimeError, match="Expected 2 elements in a list but found 3"):
+        torch.jit.trace(ByTheLibrary(), two)(three)
+    traced = torch.jit.trace(Direct(), two)
+    assert torch.allclose(traced(three), three.sum(dim=(1, 2, 3)))
+    nested_two = nested(two)
+    assert type(nested_two).__name__ == "NestedTensor" and nested_two.tensors is two
+    assert (
+        nested_two.mask.shape == (2, 37, 53) and nested_two.mask.dtype == torch.bool and not bool(nested_two.mask.any())
+    )
+
+
+def test_the_lowering_runs_the_network_in_its_traceable_form() -> None:
+    segmentation = pytest.importorskip("rfdetr.models.heads.segmentation")
+    predictor = RFDETRPredictor(checkpoint_path="unused.pth")
+    predictor._rf = _fake_rf(masks=True)
+    network = predictor._rf.model.model
+    network.block = segmentation.DepthwiseConvBlock(dim=3)  # a head block beside the stand-in's own layers
+    context = _Context()
+
+    lower_rfdetr_predictor(predictor, _pictures(), context)  # type: ignore[arg-type]
+
+    assert context.held["network"] is network and getattr(network.block, "_plain_depthwise_conv", False)
+    name, mask = network.seen
+    assert name == "NestedTensor" and mask.shape == (2, RESOLUTION, RESOLUTION) and not bool(mask.any())
+
+
+def test_a_model_trained_keeping_the_aspect_is_resized_as_the_predictor_resizes() -> None:
+    """A checkpoint trained with ``square_resize_div_64: false``: the picture goes in at the predictor's own
+    ``input_size`` — 37 x 53 at a 32 px resolution, blocks of 8 → 32 x 48 — in the artifact as in the predictor."""
+    predictor = RFDETRPredictor(checkpoint_path="unused.pth", score_threshold=0.3)
+    rf = _fake_rf()
+    predictor._rf, predictor._keeps_aspect = rf, True
+    seen: List[tuple] = []
+    rf.model.model.register_forward_pre_hook(
+        lambda _m, args: seen.append(tuple(getattr(args[0], "tensors", args[0]).shape[-2:]))
+    )
+    pictures = _pictures(seed=4)
+
+    found = lower_rfdetr_predictor(predictor, pictures, _Context())  # type: ignore[arg-type]
+    expected = _library_reference(rf, pictures, 0.3, size=(32, 48))
+
+    assert predictor.input_size(37, 53) == (32, 48)
+    assert seen == [(32, 48), (32, 48)], "the lowering's call, then the reference's"
+    for index in range(2):
+        kept = _kept(found, index)
+        assert kept["labels"].tolist() == expected[index]["labels"].tolist()
+        assert torch.allclose(kept["boxes"], expected[index]["boxes"], atol=1e-4)
 
 
 def test_a_box_only_model_gives_no_mask_logits() -> None:

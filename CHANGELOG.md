@@ -6,7 +6,43 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.1.0a2] — 2026-11-27
+
 ### Added
+- **`YoloSink` says what a run deletes** — `planned_changes()`: in `replace` mode, the split's picture folder and
+  label folder with their file count and size, when they are there. A plan of the run (`recordstream run --dry_run`)
+  lists them before anything is deleted.
+- **`YoloSink.split_in_name`** — `true` names every file after its split (`train_000000.png`, `val_000000.png`), so
+  two splits of one folder never hold a picture of the same name; off by default (`README.md`).
+- **`RandomCropDetection` placement `densest`** — the piece that keeps the most boxes, the same one every call: for a
+  dataset of smaller pictures, one piece a picture. Pieces keeping as many boxes are told apart by the box area they
+  keep, then by how near the picture's middle they start; a picture without boxes gets the middle piece (`README.md`).
+- **`raidar.crop.PieceSource`** — a validation set of every piece of every picture, side by side (no overlap, the
+  piece past an edge padded with the median), each piece cut as `RandomCropDetection` cuts it; indexable, so RF-DETR's
+  loader reads it. `RandomCropDetection.cut_at(record, top, left)` is the cut both make (`README.md`).
+- **The wheel ships the example configs** (`examples/*.yaml`) under `share/raidar/examples/`, where
+  `pkg://raidar/examples/<file>.yaml` names them from any install.
+- **`raidar.relabel.RelabelLabels`** remaps a YOLO or COCO dataset folder's classes by name, many to one, always from
+  the original labels the first remap keeps (`labels.orig/`, `data.orig.yaml`, `<stem>.orig.json`; each remapped
+  COCO annotation names its `original_label`); `mode: restore` puts the folder back byte for byte
+  (`docs/relabel.md`, `examples/relabel.yaml`).
+- **`raidar.CocoSource`** reads one split of a COCO dataset folder as detection records — the COCO file in
+  `<split>/_annotations.coco.json`, `annotations/<split>.json` or the official `annotations/instances_<split>*.json`,
+  classes numbered by the categories' order, polygon segmentations as `extras["polygons"]` (`README.md`).
+- **`raidar.CocoOrYoloSource`** reads a dataset folder labelled either way: `labels: yolo | coco` picks when the
+  folder holds both; a wrong folder or a split it lacks is a `DatasetFolderError` (a `ValueError`).
+- **`YoloSource.class_names`** — the folder's class list in label order, declared on the source.
+- **The annotation workspace's detection source**: in a detection workspace, *tools ▾ → load a COCO or YOLO
+  dataset…* opens a folder, split and labels setting, and the list shows that split with its boxes and classes.
+- **`RFDETRDetector.mps_low_watermark`** — on Apple's GPU, torch gives its cached memory back above that share of the
+  GPU's working set (`PYTORCH_MPS_LOW_WATERMARK_RATIO`, set before the model is built); settable in a config or on
+  the command line (`runnable.mps_low_watermark=0.5`). Unset leaves torch's default.
+- **`RFDETRDetector(keep_picture_size=True)`** hands every picture to the model at its own size in stream mode —
+  RF-DETR's resize (a square, or a long side capped at 1333 px) skipped, its augmentation and normalization kept;
+  every picture must be one size, a second size refused naming both (`README.md`).
+- **`RFDETRPredictor(keep_picture_size=True)`** predicts each picture at its own size (RF-DETR's `predict` told the
+  picture's shape), as a model trained with `keep_picture_size` saw them; its lowering for the package compiler
+  skips the resize to the square the same way.
 - **`raidar.crop.RandomCropDetection`** cuts a picture to one `height` x `width` piece with its boxes and mask
   outlines, before a detector's own resize: `placement: random` (a new piece each epoch) or `centre`; a smaller
   picture is padded with its median, a box cut under `min_size_px` dropped. Pictures of any height then train an
@@ -15,7 +51,11 @@ All notable changes to this project are documented here. The format follows
   box without one masked by its rectangle; a picture's labels are read with the picture, per item.
 - **`raidar.RFDETRPredictor`** predicts from one of RF-DETR's own checkpoint files, the model rebuilt
   from what the file records (variant, resolution, query groups, head, class names): boxes, scores and
-  labels in the input picture's pixels, and each instance's mask for a `seg-*` checkpoint.
+  labels in the input picture's pixels, and each instance's mask for a `seg-*` checkpoint. A model trained keeping its pictures' aspect
+  (`square_resize_div_64: false`, read off the file's `args`) is shown each picture at that aspect — the short side
+  at its resolution — and `input_size(height, width)` says the size.
+- **RF-DETR stream mode passes `train_config`'s `scale_jitter`** to RF-DETR's transforms, as RF-DETR's own folder
+  loader does: off, pictures that keep a non-square aspect train a `seg-*` model in batches.
 - **`RFDETRPredictor(score_mode="any_class")`** keeps one detection per query, scored by the chance that any of
   its classes is right (`1 - prod(1 - p)`) and named by its best class — a query torn between classes is found
   where a per-class cut drops it. `any_class_excludes` leaves named classes out of the score. `score_mode="class"`,
@@ -50,9 +90,25 @@ All notable changes to this project are documented here. The format follows
   `raidar.rfdetr._VARIANT_CLASSES`, names every variant; `RFDETRModel` keeps the four detectors.
 
 ### Changed
+- **raidar requires the newest workspace releases** — confluid 0.5.0 (was `>=0.3.1`), liquifai 0.4.0 (was
+  `>=0.3.0`), loggair 0.3.0 (was `>=0.2.0`), recordstream 0.1.0a4 (was `>=0.1.0a2`) and matrainer 0.1.0a3 (was
+  `>=0.1.0a1` in the extras), in the core and in every extra, and the `[compile]` extra's torpaido 0.1.0a1 (`>=0.1.0a1`,
+  was unversioned, before torpaido was on PyPI); the suite is tested against them.
+- **RF-DETR 1.11.2 and later read `YoloSink`'s default layout too**: they follow the split paths `data.yaml` names.
+  The `rfdetr` layout is unchanged. It is still what an older RF-DETR needs, and a uv install gets RF-DETR 1.9.4
+  (`README.md`).
+- **An RF-DETR run over streams logs every epoch to its trackers.** Each wired tracker is added to the loggers of
+  RF-DETR's trainer, so the losses and mAP per epoch land in the same tracker run as the config, the log file and
+  the final scores (one MLflow run, no `mlflow: true` in `train_config`). A run over a dataset folder (`data:`) is
+  unchanged (`README.md`).
+- **The licence is now the PolyForm Noncommercial License 1.0.0** (`LICENSE`, `pyproject.toml`): free for personal, academic and other noncommercial use; commercial use needs a separate licence from the author. It was MIT; the versions released under MIT keep that licence.
 - `--framework ultralytics` loads the separate Ultralytics package as the `raidar.ultralytics`
   subpackage, and `examples/train_cppe5.yaml` names its trainer
   `raidar.ultralytics.ultralytics_trainer.UltralyticsTrainer`.
+
+### Fixed
+- **An RF-DETR run that raises ends its trackers' run** — as `failed`, or `interrupted` for a Ctrl-C, with the log
+  file uploaded; it was left running on the tracker for ever. The error is raised as before.
 
 ## [0.1.0a1] — 2026-09-28
 

@@ -168,6 +168,13 @@ class YoloSource:
         names = self.classes if self.classes is not None else self.names
         return [names.get(i, "") for i in range(max(names) + 1)] if names else []
 
+    @property
+    def class_names(self) -> List[str]:
+        """The classes in label order — the list every record's boxes carry, DECLARED on the source so a consumer
+        (a graph's class list) reads it without walking a record. The vocabulary when one is given, else
+        ``data.yaml``'s names."""
+        return self._vocabulary()
+
     # -- the records ---------------------------------------------------------------------------
 
     def __len__(self) -> int:

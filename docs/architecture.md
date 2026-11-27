@@ -82,7 +82,10 @@ the bare LWDETR network for when you want OUR loop over RF-DETR's architecture.)
 classes — and a discovery service must navigate that rather than assume one trainer per task.
 Tracking differs honestly per loop ownership: the Lightning backend's trackers ARE its metric
 sinks; the RF-DETR and HF backends' trackers carry the run RECORD while per-step curves stay
-with the upstream loop's own reporting. Neither backend has a loss slot — the loss lives inside
+with the upstream loop's own reporting — except an RF-DETR run over streams, whose trainer raidar
+builds: there each tracker is added to the trainer's loggers (matrainer's `TrackerLogger`), because
+RF-DETR's own `mlflow` knob opens a second run and reads its server from the environment alone
+(2026-11-25: one training was two MLflow runs, the curves in one, the machine's load in the other). Neither backend has a loss slot — the loss lives inside
 the upstream model/loop, and a slot would accept a wired value that silently never fires.
 
 **Example.**
@@ -576,7 +579,7 @@ config restate settings the file already holds (and fail when they drift), and s
 `variant` knob on the predictor — the file names its class.
 
 **Consequences.** A config names a checkpoint and a score cut, nothing else. Any input size: RF-DETR resizes to its
-resolution and maps everything back, so a pipeline feeds the picture it trained on (a 1024 px picture to a 1008 px
+resolution (or, for a model trained keeping the aspect, to that aspect — §13) and maps everything back, so a pipeline feeds the picture it trained on (a 1024 px picture to a 1008 px
 model) instead of rendering at the model's size. It is not an `nn.Module`: the network is the library's, held by its
 `RFDETR` object, and `to()` moves that object's device too — its `predict` places the input by it. A Lightning
 `.ckpt` of rfdetr <= 1.11 carries no `args` and is refused by the library: predict from the `.pth` files.
@@ -662,7 +665,10 @@ target once at construction (a projection walk) and reused it each epoch.
 in the stream, so RF-DETR only ever sees squares and keeps its defaults (square resize, zoom-crop, flip): boxes
 moved and clipped (a box under `min_size_px` dropped), outlines clipped exactly (Sutherland–Hodgman against the
 piece), a smaller picture padded with its median, never stretched — the tiled pictures' rule. `random` placement
-draws from Python's `random`, which the data loader seeds per worker and per epoch; `centre` is validation's.
+draws from Python's `random`, which the data loader seeds per worker and per epoch; `centre` is validation's;
+`densest` is the piece that keeps the most boxes — for a folder of smaller pictures, one piece a picture. It counts a
+box by the cut's own keep rule, breaks a tie by the box area kept and then by the distance to the picture's middle,
+and tries only the places where a piece edge meets a box edge (the count and the area change nowhere else).
 `StreamRFDETRDataset` reads a record's labels in the same read as its picture and, for a seg model
 (`segmentation_head`), hands RF-DETR each instance's outlines as COCO polygons (its box rectangle when it has none),
 rasterised by RF-DETR's own `ConvertCoco`, so the masks follow its later resize and crop as the disk path's do. The
@@ -670,8 +676,8 @@ step lives in raidar because it is an augmentation (recordstream ships none) and
 
 **Consequences.** A folder of any picture heights trains a seg model: one epoch of seg-nano at 504 over 130 + 65
 pictures 504 wide and 100 / 1 008 / 3 000 tall wrote its mask losses and `val/segm_mAP_*` (2026-10-12). A model
-trained on pieces should be RUN on pieces — the review workspaces still run it on the whole picture (a follow-up,
-waivefront's `TASKS.md`). Stream mode starts sooner (nothing is walked up front); a picture is decoded once per item,
+trained on pieces should be RUN on pieces — the review workspaces still run it on the whole picture (a follow-up
+in the consuming project's backlog). Stream mode starts sooner (nothing is walked up front); a picture is decoded once per item,
 as before.
 
 **Example.**
@@ -689,3 +695,204 @@ piece["image"].data.shape     # (504, 504, 3); piece["target"].canvas == (504, 5
 **What you may change.** The placements (a new one is a `Placement` value with its test), `min_size_px`, the pad
 value with a measurement. Not: a crop moved into RF-DETR's `aug_config` (it runs after the resize and its cap), a
 stream that caches labels apart from the picture it read, or stretching a picture to the piece.
+
+(2026-10-14) The zoom-crop the context names became a lever: the stream now passes `scale_jitter` to RF-DETR's
+transforms, so pictures of ONE shape that keep their aspect train with it off (§13).
+
+## 13. The checkpoint says how its pictures were resized; the stream passes the zoom-crop switch (2026-10-14)
+
+**Context.** A detection set's pictures became 504 x 1008 — the whole capture, the band's bins as columns — trained
+keeping that aspect (`square_resize_div_64: false`, short side at a 504 resolution). Two things stood in the way.
+Training: one epoch of seg-nano stopped in RF-DETR's mask matcher (`torch.cat` of the batch's masks: `Expected size
+372 but got size 744`) — its zoom-crop (`scale_jitter`, on by default) cuts a SQUARE from half the pictures and the
+other half keep their 1:2 shape, and the batch pads pictures but not masks. RF-DETR's own folder loader passes
+`scale_jitter` from its config to the transforms; the stream's builder, which mirrors that loader, did not, so
+`train_config: {scale_jitter: false}` changed nothing. Measured on a 504 x 1008 picture at 504: on, 1248 x 624 x55
+and 624 x 624 x45 of 100 draws; off, 1248 x 624 x100. Prediction: `RFDETR.predict` resizes to the square of the
+resolution unless handed a `shape`, so the model trained at 1008 x 504 was shown 504 x 504. Whether a model trained
+keeping the aspect is recorded in the checkpoint's `args` only — `from_checkpoint` builds the loaded model's args
+from its model config, and they report the library's default (True) whatever the file says (measured, rfdetr 1.13).
+
+**Decision.** (1) The stream's transform builder passes `scale_jitter` (default on, as RF-DETR's loader does). (2)
+`RFDETRPredictor` reads `square_resize_div_64` off the file's `args` when it builds — a tensor-free read
+(`weights_only`, memory-mapped: 0.02 s on a 142 MB checkpoint) — and resizes each picture as that training validated:
+the square of the resolution, or the short side at the resolution with the long side scaled and capped at 1 333 px,
+both rounded UP to whole blocks of `patch_size x num_windows` (where validation padded the batch; `predict` takes only
+whole blocks). Pictures needing different sizes go in one `predict` call per size, their answers back in order. The
+lowering resizes through the same `input_size`. Rejected: a `shape` setting on the predictor — an input size is the
+model's training, which the file records, and a setting could disagree with it (§10's rule, no architecture setting).
+
+**Consequences.** A model trained keeping the aspect needs no setting to run: its package hands the network a 1008 x
+504 picture at 1008 x 504 (624 x 312 for a 312 smoke model, measured end to end 2026-10-14). A square-trained
+checkpoint, and every file without the key, predicts as before. Turning the zoom-crop off loses that augmentation for
+the configs that do; a set of pictures of SEVERAL shapes still needs the piece cut (§12). The compiled lowering reads
+the picture's size at the trace, so a compiled package keeps the picture size it was compiled at — the picture step
+fixes it.
+
+**Example.**
+
+```yaml
+train_config:
+  square_resize_div_64: false   # the aspect kept; recorded in the checkpoint, read back by the predictor
+  scale_jitter: false           # no square zoom-crop beside the 1:2 pictures
+```
+
+```python
+predictor = RFDETRPredictor(checkpoint_path="runs/a/checkpoint_best_total.pth")
+predictor.input_size(1008, 504)   # (1008, 504) at a 504 resolution trained keeping the aspect; (504, 504) square
+```
+
+**What you may change.** The rounding (up to a block) with a measurement against the training's validation. Not: a
+size setting on the predictor, the flag read from the loaded model's args (they hold the default), or a predict call
+mixing pictures of two sizes. Pins: `tests/test_rfdetr_predictor.py::TestTheTrainingsResize`,
+`tests/test_lowering.py::test_a_model_trained_keeping_the_aspect_is_resized_as_the_predictor_resizes`,
+`tests/test_stream_rfdetr_dataset.py::test_the_scale_jitter_setting_reaches_the_training_transforms_as_on_rfdetrs_own_loader`.
+
+## 14. A picture may reach RF-DETR at its own size: the resize skipped, nothing else (2026-10-13)
+
+**Context.** RF-DETR resizes every picture: to a `resolution` square, or (`square_resize_div_64: false`) to a short
+side of `resolution` with the long side capped at 1 333 px — `_COCO_MAX_SIZE`, a module constant of
+`rfdetr/datasets/coco.py`, not a setting. A picture made tall on purpose — a capture's rows at a fixed time step,
+504 x 2 040 — never reaches the model whole (330 x 1 333). The network itself takes a non-square input whose sides are
+multiples of its block (patch x windows: measured 2026-10-13, seg-medium at 504 x 2 040 ran, 512 x 2 048 was refused
+`Backbone requires input shape to be divisible by 24`), and RF-DETR's collate pads a batch up to that block.
+
+**Decision.** `RFDETRDetector(keep_picture_size=True)` hands `StreamRFDETRDataset` a pipeline of RF-DETR's own
+pieces without the resize (`_unresized_transforms`): the augmentation RF-DETR's router picks for `aug_config` (`None`
+its horizontal flip, `{}` none, otherwise its Albumentations stack), `ToImage`, the float scale, its `Normalize`. The
+dataset refuses a picture whose size differs from the first it read, naming both and the record's `file`, because a
+seg batch joins masks of one size and would fail later with `Sizes of tensors must match`. Stream mode only: a disk
+dataset goes through RF-DETR's `build_dataset`, which this runnable does not build.
+
+**Consequences.** Pictures of one non-square size train whole; `resolution` only sizes the model. The predictor
+(`RFDETRPredictor`, §10) runs such a model the same way through `keep_picture_size` (addendum), which wins over the
+size the checkpoint records (§13): a model trained keeping the aspect needs no setting, one trained on whole pictures
+needs this one.
+
+**Example.**
+
+```python
+from raidar.stream_rfdetr_dataset import StreamRFDETRDataset
+
+dataset = StreamRFDETRDataset(stream, "val", 504, ns, keep_picture_size=True)
+image, target = dataset[0]    # a 504 x 2040 picture -> image.shape == (3, 2040, 504)
+```
+
+**What you may change.** The augmentation kept, if RF-DETR's router changes (follow it, never diverge). Not: a resize
+or a pad added to this path to make sizes agree — a crop in the stream does that (§12).
+
+**Addendum (2026-10-14): prediction at the picture's size.** `RFDETRPredictor(keep_picture_size=True)` makes
+`input_size(H, W)` (§13) answer `(H, W)`, so each picture's own `(H, W)` goes to `predict` as its `shape` argument — the
+library's resize then changes nothing — and the one-call-per-size grouping of §13 applies unchanged. Nothing of
+`predict` is copied, so its normalization, post-processing and mask upsampling stay the library's. The compiler's
+lowering reads the same `input_size`, so its resize to the picture's own size is the identity.
+
+## 15. A dataset folder is read whichever way it is labelled, and loaded by its settings alone (2026-10-16)
+
+**Context.** The detection pictures a sink writes hold YOLO labels and a COCO sidecar for the same pictures, and
+outside datasets come as either. A person reviewing one in the annotation workspace had to draw a source graph — a
+reader node, a stream, the class list wired into the graph's root — before seeing a single picture. Two facts shaped
+the answer, both measured: an annotation workspace adds only FILES through a tool (each file then read by its files
+graph, which has no labels), so a tool listing pictures shows no boxes; and its source graph, applied from its
+settings alone, lists records with their boxes and class names (a two-picture copy of a real split: `detection
+source: 2 recording(s), 33 class(es)`, six named boxes on the first).
+
+**Decision.** `CocoSource` reads one split of a COCO folder in the three places a COCO file sits, numbering classes
+by the categories' order (the official ids have gaps). `CocoOrYoloSource` picks the reader from what the folder holds
+— `labels` decides only when both are there — and DECLARES `class_names`, as `YoloSource` and `CocoSource` now do, so
+a graph's class list is the source itself (`classes: !ref:dataset`) rather than a list typed or evaluated by an
+editor. raidar ships the workspace's `detection` source graph wrapping it: three settings (folder, split, labels), and
+an `app: {tools: …}` line the workspace lists in its tools menu, which opens those settings. Every folder refusal is a
+`DatasetFolderError`, a `ValueError`: the workspace reports a `ValueError` from a source as a wrong setting, and
+anything else escapes its sync.
+
+Rejected: a tool adding the pictures as files plus a files graph that finds each picture's labels by its path —
+every dropped picture would run raidar's files graph, and a COCO file would be searched per picture; the person chose
+the source graph.
+
+**Consequences.** A detection workspace loads one split of one dataset at a time, replacing what its source listed.
+With raidar installed, the detection type's source is this graph instead of an empty starter; its canvas still opens.
+Run from inside `raidar/`, the folder's gitignored `raidar.egg-info` shadows the installed metadata — an entry point
+added without regenerating it is invisible there (measured: the workspace ran the type's empty source).
+
+**Example.**
+
+```python
+from raidar.coco_or_yolo_source import CocoOrYoloSource
+
+source = CocoOrYoloSource(folder="$DATA_ROOT/signal_detection/pictures/d", split="val")
+len(source), source.class_names[:2]     # (1880, ['5GNR', 'LTE'])
+source.labels = "coco"                   # the same pictures, from val/_annotations.coco.json
+```
+
+**What you may change.** Another place a COCO file sits (one more candidate, in order), another label kind (one more
+branch, with its refusal). Not: a refusal that is not a `ValueError` (the workspace would crash on a wrong folder), or
+a class numbering by the categories' ids.
+
+## 16. A folder is relabelled from the original it keeps, never from its last remap (2026-10-26)
+
+**Context.** A dataset is written once, in the finest vocabulary its writer knows (a waveform generator's standard,
+not its family), and different trainers want different vocabularies of it: one class, a family per standard, the
+finest names. A trainer that reads class ids from the files (a YOLO folder's label lines, a COCO file's
+`category_id`) needs the files remapped; done in place without a record of the original, a remap to one class would
+lose every name for good.
+
+**Decision.** `raidar.relabel.RelabelLabels` keeps the original on the first remap — `labels/` renamed to
+`labels.orig/` (instant, every file at once), `data.yaml` copied to `data.orig.yaml`, a COCO file to
+`<stem>.orig.json` — and every remap writes the labels anew FROM it; `mode: restore` moves it back. The labels are
+rewritten in place rather than into a new tree because readers find a sample's other trees by replacing the `labels`
+part of the label path. Only a YOLO line's class id changes and no line moves: a mask that numbers instances by line
+stays right. A map must cover every original name (`"*"` for the rest): a forgotten name is refused, never mapped to
+nothing. COCO annotations carry their original class as `original_label`.
+
+**Consequences.** A remap after a remap still reaches the finest names; a folder is never more than one remap away
+from its original. A tree is built in `labels.new/` before it replaces `labels/`, so an interrupted run is finished by
+running it again. A folder being read by a trainer must not be remapped (the tree is replaced under it).
+
+**Example.**
+
+```yaml
+runnable: !class:raidar.relabel.RelabelLabels
+  root: $DATA_ROOT/pictures/b
+  label_map: {APCO25: LMR, DMR: LMR, "802.11ax HE": WLAN, "802.11n HT": WLAN}
+  classes: {0: WLAN, 1: LMR}
+```
+
+**What you may change.** More layouts, a dry run, the refusals' words. What must hold: the original is kept once and
+never written again, every remap starts from it, no line is dropped or moved, restore is byte for byte. Pin:
+`tests/test_relabel.py`.
+
+## 17. A validation set of every piece is a source, not a step (2026-11-24)
+
+**Context.** §12's cut gives one piece a picture: a random one for training, the middle one for validation. On
+pictures much larger than the piece the middle one is a small, fixed sample: spectrogram pictures of 100 ms radio
+windows (819 x 19 530 px, 819 px pieces) held 262 of their 5 124 validation boxes there, and a class whose bursts
+missed the middle stretch read AP 0 on its one box while the model found 92 % of its boxes over the whole windows. The
+best checkpoint and early stopping were chosen on that sample.
+
+**Decision.** `raidar.crop.PieceSource` wraps an indexable picture source and lists every piece of every picture,
+side by side along rows and columns, at whole multiples of the piece: no overlap, so each pixel is scored once, and
+the piece past an edge padded with the picture's median. Each piece is `RandomCropDetection.cut_at` at its place —
+the one cut, written once. It is a SOURCE because a step that makes several records from one turns a stream
+iterable-only (recordstream refuses `len` and indexing), and RF-DETR's data loader reads a validation set by index.
+The finds are not merged across pieces: a box across an edge is one truth per piece, as training's random cut clips
+it; a merged whole-picture score is the inference graph's, outside the loop (§2: raidar drives the loop and adds only
+a dataset bridge).
+
+**Consequences.** Validation costs a pass over every piece: 5 112 pieces in 1.1 min (RF-DETR small at 832, M4 Max).
+The count of truths grows by the boxes the edges split (the smoke folder: 55 boxes in its two pictures, 64 in their
+48 pieces). The pieces are counted on first use by reading every picture once.
+
+**Example.**
+
+```yaml
+val_set: !class:recordstream.core.stream.Stream
+  source: !class:raidar.crop.PieceSource
+    source: !class:raidar.YoloSource {root: ./runs/pictures, split: val}
+    height: 819
+    width: 819
+```
+
+**What you may change.** How pictures are counted (a size read without decoding), how many pictures are kept for
+their pieces. What must hold: every pixel in exactly one piece, each piece the crop's own cut, indexable with a length.
+Pin: `tests/test_crop.py` (the `PieceSource` block).

@@ -8,6 +8,7 @@ exercise it directly (and through a Stream) since that's the same write path.
 
 import json
 import re
+from importlib.metadata import version
 from pathlib import Path
 from typing import Any, Dict, List, Literal, Tuple
 
@@ -15,6 +16,7 @@ import numpy as np
 import pytest
 import torch
 import yaml
+from packaging.version import Version
 from PIL import Image, ImageDraw
 from pydantic import ValidationError
 from recordstream import Boxes
@@ -153,14 +155,14 @@ def test_metadata_jsonl_provenance(tmp_path: Path) -> None:
 
 
 def test_jsonable_metadata_sanitizes_complex_and_large_arrays() -> None:
-    # Live crash: Record.metadata carried StreamStudio's internal `__taidal_stash_*` snapshot — a
-    # complex IQ array — so `json.dumps(...)` raised "Object of type complex is not JSON serializable".
+    # Live crash: Record.metadata carried a complex IQ array, so `json.dumps(...)` raised
+    # "Object of type complex is not JSON serializable".
     meta = {
         "pack_id": "X",  # plain provenance kept as-is
         "snr_db": np.float32(12.5),  # numpy scalar -> python float
         "center_freq": 1 + 2j,  # complex scalar -> string
         "boxes": np.array([[0, 0, 4, 4]]),  # small array -> listed element-wise
-        "__taidal_stash_436:424_input": np.arange(2048, dtype=np.complex64),  # large complex -> summary
+        "iq_snapshot": np.arange(2048, dtype=np.complex64),  # large complex -> summary
     }
     out = _jsonable_metadata(meta)
     json.dumps(out)  # MUST be fully encodable — this is exactly what YoloSink.write does
@@ -168,7 +170,7 @@ def test_jsonable_metadata_sanitizes_complex_and_large_arrays() -> None:
     assert out["snr_db"] == 12.5
     assert isinstance(out["center_freq"], str)
     assert out["boxes"] == [[0, 0, 4, 4]]
-    assert out["__taidal_stash_436:424_input"].startswith("<array shape=(2048,)")
+    assert out["iq_snapshot"].startswith("<array shape=(2048,)")
 
 
 def test_jsonable_metadata_small_complex_array_becomes_strings() -> None:
@@ -179,14 +181,14 @@ def test_jsonable_metadata_small_complex_array_becomes_strings() -> None:
     assert all(isinstance(x, str) for x in out["iq"])
 
 
-def test_metadata_jsonl_survives_complex_stash_array(tmp_path: Path) -> None:
-    # End-to-end regression: a record carrying a complex `__taidal_stash_*` snapshot must write
+def test_metadata_jsonl_survives_a_large_complex_array(tmp_path: Path) -> None:
+    # End-to-end regression: a record whose metadata carries a large complex array must write
     # without crashing the sink, with the big array summarised (not dumped) into the label JSON.
     out = tmp_path / "out"
-    stream = Stream(source=[_make_record(metadata={"__taidal_stash_x_input": np.arange(4096, dtype=np.complex64)})])
+    stream = Stream(source=[_make_record(metadata={"iq_snapshot": np.arange(4096, dtype=np.complex64)})])
     _convert(stream, out, class_names={1: "drone-signal"})
     entry = json.loads((out / "metadata.jsonl").read_text().strip())
-    assert entry["source_metadata"]["__taidal_stash_x_input"].startswith("<array shape=(4096,)")
+    assert entry["source_metadata"]["iq_snapshot"].startswith("<array shape=(4096,)")
 
 
 # --- multi-split merge / append (the key new behaviour) ---------------------
@@ -278,7 +280,9 @@ def test_rfdetr_layout_second_split_merges_and_a_rerun_is_idempotent(tmp_path: P
     assert [m["split"] for m in meta] == ["val", "train", "train"]
 
 
-def test_the_rfdetr_layout_is_what_rfdetr_reads_and_the_default_is_not(tmp_path: Path) -> None:
+def test_rfdetr_reads_the_rfdetr_layout_and_the_default_one_from_1_11_2(tmp_path: Path) -> None:
+    # RF-DETR 1.11.2 made `is_valid_yolo_dataset` follow the split paths `data.yaml` names, so it accepts the default
+    # layout too. Before it, only `<split>/images` + `<split>/labels` passed — and a uv install still gets 1.9.4.
     yolo = pytest.importorskip("rfdetr.datasets.yolo")
     for layout in ("ultralytics", "rfdetr"):
         out = tmp_path / layout
@@ -286,8 +290,9 @@ def test_the_rfdetr_layout_is_what_rfdetr_reads_and_the_default_is_not(tmp_path:
         _convert(
             Stream(source=[_make_record(boxes_xyxy=[[0, 0, 40, 40]], labels=[1])]), out, split="val", layout=layout
         )
+    reads_the_default = Version(version("rfdetr")) >= Version("1.11.2")
     assert yolo.is_valid_yolo_dataset(str(tmp_path / "rfdetr")) is True
-    assert yolo.is_valid_yolo_dataset(str(tmp_path / "ultralytics")) is False
+    assert yolo.is_valid_yolo_dataset(str(tmp_path / "ultralytics")) is reads_the_default
 
 
 def test_an_unknown_layout_is_refused(tmp_path: Path) -> None:
@@ -918,3 +923,50 @@ def test_the_ring_is_the_walk_its_description_gives_ties_included(seed: int) -> 
         for _ in range(int(rng.integers(1, 13)))
     ]
     assert np.array_equal(_bridged_ring(polygons), _walked_ring(polygons))
+
+
+# --- split_in_name: file names that differ between the splits ---------------
+#
+# Every split numbers its pictures from zero, so two splits of one folder both hold a ``000000.png``. A tool that
+# pairs a picture with its annotation by file name alone then puts one split's boxes on the other's picture.
+
+
+def test_split_in_name_makes_the_file_names_of_two_splits_differ(tmp_path: Path) -> None:
+    out = tmp_path / "out"
+    _convert(_train_stream(), out, split="train", layout="rfdetr", split_in_name=True)
+    _convert(
+        Stream(source=[_make_record(boxes_xyxy=[[0, 0, 40, 40]], labels=[1])]),
+        out,
+        split="val",
+        layout="rfdetr",
+        split_in_name=True,
+    )
+
+    train = sorted(p.name for p in (out / "train" / "images").iterdir())
+    val = sorted(p.name for p in (out / "val" / "images").iterdir())
+    assert train == ["train_000000.png", "train_000001.png"] and val == ["val_000000.png"]
+    # the label, the COCO entry and the metadata line all name the picture the same way
+    assert sorted(p.name for p in (out / "train" / "labels").iterdir()) == ["train_000000.txt", "train_000001.txt"]
+    coco = json.loads((out / "val" / "_annotations.coco.json").read_text())
+    assert [image["file_name"] for image in coco["images"]] == ["val_000000.png"]
+    lines = [json.loads(line) for line in (out / "metadata.jsonl").read_text().strip().splitlines()]
+    assert {line["image"] for line in lines} == {
+        "train/images/train_000000.png",
+        "train/images/train_000001.png",
+        "val/images/val_000000.png",
+    }
+    assert {line["label"] for line in lines if line["split"] == "val"} == {"val/labels/val_000000.txt"}
+
+
+def test_split_in_name_is_off_unless_asked(tmp_path: Path) -> None:
+    out = tmp_path / "out"
+    _convert(_train_stream(), out, split="train")
+    assert sorted(p.name for p in (out / "images" / "train").iterdir()) == ["000000.png", "000001.png"]
+
+
+def test_an_append_continues_after_the_last_split_named_picture(tmp_path: Path) -> None:
+    out = tmp_path / "out"
+    _convert(_train_stream(), out, split_in_name=True)
+    _convert(_train_stream(), out, mode="append", split_in_name=True)
+    names = sorted(p.name for p in (out / "images" / "train").iterdir())
+    assert names == [f"train_{i:06d}.png" for i in range(4)]

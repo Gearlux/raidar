@@ -79,9 +79,10 @@ def test_no_backend_keeps_a_private_derivation() -> None:
 
 def test_the_rfdetr_backend_finishes_its_manifest() -> None:
     """The plain-function hookup must close the loop: an unfinished manifest stays `running` and
-    matrainer's atexit hook then labels a successful run `interrupted`."""
+    matrainer's atexit hook then labels a successful run `interrupted`. Both entry points end the run through
+    matrainer's `ending_the_run`, which also ends a run that raised as `failed`."""
     source = _source("rfdetr_detector.py")
-    assert "capture_log_file" in source and 'status="success"' in source
+    assert source.count("with ending_the_run(trackers, manifest):") == 2
 
 
 #: How each backend gets its METRICS onto the wired trackers — a DIFFERENT question from the

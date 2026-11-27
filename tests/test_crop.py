@@ -12,7 +12,7 @@ import torch
 from recordstream import Boxes, Image, Record
 from recordstream.core import Stream
 
-from raidar.crop import RandomCropDetection
+from raidar.crop import PieceSource, RandomCropDetection
 from raidar.yolo_sink import POLYGONS
 
 
@@ -208,3 +208,213 @@ def test_a_grey_picture_is_cut_and_padded_too() -> None:
     record = {"image": Image(np.full((20, 40), 7, dtype=np.uint8), layout="HW")}
     pixels = _pixels(CENTRE(record))
     assert pixels.shape == (40, 40) and (pixels == 7).all()
+
+
+# -- placement "densest": the piece that keeps the most boxes ---------------------------------------------------------
+
+DENSEST = RandomCropDetection(height=40, width=40, placement="densest")
+
+
+def test_densest_cuts_the_piece_that_keeps_the_most_boxes() -> None:
+    """One box near the left end, three within 38 columns near the right: the piece holds the three, whole."""
+    out = DENSEST(_record(40, 400, [[10, 5, 30, 35], [300, 5, 310, 35], [315, 5, 325, 35], [328, 5, 338, 35]]))
+    target = out["target"]
+    assert _pixels(out).shape == (40, 40, 3) and target.canvas == (40, 40)
+    assert target.labels.tolist() == [1, 2, 3]
+    # pieces starting at columns 298-300 hold all three whole; 298 is the nearest the picture's middle
+    np.testing.assert_allclose(target.boxes, [[2, 5, 12, 35], [17, 5, 27, 35], [30, 5, 40, 35]])
+
+
+def test_densest_counts_a_box_only_when_the_cut_keeps_it() -> None:
+    """Two boxes 38 columns apart: a 40-column piece reaches at most 2 pixels of the second, under the 3 a kept box
+    needs — one box, not two. The pair further on, both whole in one piece, wins."""
+    boxes = [[100, 5, 110, 35], [148, 5, 158, 35], [300, 5, 310, 35], [330, 5, 340, 35]]
+    assert DENSEST(_record(40, 400, boxes))["target"].labels.tolist() == [2, 3]
+
+
+def test_densest_keeps_a_lone_box_whole_not_a_sliver_of_it() -> None:
+    out = DENSEST(_record(40, 400, [[200, 5, 220, 35]]))["target"].boxes
+    assert float(out[0, 2] - out[0, 0]) == 20.0
+
+
+def test_densest_on_a_tie_keeps_the_most_box_area() -> None:
+    out = DENSEST(_record(40, 400, [[10, 5, 20, 35], [300, 5, 330, 35]]))["target"]
+    assert out.labels.tolist() == [1]
+    assert float(out.boxes[0, 2] - out.boxes[0, 0]) == 30.0
+
+
+def test_densest_on_a_tie_of_count_and_area_takes_the_piece_nearest_the_middle() -> None:
+    """Two equal boxes; the middle piece starts at column 180. Column 220 (the second box whole) is 40 away, column
+    20 (the first) 160."""
+    out = DENSEST(_record(40, 400, [[20, 5, 30, 35], [250, 5, 260, 35]]))["target"]
+    assert out.labels.tolist() == [1]
+    np.testing.assert_allclose(out.boxes, [[30, 5, 40, 35]])
+
+
+def test_densest_without_boxes_or_without_a_target_is_the_centre_piece() -> None:
+    assert int(_pixels(DENSEST(_record(200, 40, [])))[0, 0, 0]) == 80
+    record = _record(200, 40, [])
+    del record["target"]
+    assert int(_pixels(DENSEST(record))[0, 0, 0]) == 80
+
+
+def test_densest_is_the_same_piece_every_call() -> None:
+    boxes = [[5, 20, 30, 30], [5, 150, 30, 160], [5, 165, 30, 175]]
+    tops = {int(_pixels(DENSEST(_record(200, 40, boxes)))[0, 0, 0]) for _ in range(5)}
+    assert len(tops) == 1
+
+
+def test_densest_searches_rows_and_columns_together() -> None:
+    """Boxes that share a column range but not a row range are not one group: the piece is placed in both axes."""
+    boxes = [[150, 10, 160, 20], [150, 60, 160, 70], [150, 110, 160, 120], [20, 150, 30, 160], [35, 165, 45, 175]]
+    out = DENSEST(_record(200, 200, boxes))["target"]
+    assert out.labels.tolist() == [3, 4]
+
+
+def test_densest_pads_a_short_picture_and_places_the_piece_along_the_other_axis() -> None:
+    out = DENSEST(_record(20, 400, [[300, 2, 320, 12]]))
+    assert _pixels(out).shape == (40, 40, 3)
+    assert out["target"].labels.tolist() == [0]
+    assert float(out["target"].boxes[0, 1]) == 2.0  # no rows to choose: the picture's rows stay where they were
+
+
+def test_densest_keeps_as_many_boxes_as_any_piece_can() -> None:
+    """Against every piece of the picture, tried one by one."""
+    rng = np.random.default_rng(5)
+    brute = RandomCropDetection(height=40, width=40)
+    for _ in range(20):
+        x1, y1 = rng.uniform(0, 110, 12), rng.uniform(0, 70, 12)
+        boxes = np.stack([x1, y1, x1 + rng.uniform(1, 30, 12), y1 + rng.uniform(1, 30, 12)], axis=1)
+        record = _record(100, 140, boxes.tolist())
+        best = max(len(brute.cut_at(record, top, left)["target"].labels) for top in range(61) for left in range(101))
+        assert len(DENSEST(record)["target"].labels) == best
+
+
+def test_densest_loads_from_a_config() -> None:
+    crop = confluid.load("!class:raidar.crop.RandomCropDetection {height: 40, width: 40, placement: densest}")
+    assert crop(_record(40, 400, [[300, 5, 330, 35]]))["target"].labels.tolist() == [0]
+
+
+# -- PieceSource: every piece of every picture, side by side ----------------------------------------------------------
+
+
+class _Pictures:
+    """An indexable source of records that counts how often each picture is read."""
+
+    def __init__(self, records: Sequence[Record], class_names: Optional[Sequence[str]] = None) -> None:
+        self.records = list(records)
+        self.reads = [0] * len(self.records)
+        if class_names is not None:
+            self.class_names = list(class_names)
+
+    def __len__(self) -> int:
+        return len(self.records)
+
+    def __getitem__(self, index: int) -> Record:
+        self.reads[index] += 1
+        return self.records[index]
+
+
+def _spread(height: int, width: int, seed: int = 5) -> Record:
+    """A picture of random grey levels (every piece different) without boxes."""
+    pixels = np.random.default_rng(seed).integers(0, 256, size=(height, width, 3), dtype=np.uint8)
+    return {"image": Image(pixels, layout="HWC")}
+
+
+def test_a_piece_source_lists_every_piece_of_every_picture_side_by_side_the_last_padded_with_its_median() -> None:
+    """A 10 x 25 picture in 10 x 10 pieces is three — at columns 0, 10 and 20, the last holding columns 20-24 and five
+    columns of the picture's median —, a 10 x 10 picture one: four pieces, never an overlap."""
+    wide, square = _spread(10, 25), _spread(10, 10, seed=6)
+    source = PieceSource(source=_Pictures([wide, square]), height=10, width=10)
+    assert len(source) == 4
+    places = [source[i]["piece"] for i in range(4)]
+    assert places == [
+        {"picture": 0, "top": 0, "left": 0},
+        {"picture": 0, "top": 0, "left": 10},
+        {"picture": 0, "top": 0, "left": 20},
+        {"picture": 1, "top": 0, "left": 0},
+    ]
+    assert all(_pixels(source[i]).shape == (10, 10, 3) for i in range(4))
+    last = _pixels(source[2])
+    picture = _pixels(wide)
+    assert np.array_equal(last[:, :5], picture[:, 20:25])
+    median = np.median(picture.reshape(-1, 3), axis=0).astype(np.uint8)
+    assert (last[:, 5:] == median).all()
+
+
+def test_the_pieces_put_back_together_are_the_picture_rows_cut_as_columns_are() -> None:
+    """A 25 x 37 picture in 10 x 10 pieces: 3 rows of 4 pieces, and every pixel lies in exactly one of them."""
+    picture = _pixels(_spread(25, 37))
+    source = PieceSource(source=_Pictures([_spread(25, 37)]), height=10, width=10)
+    assert len(source) == 12
+    rebuilt = np.zeros((30, 40, 3), dtype=np.uint8)
+    covered = np.zeros((30, 40), dtype=int)
+    for index in range(len(source)):
+        piece = source[index]
+        top, left = piece["piece"]["top"], piece["piece"]["left"]
+        rebuilt[top : top + 10, left : left + 10] = _pixels(piece)
+        covered[top : top + 10, left : left + 10] += 1
+    assert (covered == 1).all()
+    assert np.array_equal(rebuilt[:25, :37], picture)
+
+
+def test_a_box_across_a_piece_edge_is_cut_into_each_piece_and_a_sliver_is_dropped() -> None:
+    """Columns 5-15 cross the edge at 10: columns 5-10 in the first piece, 0-5 in the second. Columns 8.5-21 leave a
+    1.5-column sliver in the first piece (under 3: dropped), 0-10 in the second, a 1-column sliver in the third."""
+    record = _record(10, 30, [[5, 2, 15, 8], [8.5, 2, 21, 8]])
+    source = PieceSource(source=_Pictures([record]), height=10, width=10)
+    first, second, third = (source[i]["target"] for i in range(3))
+    np.testing.assert_allclose(first.boxes, [[5, 2, 10, 8]])
+    assert first.labels.tolist() == [0]
+    np.testing.assert_allclose(second.boxes, [[0, 2, 5, 8], [0, 2, 10, 8]])
+    assert second.labels.tolist() == [0, 1]
+    assert len(third.boxes) == 0 and third.labels.tolist() == []
+    assert first.canvas == (10, 10) and first.classes == ["a", "b", "c", "d"]
+
+
+def test_a_piece_is_the_crops_own_cut_at_its_place() -> None:
+    """The piece at columns 10-19 is what ``RandomCropDetection`` cuts there: one cut, written once."""
+    record = _record(10, 30, [[5, 2, 15, 8]], polygons=[[[[5, 2], [15, 2], [15, 8], [5, 8]]]])
+    piece = PieceSource(source=_Pictures([record]), height=10, width=10)[1]
+    cut = RandomCropDetection(height=10, width=10).cut_at(record, 0, 10)
+    assert np.array_equal(_pixels(piece), _pixels(cut))
+    np.testing.assert_allclose(piece["target"].boxes, cut["target"].boxes)
+    assert piece["target"].extras[POLYGONS] == cut["target"].extras[POLYGONS]
+
+
+def test_a_picture_is_read_once_to_count_its_pieces_and_once_for_its_pieces_in_order() -> None:
+    pictures = _Pictures([_spread(10, 25), _spread(10, 25, seed=6)])
+    source = PieceSource(source=pictures, height=10, width=10)
+    assert len(source) == 6 and pictures.reads == [1, 1]
+    for index in range(len(source)):
+        source[index]
+    assert pictures.reads == [2, 2]
+
+
+def test_building_reads_nothing_and_a_piece_past_the_end_is_refused() -> None:
+    pictures = _Pictures([_spread(10, 10)])
+    source = PieceSource(source=pictures, height=10, width=10)
+    assert pictures.reads == [0]
+    with pytest.raises(IndexError, match="piece 1 of 1"):
+        source[1]
+
+
+def test_it_builds_with_no_arguments_and_refuses_a_missing_size_or_source_when_used() -> None:
+    with pytest.raises(ValueError, match="height and width must be set"):
+        len(PieceSource(source=_Pictures([_spread(10, 10)])))
+    with pytest.raises(TypeError, match="PieceSource: source must be indexable"):
+        len(PieceSource(height=10, width=10))
+
+
+def test_it_declares_its_sources_class_names() -> None:
+    source = PieceSource(source=_Pictures([], class_names=["drone", "ignore"]), height=10, width=10)
+    assert source.class_names == ["drone", "ignore"]
+
+
+def test_a_piece_source_loads_from_a_config_and_feeds_a_stream_by_index() -> None:
+    """A stream over it keeps its length and indexing — what RF-DETR's data loader asks of a validation set."""
+    source = confluid.load("!class:raidar.crop.PieceSource {height: 10, width: 10}")
+    source.source = _Pictures([_spread(10, 25)])
+    stream = Stream(source=source)
+    assert len(stream) == 3
+    assert _pixels(stream[1]).shape == (10, 10, 3)

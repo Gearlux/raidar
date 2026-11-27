@@ -289,6 +289,25 @@ runnable: !class:raidar.RFDETRDetector
 Seeded, two runs land identically **on cpu**. On mps they still differ — that residual is Apple's
 MPS backend rather than the config, so mps is the faster option and cpu is the reproducible one.
 
+**On a Mac, let torch give the GPU's memory back.** By default torch keeps the memory it has cached
+on Apple's GPU, which on a Mac is the machine's memory: a seg-nano smoke run (504 x 504, batch 1)
+held 11 GB on an 18 GB laptop, swapped, and its epoch took 8 min 42 s. With `mps_low_watermark: 0.5`
+torch releases its cache above half the GPU's working set: 9.1-9.5 GB and 2 min 45 s for the whole
+run (measured 2026-10-14). Set it in the config or on the command line:
+
+```yaml
+runnable: !class:raidar.RFDETRDetector
+  mps_low_watermark: 0.5               # unset: torch's default (1.4); ignored off Apple's GPU
+```
+
+```bash
+recordstream run cfg.yaml runnable.mps_low_watermark=0.5
+```
+
+It is `PYTORCH_MPS_LOW_WATERMARK_RATIO`, set before RF-DETR first uses the GPU; that variable
+already in the shell wins. The same setting is on every matrainer torch trainer (matrainer README →
+`matrainer.torch`).
+
 **A segmentation variant trains from the same boxes.** `variant: seg-nano` … `seg-xlarge` build
 RF-DETR's instance-segmentation models; in disk mode with `dataset_file: yolo` RF-DETR reads a box
 label as its four-corner polygon, so a box dataset is enough (a label line with ≥ 3 points is read
@@ -308,7 +327,9 @@ and the long side is capped at 1333 px. `RandomCropDetection` cuts each picture 
 its own pixels, before RF-DETR sees it: its boxes moved and clipped (a box left under `min_size_px`, 3, in either
 direction dropped), its outlines clipped exactly, a picture smaller than the piece padded with its median — never
 stretched. `placement: random` cuts anywhere (Python's `random`, which the data loader seeds per worker and epoch: a
-new piece each epoch); `centre` the middle piece, every call — for validation. Read a folder with `YoloSource`:
+new piece each epoch); `centre` the middle piece, every call — for validation; `densest` the piece that keeps the
+most boxes, every call the same one — for writing a folder of smaller pictures, one piece a picture (see below). Read
+a folder with `YoloSource`:
 
 ```yaml
 runnable: !class:raidar.RFDETRDetector
@@ -326,15 +347,97 @@ runnable: !class:raidar.RFDETRDetector
       - !class:raidar.crop.RandomCropDetection {height: 504, width: 504, placement: centre}
 ```
 
+**The piece with the most boxes — `placement: densest`.** A picture far larger than a labelling tool or a model takes
+can be written as ONE piece of it — the one that keeps the most boxes:
+
+```yaml
+ops:
+  - !class:raidar.crop.RandomCropDetection {height: 819, width: 2048, placement: densest}
+```
+
+A box counts when the cut keeps it — `min_size_px` left of it both ways, the rule that drops a box. Of the pieces
+keeping as many boxes, the one keeping the most box area wins (a box whole rather than a sliver of it), then the one
+starting nearest the picture's middle. A picture without boxes gets the middle piece. The search is exact: every place
+where a piece edge meets a box edge is tried, on both axes. The boxes outside the piece are not in the output.
+
 Measured (2026-10-12, seg-nano at 504, one epoch over 130 + 65 pictures 504 px wide and 100, 1 008 or 3 000 rows
 tall): it trains — mask losses and `val/segm_mAP_*` written. Without the cut, the same folder read by RF-DETR's
 shape-keeping resize stops on the masks' sizes, and a 504 x 3000 picture reaches the model 224 px wide.
 
+**Validate on every piece — `raidar.crop.PieceSource`.** The middle piece of a picture much larger than the piece is a
+small sample of it: on pictures 19 530 px wide cut to 819 px pieces, the middle pieces held 262 of 5 124 validation
+boxes, and one class's AP stood on a single box. `PieceSource` makes the same cut at every place of every picture,
+side by side: one record per piece, the pieces never overlapping (each pixel scored once), a piece reaching past the
+picture's edge padded with its median, a box across a piece edge cut into each piece it crosses (a sliver under
+`min_size_px` dropped). It is a source — a data loader reads a validation set by index, and a step that makes several
+records from one would make the stream iterable-only:
+
+```yaml
+  val_set: !class:recordstream.core.stream.Stream
+    source: !class:raidar.crop.PieceSource
+      source: !class:raidar.YoloSource {root: ./runs/pictures, split: val}
+      height: 504
+      width: 504
+```
+
+Each piece's record names its place, `piece: {picture, top, left}`. The pieces are counted on first use by reading
+every picture once; a picture is then read once for a run of its pieces read in order. Measured (2026-11-24, RF-DETR
+small at 832 on an M4 Max): 5 112 pieces of 819 x 819 in 1.1 min a validation pass.
+
+### A picture at its own size — `RFDETRDetector(keep_picture_size=True)`
+
+RF-DETR always resizes: to a `resolution` x `resolution` square, or (`square_resize_div_64: false`) to a short side of
+`resolution` and a long side of at most 1333 px — a constant of the library, not a setting. A tall picture therefore
+never reaches the model whole: 504 x 2040 trains as 330 x 1333. `keep_picture_size: true` (stream mode) skips that
+resize and keeps everything else of RF-DETR's pipeline — its augmentation (`aug_config`: unset, a horizontal flip at
+0.5; `{}`, none; otherwise its Albumentations stack) and its normalization — so each picture reaches the model at its
+own size:
+
+```yaml
+runnable: !class:raidar.RFDETRDetector
+  variant: seg-medium
+  resolution: 504                # sizes the model; the pictures keep their own size
+  keep_picture_size: true
+  train_set: !class:recordstream.core.stream.Stream
+    source: !class:raidar.YoloSource {root: ./runs/pictures, split: train}   # every picture 504 x 2040
+  ...
+```
+
+| | `keep_picture_size: false` (default) | `true` |
+|---|---|---|
+| a 504 x 2040 picture reaches the model as | 330 x 1333 (`square_resize_div_64: false`) or 504 x 504 (square) | 504 x 2040 |
+| pictures of two sizes | resized alike | refused where the second is read: `keep_picture_size: picture 1 (…png) is 48 x 216 (width x height), the first was 48 x 204 — …` |
+
+Every picture must be ONE size (a seg batch joins masks of one size) — cut them to one with `RandomCropDetection`
+first if they are not. Each side should be a multiple of the backbone's block (patch x windows: 24 for `seg-small` and
+up, 12 for `seg-nano`): RF-DETR's batch pads a picture up to one, so 512 x 2048 trains as 528 x 2064 with the extra
+rows and columns padding. A disk dataset (`data`) is read by RF-DETR's own loader, so the setting is refused there.
+
+A model trained this way is RUN the same way: `RFDETRPredictor(keep_picture_size=True)` tells RF-DETR's `predict`
+each picture's own shape, so its resize to the model's square changes nothing (pictures of several sizes are
+predicted one size at a time; RF-DETR refuses a side its backbone does not divide). The package compiler lowers it
+the same way: the network gets the picture as it is, never the model's square.
+
+
+**Pictures of ONE shape that is not square** (all 504 x 1008, say) need no cut: keep their aspect and turn RF-DETR's
+zoom-crop off — its cut is square, so beside the uncut 1:2 pictures a batch holds masks of two sizes. The stream
+passes `train_config`'s `scale_jitter` to RF-DETR's transforms as its own folder loader does (default on):
+
+```yaml
+  resolution: 504               # the SHORT side; the pictures train at 1248 x 624 (the largest multi-scale size)
+  train_config:
+    square_resize_div_64: false # the aspect kept — recorded in the checkpoint; RFDETRPredictor reads it back
+    scale_jitter: false         # on: 624 x 624 for half the pictures, and the seg matcher stops on the masks
+```
+
 
 `raidar evaluate --framework rfdetr` runs RF-DETR's native validation/test loop over a trained
 checkpoint (`weights:`). The wired `trackers:` receive the run's **record** (provenance, config,
-manifest, log file, final-metrics sidecar); RF-DETR's own per-step curves stay with its native
-`mlflow:` / `tensorboard:` knobs. There is no `predict` here — prediction runs through the
+manifest, log file, final-metrics sidecar). A run over streams (`train_set:` / `val_set:`) also makes
+each tracker a logger of RF-DETR's loop, so every epoch's losses and mAP land in the same tracker run
+— one MLflow run holds the curves, the config and the log. A run over a dataset folder (`data:`) is
+trained by RF-DETR's own `train()`, and its per-step curves stay with RF-DETR's native `mlflow:` /
+`tensorboard:` knobs (a run of their own). There is no `predict` here — prediction runs through the
 lightning backend with `raidar.RFDETRModel` (the native model module, which also loads RF-DETR
 checkpoints for evaluation under `LightningDetector`), or, for a checkpoint this backend trained —
 a `seg-*` one included, masks and all — through `raidar.RFDETRPredictor` (below).
@@ -353,6 +456,9 @@ folder it is:
 
 Measured with RF-DETR 1.9.3's own `is_valid_yolo_dataset`: the default layout answers `False` (it
 wants `train/` and `val/` folders holding `images` and `labels`), the `rfdetr` layout `True`.
+From RF-DETR 1.11.2 it follows the split paths `data.yaml` names and answers `True` for both. The
+`rfdetr` layout is for the older ones, which a uv install still gets: from 1.10.0 RF-DETR's `[train]`
+extra pins the pre-release `torch-hungarian==0.1.0rc0`, and uv skips it, stopping at RF-DETR 1.9.4.
 
 ```yaml
 runnable: !class:recordstream.processing.DatasetProcessor
@@ -364,6 +470,7 @@ runnable: !class:recordstream.processing.DatasetProcessor
     layout: rfdetr
     mode: replace                             # replace (default): wipe this split first | append: continue it
     facts: [scale]                            # list the distinct values of these record entries in data.yaml
+    split_in_name: false                      # true: train_000000.png — file names that differ between the splits
     image_mode: rgb                           # rgb (default) | grey: one channel a picture whose three are equal
     image_threads: 4                          # threads encoding and writing the pictures (the files are the same)
 ```
@@ -376,6 +483,19 @@ runnable: !class:recordstream.processing.DatasetProcessor
 `facts` names record entries whose DISTINCT values `data.yaml` lists under `facts:` — a picture's
 scale, for instance: a folder of mixed scales is recorded, never refused. Every record's entries
 ride `metadata.jsonl` regardless.
+
+`split_in_name: true` puts the split in front of every file name (`train_000000.png`, `train_000000.txt`). Each split
+numbers its pictures from zero, so two splits of one folder otherwise both hold a `000000.png`, and a tool that pairs a
+picture with its annotation by file name alone — an upload of both splits at once — puts one split's boxes on the
+other's picture.
+
+A `replace` deletes the split's picture folder and label folder when the run opens the sink. `recordstream run
+<config> --dry_run` names them first and changes nothing:
+
+```text
+delete ./runs/dataset/images/train (2 files, 1.4M)
+delete ./runs/dataset/labels/train (2 files, 96B)
+```
 
 `image_mode: grey` stores a grey picture (its three channels equal, a spectrogram's grey scale) as
 ONE channel: measured on 60 spectrogram pictures of 1024 x 1024, 12.5 ms and 0.52 MB a picture
@@ -482,15 +602,100 @@ Measured: a folder of 3 pictures named `drone-signal` / `ignore` and one of 6 na
 by class, the union of both folders' picture scales in `data.yaml`, each record's origin folder in
 `metadata.jsonl`.
 
+`YoloSource.class_names` is the folder's class list in label order (the vocabulary's, given one) — what a
+consumer reads off the source without walking a record.
+
+#### Reading a COCO folder — `raidar.CocoSource`
+
+The COCO twin of `YoloSource`: one split as records of `image` and `target` plus `coco_source: {annotations,
+split, image}`. The COCO file is looked for in three places, in this order:
+
+| layout | COCO file | pictures |
+|---|---|---|
+| RF-DETR / Roboflow (the sink's `layout: rfdetr`) | `<split>/_annotations.coco.json` | `<split>/images/` or beside the file |
+| the sink's default layout | `annotations/<split>.json` | `images/<split>/` |
+| the official dataset | `annotations/instances_<split>*.json` (`instances_val2017.json`) | `val2017/` or `images/val2017/` |
+
+Labels are numbered by the categories' ORDER (sorted by id), so the official ids 1 … 90 with their gaps give
+labels 0 … 79 and a class list without blanks (`class_names`). A polygon `segmentation` is read as the
+instance's polygons in `target.extras["polygons"]`; a run-length one leaves the instance's entry `[]`. Two
+official files for one split are refused naming both.
+
+```yaml
+source: !class:raidar.CocoSource {root: $DATA_ROOT/coco2017, split: val}
+```
+
+#### A folder labelled either way — `raidar.CocoOrYoloSource`
+
+A dataset folder read without saying how it is labelled — a folder the sink wrote with its COCO sidecar
+holds both:
+
+| the folder holds | `labels: yolo` (default) | `labels: coco` |
+|---|---|---|
+| `data.yaml` and a COCO file for the split | the YOLO labels | the COCO file |
+| `data.yaml` only | the YOLO labels | the YOLO labels |
+| a COCO file only | the COCO file | the COCO file |
+| neither | refused: `… holds neither a YOLO dataset (data.yaml) nor a COCO file for split 'val'` | same |
+
+```yaml
+source: !class:raidar.CocoOrYoloSource
+  folder: $DATA_ROOT/signal_detection/pictures/d    # ~ and $VAR expanded
+  split: val                                        # train | val | test
+  labels: yolo                                      # yolo | coco — read only when the folder holds both
+```
+
+A wrong folder, a split the folder lacks (`… has no split 'test' (neither images/test nor test/images)`) and an
+unset variable are refused as `raidar.coco_or_yolo_source.DatasetFolderError`, a `ValueError`. The settings are
+read on every use, so a changed folder or split is the next read's; the records are named after the folder and
+the split (`dataset_uri`: `<folder>?split=val`).
+
+#### Loading a dataset in the annotation workspace
+
+raidar ships the source graph of the annotation workspace's `detection` type
+([annotaide](https://github.com/Gearlux/annotaide)): a `CocoOrYoloSource` whose settings are the whole of loading a
+dataset. In a detection workspace, **tools ▾ → load a COCO or YOLO dataset…** opens those settings — the folder
+(with a folder browser, starting at `$DATA_ROOT`), the split and the labels — beside the records, and each setting
+you change is applied: the list shows the split's pictures with their boxes and the dataset's class names. The
+settings land in the workspace's `source.settings.yaml`:
+
+```yaml
+dataset.folder: $DATA_ROOT/signal_detection/pictures/d
+dataset.split: val
+```
+
+Nothing is loaded until a folder is chosen. The graph stays a graph: **graphs… → source** opens it on the canvas,
+to put ops after the dataset or another source in its place.
+
+Measured on a sink-written folder holding both label kinds (33 classes, 9 400 train and 1 880 val pictures): the
+same pictures, boxes and class list either way; listing a split took 4.1 s (YOLO, `train`) and 1.6 s (COCO,
+`train`), a record 5-9 ms.
+
+#### Relabelling a folder — `raidar.relabel.RelabelLabels`
+
+A YOLO or COCO folder's classes remapped by name, many to one, always from the original labels the first remap
+keeps (`labels.orig/`, `data.orig.yaml`, `<stem>.orig.json`); `mode: restore` puts them back byte for byte:
+
+```bash
+recordstream run examples/relabel.yaml                       # every name to its family
+recordstream run examples/relabel.yaml --scope one_class     # every name to `signal`
+recordstream run examples/relabel.yaml --scope original      # the folder as it was written
+```
+
+The settings, what each file becomes and the refusals:
+[`docs/relabel.md`](https://github.com/Gearlux/raidar/blob/main/docs/relabel.md).
+
 ## Compiling the RF-DETR predictor
 
 `pip install raidar[compile]` adds the predictor's lowering for the workspace's package compiler: `RFDETRPredictor`
 becomes a fixed-size torch program — the library's own bilinear resize to the model's resolution, its ImageNet
 normalization, the network, its top-k selection and box scaling — with the score cut turned into a `keep` mask over
 the `num_select` rows, and the `any_class` score mode applied as the predictor applies it. A detection op that holds
-the predictor compiles through it; nothing in `raidar.rfdetr` changes. The lowering is held to the library's own
-pieces on a stand-in network (`tests/test_lowering.py`) and, with `RAIDAR_RFDETR_CHECKPOINT` naming a checkpoint, to
-the predictor itself.
+the predictor compiles through it; nothing in `raidar.rfdetr` changes. A segmenting model's head runs its depthwise
+convolution through a custom autograd function (a cuDNN workaround for GPU training) that TorchScript cannot
+serialize; the lowering runs the same convolution directly (`raidar.lowering.traceable`), identical under `no_grad`,
+and hands the network its batch as a `NestedTensor` built in one step (`raidar.lowering.nested`), so a traced
+artifact takes any batch size — any number of picture pieces. The lowering is held to the library's own pieces on a stand-in network (`tests/test_lowering.py`) and, with
+`RAIDAR_RFDETR_CHECKPOINT` naming a checkpoint, to the predictor itself.
 
 ## Detector catalogue
 
@@ -602,13 +807,19 @@ It answers the torchvision eval contract the prediction ops call — `eval()`, `
 
 | key | shape | meaning |
 |---|---|---|
-| `boxes` | `[N, 4]` float | xyxy in the INPUT picture's pixels (any size: RF-DETR resizes to its resolution and back) |
+| `boxes` | `[N, 4]` float | xyxy in the INPUT picture's pixels (any size: RF-DETR resizes as its training validated, and back) |
 | `scores` | `[N]` float | confidence |
 | `labels` | `[N]` int64 | 0-based into `predictor.class_names` (the checkpoint's own names); RF-DETR's no-object slot is dropped |
 | `masks` | `[N, H, W]` bool | each instance's mask at the input picture's size — a `seg-*` checkpoint only |
 
 A picture is `[3, H, W]` floats in `[0, 1]`, an `H x W x 3` uint8 array, or a grey one (`[H, W]`,
 `[1, H, W]`) read as its three equal channels — what training's reader made of a one-channel PNG.
+
+The size a picture reaches the network at is the training's, read off the file too (`predictor.input_size(h, w)`
+says it): the square of the resolution, or — a model trained with `square_resize_div_64: false` — the short side at
+the resolution and the long side scaled with it (capped at 1 333 px), both rounded up to whole blocks of
+`patch_size x num_windows`. A 1008 x 504 picture reaches a model trained so at 504 as 1008 x 504, a square-trained
+one's as 504 x 504; pictures of two sizes in one call go to the network in one call per size.
 The file is read on the first prediction, not at construction. It predicts only: training goes
 through the rfdetr backend, or `RFDETRModel` under the lightning backend.
 
@@ -644,6 +855,15 @@ scratch loaded no artifact and records nothing. Reading the identity is free and
 model; adding one to your own wrapper is a single `model_refs` property — see
 [matrainer's `uri` module](https://github.com/Gearlux/matrainer).
 
+## Environment variables
+
+Listed with defaults in [`env.complete`](https://github.com/Gearlux/raidar/blob/main/env.complete).
+
+| variable | meaning |
+| --- | --- |
+| `KERAS_BACKEND` | `torch`, `tensorflow` or `jax` — the engine the `keras` backend runs on; raidar never sets it for you |
+| `DATA_ROOT` | folder holding the datasets; configs write paths as `$DATA_ROOT/<dataset>` |
+
 ## License
 
-MIT.
+[PolyForm Noncommercial License 1.0.0](https://polyformproject.org/licenses/noncommercial/1.0.0) (the `LICENSE` file): free for personal, academic and other noncommercial use. Commercial use needs a separate licence from the author.

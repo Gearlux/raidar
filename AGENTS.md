@@ -9,7 +9,7 @@ and usage is in the [README](README.md) and the comments of `examples/train_cppe
 Object detection on ten backends, all driven by one config: `lightning`, `torch` (a
 hand-written loop), `fastai`, `huggingface`, `keras`, `tensorflow`, `jax`, `mlx`, `rfdetr`
 (RF-DETR's own loop), and `ultralytics`, which ships in a separate distribution. On PyPI as
-pre-release `0.1.0a1`; the repo is private.
+pre-release `0.1.0aN` (the version in `pyproject.toml`); the repo is public.
 
 Each runnable `<backend>_detector.py` = task hooks (here) + a matrainer machinery base + its
 own full flat `__init__` (§5):
@@ -41,7 +41,7 @@ hooks, model wrappers, the FCOS spec, registrations and configs.
   also `_callbacks`, `_compile`, `initialize`). Machinery changes go into matrainer with every
   consumer updated. (`tests/test_tracking_parity.py`) §5.
 - A new backend touches: `raidar/<name>_detector.py`, a `FRAMEWORKS` row, a scope block in the
-  example, an entry point, `_BACKEND_NAMES` + an extra + `[tool.aisland] frameworks`,
+  example, an entry point, `_BACKEND_NAMES` + an extra + a choice of `[tool.aisland.selection.framework]`,
   `BACKENDS`/`METRIC_BRIDGES` in `tests/test_tracking_parity.py`, and a `sweep.yaml` row. §1.
 - A backend gets its own module only when upstream ships a training loop worth driving; it
   drives that loop and adds only a Dataset/DataModule bridge. No adapter layer, no
@@ -61,9 +61,14 @@ hooks, model wrappers, the FCOS spec, registrations and configs.
   RF-DETR's own checkpoint files); the run-name knob is
   `run_name`, never `run`, which would shadow `run()`
   (`tests/test_rfdetr_detector.py::test_run_name_does_not_shadow_run_method`);
-  `train_config:` merges verbatim over the floor, `model_config:` is the same pass-through to the model's build-time settings (`group_detr`, …; keys with a parameter of their own are refused: `tests/test_rfdetr_detector.py::test_model_config_refuses_a_key_with_its_own_parameter`); `fit` finishes its manifest with
-  `capture_log_file(..., status="success")`; Stream mode is drift-guarded by the gated
+  `train_config:` merges verbatim over the floor, `model_config:` is the same pass-through to the model's build-time settings (`group_detr`, …; keys with a parameter of their own are refused: `tests/test_rfdetr_detector.py::test_model_config_refuses_a_key_with_its_own_parameter`); `fit` and the evaluation run inside matrainer's
+  `ending_the_run`, which finishes the manifest — as `failed` when the run raises (`tests/test_rfdetr_detector.py::test_a_run_that_raises_still_ends_its_trackers_run`); Stream mode is drift-guarded by the gated
   `::test_stream_train_smoke`.
+- rfdetr stream mode (fit and evaluate): every wired tracker is ADDED to the loggers of RF-DETR's trainer through
+  matrainer's `TrackerLogger` (`_log_to_trackers`), after RF-DETR's own, so a training is ONE tracker run; the final
+  scores are logged at the trainer's last step, never without a step (a stray point at step 0). Never set RF-DETR's
+  `mlflow` knob beside a tracker for this — it opens a second run. Disk mode cannot (RF-DETR's `train()` builds the
+  trainer). (`tests/test_rfdetr_detector.py::test_a_stream_fit_sends_every_epochs_values_to_the_trackers_own_run`)
 - The RF-DETR variants are ONE table, `raidar.rfdetr._VARIANT_CLASSES`, and the two Literals are
   read off it: `VariantName` (the backend, every entry — the `seg-*` models train from the dataset
   on disk, a box label read as its four-corner polygon, a polygon line as that polygon, or from a stream whose
@@ -75,42 +80,116 @@ hooks, model wrappers, the FCOS spec, registrations and configs.
   `variant`/`model_config` knob to it, and never open `RFDETRModel`'s variants to `seg-*` to predict masks (it is the
   lightning backend's training wrapper). Boxes and masks are in the INPUT picture's pixels, a label outside the
   vocabulary (the no-object slot) is dropped, a grey picture is read as three equal channels; the file is read at the
-  first prediction. §10. (`tests/test_rfdetr_predictor.py`)
+  first prediction. §10. (`tests/test_rfdetr_predictor.py`) The picture's size at the network is the TRAINING's,
+  read off the file's `args.square_resize_div_64` (tensor-free, at the build) — never off the loaded model's args,
+  which hold the library default, and never a size setting: square at the resolution, or the short side at it with
+  the long side scaled, capped at 1 333 and both rounded UP to a block (`input_size`, which the lowering calls too);
+  one `predict` call per size. §13. (`tests/test_rfdetr_predictor.py::TestTheTrainingsResize`)
 - `RFDETRPredictor.score_mode`: `class` (default) is the library's answer unchanged; `any_class` rewrites the
   `pred_logits` handed to the library's OWN post-processing (one slot per query: its best counted class carrying
   `1 - prod(1 - p)`), so selection, boxes and masks stay the library's — never override `PostProcess` internals or
   copy `predict`'s tail. The no-object slot never counts; an unknown `any_class_excludes` name is refused at the build.
   §11. (`tests/test_rfdetr_predictor.py::TestTheAnyClassRewrite`, `::TestAnyClassScoring`)
 - `raidar.lowering` (the `[compile]` extra, entry point `torpaido.lowerings`) lowers `RFDETRPredictor` for the package
-  compiler as the library's own inference path, fixed-size: `interpolate(bilinear, antialias=False)` to the model's
-  resolution (what `predict`'s `F.resize(antialias=False)` is), `(x - means) / stds`, the network, the library's
+  compiler as the library's own inference path, fixed-size: `interpolate(bilinear, antialias=False)` to the
+  predictor's `input_size` (what `predict`'s `F.resize(antialias=False)` is; read at the trace), `(x - means) / stds`, the network, the library's
   `PostProcess._select_topk` and `_gather_and_scale_boxes` on its own outputs, and `keep = score > threshold & label <
   known` in place of the row-dropping cut; `any_class` reuses `_any_class_logits` and `_counted_slots`; a `seg-*`
   model's `pred_masks` leave as the SELECTED rows' logits at the head's resolution (`mask_logits`), gathered as the
   library gathers them — the upsample and the cut at zero are the consumer's. Never copy the library's post-processing
-  — call it. Pinned against the library's pieces on a stand-in network, and against the
-  predictor on a real checkpoint when `RAIDAR_RFDETR_CHECKPOINT` is set (slow). (`tests/test_lowering.py`)
+  — call it. The network runs in its TRACEABLE form (`lowering.traceable`, 2026-10-13): the segmentation head's
+  `DepthwiseConvBlock` routes its depthwise convolution through a custom autograd Function (cuDNN off in forward and
+  backward, a GPU training workaround) that `torch.jit.save` refuses (`Could not export Python function call
+  '_DepthwiseConvWithoutCuDNN'`, measured on a real D package); `traceable` binds the same `F.conv2d` on each block in
+  place — identical under `no_grad`, how the predictor runs. The batch reaches the network as a `NestedTensor` built
+  directly (`lowering.nested`: the pictures and an all-False mask): the library's `nested_tensor_from_tensor_list`
+  copies image by image and a trace bakes that loop's count (measured: `Expected 5 elements in a list but found 3` on
+  the next capture's piece count). Pinned against the library's pieces on a stand-in network, and against the
+  predictor on a real checkpoint when `RAIDAR_RFDETR_CHECKPOINT` is set (slow).
+  (`tests/test_lowering.py`, `::test_the_segmentation_head_s_depthwise_convolution_is_traced_as_a_plain_convolution`,
+  `::test_the_batch_reaches_the_network_as_a_nested_tensor_built_without_a_per_image_loop`)
 - RF-DETR stream mode reads a record's labels in the SAME read as its picture, never walked ahead or cached, and a
   `seg-*` model gets each instance's mask from `Boxes.extras[POLYGONS]` through RF-DETR's own `ConvertCoco` (a box
-  without an outline masked by its rectangle). §12. (`tests/test_stream_rfdetr_dataset.py::test_a_pictures_labels_come_from_the_read_that_gave_the_picture`,
-  `::test_a_seg_model_gets_each_instances_mask_from_its_outline_and_a_box_without_one_is_its_box`)
+  without an outline masked by its rectangle), and its transforms take every argument RF-DETR's own folder loader
+  passes them — `scale_jitter` included (default on), the zoom-crop a non-square set turns off. §12, §13.
+  (`tests/test_stream_rfdetr_dataset.py::test_a_pictures_labels_come_from_the_read_that_gave_the_picture`,
+  `::test_a_seg_model_gets_each_instances_mask_from_its_outline_and_a_box_without_one_is_its_box`,
+  `::test_the_scale_jitter_setting_reaches_the_training_transforms_as_on_rfdetrs_own_loader`)
 - `RandomCropDetection` (`raidar/crop.py`) cuts in the picture's OWN pixels before RF-DETR's resize: exactly
   `height` x `width` out, boxes clipped and a box under `min_size_px` dropped, outlines clipped exactly, a smaller
   picture padded with its median and never stretched; `random` draws from Python's `random` (seeded per loader
-  worker and epoch), never an instance RNG (pickled into every worker it would repeat). Never move the cut into
+  worker and epoch), never an instance RNG (pickled into every worker it would repeat); `densest` is the piece that
+  keeps the most boxes by the cut's own keep rule (then most kept box area, then nearest the middle), searched
+  exactly at the places a piece edge meets a box edge — never a sliding grid. Never move the cut into
   RF-DETR's `aug_config` — it runs after the resize and its 1 333 px cap. §12.
   (`tests/test_crop.py`, `tests/test_stream_rfdetr_dataset.py::test_cut_pictures_of_any_height_batch_into_masks_of_one_size`)
+- `PieceSource` (`raidar/crop.py`) is a validation set of EVERY piece of every picture: side by side at whole
+  multiples of the piece, never overlapping (each pixel in exactly one piece), the piece past an edge padded with the
+  median, each piece `RandomCropDetection.cut_at` at its place — never a second cut. It is a SOURCE, indexable with a
+  length (a step making several records from one makes a stream iterable-only, and RF-DETR's loader indexes); it never
+  merges finds across pieces — a whole-picture score is an inference graph's, outside the loop. §17.
+  (`tests/test_crop.py`, the `PieceSource` block)
+- `RFDETRDetector(keep_picture_size=True)` skips RF-DETR's resize and NOTHING else: the augmentation RF-DETR routes
+  `aug_config` to (`None` its flip, `{}` none, else its Albumentations stack) and its normalization stay
+  (`stream_rfdetr_dataset._unresized_transforms`); a second picture size is refused where it is read, naming both and
+  the record's `file`; stream mode only (a disk dataset is refused). Never pad or resize there to make sizes agree —
+  a crop before it does. (`tests/test_stream_rfdetr_dataset.py::test_a_kept_picture_reaches_the_model_at_its_own_size_where_the_resize_would_change_it`,
+  `::test_a_kept_picture_of_another_size_is_refused_naming_both_sizes_and_the_file`,
+  `tests/test_rfdetr_detector.py::test_keep_picture_size_is_refused_on_a_disk_dataset`)
+  Its prediction twin is `RFDETRPredictor(keep_picture_size=True)`: RF-DETR's OWN `predict` with `shape=` the
+  picture's `(H, W)`, one call per picture size, answers in input order — never a resize or post-processing of
+  raidar's; `raidar.lowering` skips its resize to the square for it, the network getting the pictures as they are
+  (`tests/test_rfdetr_predictor.py::TestKeepPictureSize`,
+  `tests/test_lowering.py::test_a_predictor_that_keeps_the_picture_size_runs_the_network_on_the_picture_as_it_is`).
+- `RFDETRDetector.mps_low_watermark` is a BODY slot (not a constructor param), handed to
+  `matrainer.torch.apply_mps_low_watermark` FIRST in `run()`, before RF-DETR touches the GPU — the same setting
+  matrainer's torch trainers carry; never a raidar copy of the helper
+  (`tests/test_rfdetr_detector.py::test_mps_low_watermark_is_handed_to_torch_before_the_task`).
 - `YoloSink.layout` is the only difference between the Ultralytics folder (`images/<split>`) and
   RF-DETR's (`<split>/images`, the COCO sidecar at `<split>/_annotations.coco.json`); the default
-  stays `ultralytics`. (`tests/test_yolo_sink.py::test_the_rfdetr_layout_is_what_rfdetr_reads_and_the_default_is_not`)
+  stays `ultralytics`. RF-DETR reads the default one only from 1.11.2 (it follows `data.yaml`'s split paths), and a
+  uv install stops at 1.9.4, so keep the `rfdetr` layout while raidar allows an older RF-DETR.
+  (`tests/test_yolo_sink.py::test_rfdetr_reads_the_rfdetr_layout_and_the_default_one_from_1_11_2`)
 - `YoloSink.mode`: `replace` (default) wipes the split, `append` continues it after the last stem and
   refuses a vocabulary that disagrees id for id BEFORE writing; `facts` lists distinct record entries
   in `data.yaml` (mixed picture scales are recorded, never refused — user ruling 2026-10-06).
   (`tests/test_yolo_sink.py`, the "append mode and facts" block)
+- `YoloSink.planned_changes()` names what `open()` deletes in `replace` mode — the split's picture and label folders
+  that exist, each `delete <folder> (<n> files, <size>)` — read off the disk, nothing changed, `[]` for an `append`;
+  recordstream's `DatasetProcessor.plan()` lists them. A change to what `open()` deletes changes this in the same
+  commit. (`tests/test_yolo_sink_plan.py`)
+- `YoloSink.split_in_name` (default off) puts the split before the number in every file name
+  (`train_000000.png`, its label, the COCO `file_name`, the `metadata.jsonl` paths); an `append` continues
+  after the last picture so named. Never a second naming setting beside it.
+  (`tests/test_yolo_sink.py`, the "split_in_name" block)
 - `YoloSource` is the sink's mirror and reads both layouts; class ids are remapped by NAME to the
   vocabulary given and an unknown name is refused, never renumbered; construction touches no disk.
   Merging folders is readers + `ConcatSource` + the sink in `append` (`examples/merge_yolo.yaml`).
   (`tests/test_yolo_source.py`)
+- `CocoSource` is its COCO twin: the file looked for in `<split>/_annotations.coco.json`, `annotations/<split>.json`,
+  then `annotations/instances_<split>*.json` (two of those refused, naming both); labels numbered by the categories'
+  ORDER sorted by id, never by the ids (the official 1 … 90 have gaps); a polygon `segmentation` read into
+  `extras[POLYGONS]`, a run-length one `[]`. Both readers DECLARE `class_names` (a graph's class list reads it
+  without walking a record). (`tests/test_coco_source.py`, `tests/test_yolo_source.py::TestTheVocabulary`) §15.
+- `RelabelLabels` (`raidar/relabel.py`) remaps a folder's classes BY NAME from the original it keeps on the first run
+  (`labels.orig/` renamed once, `data.orig.yaml` / `<stem>.orig.json` copied once) — every remap starts from it,
+  never from the previous remap; a YOLO line changes only its class id (every other character and its place kept: a
+  mask numbering instances by line still matches) and is built in `labels.new/` first; a name of the original
+  vocabulary the map leaves out (no `"*"`), a class not in `classes` and an id outside the original are refused as
+  `RelabelError` (a `DatasetFolderError`), naming the file and line; `mode: restore` leaves no `.orig` behind.
+  Never a remap of a remap, never a dropped line. (`tests/test_relabel.py`) §16.
+- `CocoOrYoloSource` reads a folder labelled either way: both present → `labels` picks (YOLO by default), one
+  present → that one whatever `labels` says. Every folder refusal (empty, unset `$VAR`, missing, a file, a split the
+  folder lacks, labels of neither kind) is a `DatasetFolderError` — a `ValueError`, because a host reports only a
+  `ValueError` as a wrong setting and lets anything else escape; check a split's folder explicitly, never let the
+  reader's `FileNotFoundError` through. Settings are read on every use (the reader cached per settings).
+  (`tests/test_coco_or_yolo_source.py`) §15.
+- raidar ships the annotation workspace's `detection` SOURCE graph (`raidar/annotation/`, entry point
+  `annotaide.templates`): `CocoOrYoloSource` with `image_key: input`, its `classes` the source itself, `app:` asking
+  folder/split/labels and `tools: load a COCO or YOLO dataset` (the workspace's tools menu opens its settings).
+  raidar imports nothing of annotaide; the workspace checks run where it is installed and skip elsewhere.
+  Run from `raidar/`, Python reads the gitignored `raidar.egg-info` before the installed metadata: after an
+  entry-point change, regenerate it too or the new entry point is invisible there. (`tests/test_annotation_source.py`) §15.
 - Instance masks ride `Boxes.extras[raidar.POLYGONS]`: per box a LIST of non-overlapping polygons
   (≥ 3 `[x, y]` pixel points, first point not repeated), `[]`/`None` meaning the box rectangle; the
   contract is `yolo_sink`'s module docstring. `YoloSink` writes ONE YOLO-seg ring per instance (YOLO-seg
@@ -264,8 +343,9 @@ hooks, model wrappers, the FCOS spec, registrations and configs.
   bare `torch`, not `raidar[torch]`. Keep `_BACKEND_NAMES` in step with the extras.
   (`release.yml` smoke test)
 - `fastcore<2` and `fastprogress<1.1` are upstream breaks; see `pyproject.toml`.
-- Releases: hand-written `release.yml`; workspace specs read `>=0.1.0a1` (aisland
-  `tests/test_workspace_dependency_specs.py`); README links are absolute
+- Releases: hand-written `release.yml`; each release raises every workspace floor, core and extras, to the newest
+  release and runs the suite there, and a dependent's next release raises its `raidar>=` the same way (user choice
+  2026-11-26; aisland `tests/test_workspace_dependency_specs.py` checks each is satisfiable); README links are absolute
   (`tests/test_docs_links.py`); the newest CHANGELOG entry is the version (`tests/test_packaging.py`).
 - CI runs `mypy .` here with only its own extras: list extra-gated imports in
   `[[tool.mypy.overrides]]`. `--cov-branch` is required (`tests/test_coverage_config.py`).

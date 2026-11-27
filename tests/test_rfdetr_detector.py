@@ -15,6 +15,7 @@ from typing import Any, List, get_args
 
 import pytest
 import torch
+from matrainer.tracking.base import Tracker
 from recordstream.runnable import entrypoint_tasks
 
 from raidar.rfdetr_detector import RFDETRDetector, RFDETRTask, _coerce_float, _scalar_payload
@@ -79,6 +80,14 @@ def test_fit_stream_requires_both_train_and_val() -> None:
         RFDETRDetector(train_set=[], num_classes=2, class_names={0: "a"})._validate_fit_inputs()
 
 
+def test_keep_picture_size_is_refused_on_a_disk_dataset() -> None:
+    """A disk dataset is read by RF-DETR's own loader, whose resize this runnable does not build."""
+    with pytest.raises(ValueError, match=r"keep_picture_size works on train_set/val_set streams only"):
+        RFDETRDetector(data="/d", keep_picture_size=True)._validate_fit_inputs()
+    with pytest.raises(ValueError, match=r"keep_picture_size works on train_set/val_set streams only"):
+        RFDETRDetector(data="/d", weights="/w.pth", keep_picture_size=True)._validate_eval_inputs()
+
+
 def test_eval_requires_weights() -> None:
     with pytest.raises(ValueError, match="weights"):
         RFDETRDetector(val_set=[], num_classes=2, class_names={0: "a"})._validate_eval_inputs()
@@ -100,7 +109,7 @@ def test_run_dispatches_fit_then_disk_vs_stream(monkeypatch: Any) -> None:
     monkeypatch.setattr(d, "_fit_disk_mode", lambda: calls.append("disk"))
     monkeypatch.setattr(d, "_live_trackers", lambda: [])
     monkeypatch.setattr("raidar.rfdetr_detector.log_run_context", lambda trackers, runnable: None)
-    monkeypatch.setattr("raidar.rfdetr_detector.capture_log_file", lambda trackers, manifest, status: None)
+    monkeypatch.setattr("matrainer.tracking.provenance.capture_log_file", lambda trackers, manifest, status: None)
     d.run()
     s = RFDETRDetector(train_set=[], val_set=[], num_classes=2, class_names={0: "a", 1: "b"})
     monkeypatch.setattr(s, "_fit_stream_mode", lambda: calls.append("stream"))
@@ -121,7 +130,7 @@ def test_fit_hands_matrainer_the_runnable_and_finishes_the_manifest(monkeypatch:
         lambda trackers, runnable: seen.update(runnable=runnable) or "manifest",
     )
     monkeypatch.setattr(
-        "raidar.rfdetr_detector.capture_log_file",
+        "matrainer.tracking.provenance.capture_log_file",
         lambda trackers, manifest, status: seen.update(manifest=manifest, status=status),
     )
     d.run()
@@ -219,7 +228,9 @@ def test_eval_loads_checkpoint_via_pretrain_weights_and_validates(monkeypatch: A
 
     import raidar.stream_rfdetr_dataset as frd
 
-    monkeypatch.setattr(frd, "StreamRFDETRDataModule", lambda *a, **k: SimpleNamespace())
+    monkeypatch.setattr(
+        frd, "StreamRFDETRDataModule", lambda *a, **k: captured.update(keep=k["keep_picture_size"]) or SimpleNamespace()
+    )
 
     # A real (indexable) stand-in: the runnable now PREPARES its stream slots (flow +
     # ensure_materialized), so a bare `object()` would fail the materialization read.
@@ -235,6 +246,188 @@ def test_eval_loads_checkpoint_via_pretrain_weights_and_validates(monkeypatch: A
     assert fake_model_config.pretrain_weights == "/ckpt/best.pth"  # checkpoint loaded the supported way
     assert captured.get("validate") and "test" not in captured  # validate (not test) on task="evaluate"
     assert d.computed_metrics == {"val/map": pytest.approx(0.3)}  # the @output carries the result
+    assert captured["keep"] is False  # the datamodule is told the runnable's keep_picture_size (default off)
+
+
+def test_a_stream_fit_hands_keep_picture_size_to_its_datamodule(monkeypatch: Any) -> None:
+    import rfdetr.training as rftrain
+
+    import raidar.rfdetr as rfmod
+    import raidar.rfdetr_detector as mod
+    import raidar.stream_rfdetr_dataset as frd
+
+    captured: dict = {}
+    fake_rf = SimpleNamespace(
+        model_config=SimpleNamespace(),
+        get_train_config=lambda **kw: SimpleNamespace(resume=None, **kw),
+        model=SimpleNamespace(model=None),
+    )
+    monkeypatch.setattr(rfmod, "_build_rfdetr", lambda *a, **k: fake_rf)
+    monkeypatch.setattr(rftrain, "RFDETRModelModule", lambda mc, cfg: SimpleNamespace(model="trained"))
+    trainer = SimpleNamespace(fit=lambda *a, **k: None, callback_metrics={})
+    monkeypatch.setattr(rftrain, "build_trainer", lambda cfg, mc, **k: trainer)
+    monkeypatch.setattr(mod, "_trainer_device_kwargs", lambda device: {})
+    monkeypatch.setattr(
+        frd, "StreamRFDETRDataModule", lambda *a, **k: captured.update(keep=k["keep_picture_size"]) or SimpleNamespace()
+    )
+    d = RFDETRDetector(
+        train_set=[{"image": None}],
+        val_set=[{"image": None}],
+        num_classes=2,
+        class_names={0: "a", 1: "b"},
+        keep_picture_size=True,
+    )
+    d._fit_stream_mode()
+    assert captured["keep"] is True
+
+
+# ---------------------------------------------------------------------------
+# One tracker run per training: the wired trackers are loggers of RF-DETR's trainer
+# ---------------------------------------------------------------------------
+
+
+class _RecordingTracker(Tracker):
+    """A tracker that writes down, in order, every call that reaches it."""
+
+    def __init__(self) -> None:
+        super().__init__("experiment", "run")
+        self.calls: List[Any] = []
+
+    @property
+    def experiment(self) -> Any:
+        return self
+
+    def log_hyperparams(self, params: Any) -> None:
+        self.calls.append(("hyperparams", dict(params)))
+
+    def log_metrics(self, metrics: Any, step: Any = None) -> None:
+        self.calls.append(("metrics", dict(metrics), step))
+
+
+class _EpochTrainer:
+    """RF-DETR's trainer as far as its loggers go: one epoch's values to every logger, then each finalized."""
+
+    def __init__(self, loggers: List[Any], raising: Any = None) -> None:
+        self.loggers = loggers
+        self.raising = raising
+        self.global_step = 4
+        self.callback_metrics = {"val/mAP_50_95": torch.tensor(0.5)}
+
+    def _epoch(self) -> None:
+        if self.raising is not None:
+            raise self.raising
+        for logger in self.loggers:
+            logger.log_metrics({"train/loss": 1.25, "val/mAP_50_95": 0.5}, step=0)
+            logger.finalize("success")
+
+    def fit(self, module: Any, datamodule: Any, ckpt_path: Any = None) -> None:
+        self._epoch()
+
+    def validate(self, module: Any, datamodule: Any) -> Any:
+        self._epoch()
+        return [{"val/mAP_50_95": 0.5}]
+
+
+class _OwnLogger:
+    """A logger RF-DETR itself put on the trainer (its CSV logger)."""
+
+    def __init__(self) -> None:
+        self.metrics: List[Any] = []
+
+    def log_metrics(self, metrics: Any, step: Any = None) -> None:
+        self.metrics.append((dict(metrics), step))
+
+    def finalize(self, status: str) -> None:
+        pass
+
+
+def _stream_run(monkeypatch: Any, trackers: Any, task: str = "fit", raising: Any = None) -> Any:
+    """A stream-mode ``RFDETRDetector`` whose RF-DETR pieces are stand-ins; returns it, its trainer and the calls."""
+    pytest.importorskip("rfdetr.training")
+    import rfdetr.training as rftrain
+
+    import raidar.rfdetr as rfmod
+    import raidar.rfdetr_detector as mod
+    import raidar.stream_rfdetr_dataset as frd
+
+    seen: dict = {}
+    own = _OwnLogger()
+    trainer = _EpochTrainer([own], raising)
+    fake_rf = SimpleNamespace(
+        model_config=SimpleNamespace(pretrain_weights=None),
+        get_train_config=lambda **kw: SimpleNamespace(resume=None, **kw),
+        model=SimpleNamespace(model=None),
+    )
+    monkeypatch.setattr(rfmod, "_build_rfdetr", lambda *a, **k: fake_rf)
+    monkeypatch.setattr(rftrain, "RFDETRModelModule", lambda mc, cfg: SimpleNamespace(model="trained"))
+    monkeypatch.setattr(rftrain, "build_trainer", lambda cfg, mc, **k: trainer)
+    monkeypatch.setattr(mod, "_trainer_device_kwargs", lambda device: {})
+    monkeypatch.setattr(frd, "StreamRFDETRDataModule", lambda *a, **k: SimpleNamespace())
+    monkeypatch.setattr(mod, "log_run_context", lambda trackers, runnable: "manifest")
+    monkeypatch.setattr(
+        "matrainer.tracking.provenance.capture_log_file",
+        lambda trackers, manifest, status: seen.update(log_file_to=list(trackers), status=status),
+    )
+    detector = RFDETRDetector(
+        task=task,  # type: ignore[arg-type]
+        weights="/ckpt/best.pth" if task != "fit" else None,
+        train_set=[{"image": None}],
+        val_set=[{"image": None}],
+        num_classes=2,
+        class_names={0: "a", 1: "b"},
+        trackers=trackers,
+    )
+    if raising is not None:
+        with pytest.raises(type(raising)):
+            detector.run()
+    else:
+        detector.run()
+    return detector, trainer, own, seen
+
+
+def test_a_stream_fit_sends_every_epochs_values_to_the_trackers_own_run(monkeypatch: Any) -> None:
+    """One run per training: a wired tracker is a logger of RF-DETR's trainer, so the epoch's losses and mAP reach
+    the SAME tracker that then gets the final scores and the log file — after RF-DETR's own loggers, which stay.
+    The final scores are logged at the step the trainer ended on, never as a stray point at step 0."""
+    tracker = _RecordingTracker()
+    _detector, trainer, own, seen = _stream_run(monkeypatch, [tracker])
+    assert trainer.loggers[0] is own and len(trainer.loggers) == 2
+    assert own.metrics == [({"train/loss": 1.25, "val/mAP_50_95": 0.5}, 0)]
+    logged = [call for call in tracker.calls if call[0] == "metrics"]
+    assert logged[0] == ("metrics", {"train/loss": 1.25, "val/mAP_50_95": 0.5}, 0)  # the epoch, at its step
+    assert logged[-1] == ("metrics", {"val/mAP_50_95": pytest.approx(0.5)}, 4)  # then the final scores
+    assert seen["log_file_to"] == [tracker]
+
+
+def test_a_stream_fit_without_trackers_keeps_rfdetrs_own_loggers(monkeypatch: Any) -> None:
+    _detector, trainer, own, _seen = _stream_run(monkeypatch, None)
+    assert trainer.loggers == [own]
+
+
+def test_a_stream_evaluation_sends_its_values_to_the_trackers_own_run(monkeypatch: Any) -> None:
+    tracker = _RecordingTracker()
+    _detector, trainer, own, _seen = _stream_run(monkeypatch, [tracker], task="evaluate")
+    assert trainer.loggers[0] is own and len(trainer.loggers) == 2
+    assert ("metrics", {"train/loss": 1.25, "val/mAP_50_95": 0.5}, 0) in tracker.calls
+
+
+@pytest.mark.parametrize("task", ["fit", "evaluate"])
+@pytest.mark.parametrize(
+    "raising, status", [(RuntimeError("training failed"), "failed"), (KeyboardInterrupt(), "interrupted")]
+)
+def test_a_run_that_raises_still_ends_its_trackers_run(monkeypatch: Any, task: str, raising: Any, status: str) -> None:
+    """A run that raised left its trackers open: MLflow showed it running for ever and the tracker's sampler was
+    never stopped. The trackers get the log file and the run's real ending, and the error still reaches the caller
+    (``_stream_run`` holds the run to raising it)."""
+    tracker = _RecordingTracker()
+    _detector, _trainer, _own, seen = _stream_run(monkeypatch, [tracker], task=task, raising=raising)
+    assert seen == {"log_file_to": [tracker], "status": status}
+
+
+def test_a_run_that_succeeds_ends_its_trackers_run_once_as_a_success(monkeypatch: Any) -> None:
+    tracker = _RecordingTracker()
+    _detector, _trainer, _own, seen = _stream_run(monkeypatch, [tracker])
+    assert seen["status"] == "success"
 
 
 # ---------------------------------------------------------------------------
@@ -357,3 +550,19 @@ def _first_call_line(fn_node: Any, name: str) -> Any:
             if called == name:
                 return node.lineno
     return None
+
+
+def test_mps_low_watermark_is_handed_to_torch_before_the_task(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A body slot a config names; `run()` applies it before the entry point builds anything."""
+    from confluid import load, to_pydantic
+
+    from raidar import rfdetr_detector
+
+    order: List[Any] = []
+    monkeypatch.setattr(rfdetr_detector, "apply_mps_low_watermark", lambda value: order.append(("watermark", value)))
+    monkeypatch.setattr(rfdetr_detector, "run_entrypoint", lambda runnable, task: order.append(("task", task)))
+    assert RFDETRDetector().mps_low_watermark is None
+    assert "mps_low_watermark" in to_pydantic(RFDETRDetector).model_fields
+    detector = load("runnable: !class:raidar.rfdetr_detector.RFDETRDetector\n  mps_low_watermark: 0.5\n")["runnable"]
+    detector.run()
+    assert order == [("watermark", 0.5), ("task", "fit")]

@@ -26,7 +26,11 @@ record dict is materialised to the layout
 
 Measured with RF-DETR 1.9.3's ``is_valid_yolo_dataset`` on three real windows: the default
 layout answers ``False`` (it wants ``train/`` and ``val/`` folders holding ``images`` and
-``labels``), the ``rfdetr`` layout ``True``. Ultralytics reads the default one.
+``labels``), the ``rfdetr`` layout ``True``. From RF-DETR 1.11.2 it follows the split paths
+``data.yaml`` names and answers ``True`` for both (measured 2026-11-27 on 1.11.2 to 1.12.1). The
+``rfdetr`` layout stays for the older ones, which a uv install still gets: from 1.10.0 RF-DETR's
+``[train]`` extra pins the pre-release ``torch-hungarian==0.1.0rc0``, and uv skips it, stopping at
+1.9.4. Ultralytics reads the default one.
 
 **One sink writes ONE split.** To build a train+val(+test) dataset, run
 ``recordstream run`` once per split into the SAME ``output_dir`` (vary ``split``
@@ -43,7 +47,7 @@ dataset trades startup cost for faster epochs and lets third-party tools
 Generic over any detection Stream whose input-key value is an image
 (``[3,H,W]`` / ``[H,W,3]`` / ``[H,W]``, float ``[0,1]`` or ``uint8``, numpy or
 torch) and whose target-key value is ``{"boxes": [N,4] xyxy-pixel float32, "labels": [N] int64}``
-— i.e. exactly what :class:`waivefront.targets.RegionsToDetectionBoxes`
+— i.e. exactly what a regions-to-detection-boxes target op
 produces. (No ``ultralytics`` import — it only writes the on-disk layout.)
 
 **Instance masks — the** ``polygons`` **contract.** A producer MAY put each instance's polygons in
@@ -417,12 +421,11 @@ _MAX_META_ARRAY_ELEMS = 256
 def _jsonable_metadata(metadata: Any, *, max_array_elems: int = _MAX_META_ARRAY_ELEMS) -> Any:
     """Best-effort JSON-friendly conversion of a record's metadata payload — NEVER raises.
 
-    Source metadata can carry values ``json.dumps`` cannot encode: NumPy/torch arrays, **complex**
-    IQ samples, and StreamStudio's internal ``__taidal_stash_*`` snapshots (a stashed complex signal
-    from a DAG→sequential fan-out). So this:
+    Source metadata can carry values ``json.dumps`` cannot encode: NumPy/torch arrays and **complex**
+    IQ samples — a step upstream may keep a whole complex signal in the metadata. So this:
       * converts a ``complex`` scalar to a string (JSON has no complex type);
       * summarises a LARGE array (> ``max_array_elems``) as ``<array shape=… dtype=…>`` — a 1.2M-element
-        complex IQ stash must not be dumped verbatim into every per-image label JSON (bloat AND the
+        complex IQ array must not be dumped verbatim into every per-image label JSON (bloat AND the
         un-encodable complex values that crashed the sink);
       * lists a SMALL array element-wise and RECURSES, so nested complex / NumPy scalars from
         ``.tolist()`` are sanitised too (the bug: the old code returned ``.tolist()`` un-recursed, so
@@ -462,7 +465,16 @@ def _jsonable_metadata(metadata: Any, *, max_array_elems: int = _MAX_META_ARRAY_
     return str(metadata)
 
 
-# category="sink": surfaced as a StreamStudio sink node (RECORDSTREAM_OBJECT:sink → DatasetProcessor.sink).
+def _size_text(size: float) -> str:
+    """A byte count as ``du -sh`` writes it (``310.0K``, ``1.2G``)."""
+    for unit in ("B", "K", "M", "G"):
+        if size < 1024:
+            return f"{size:.0f}{unit}" if unit == "B" else f"{size:.1f}{unit}"
+        size /= 1024
+    return f"{size:.1f}T"
+
+
+# category="sink": listed among the sinks of a graph editor's catalogue, and wired into DatasetProcessor.sink.
 @configurable(category="sink")
 class YoloSink(Storage):
     """DataSink that materialises one split of a detection Stream to a YOLO dataset dir.
@@ -497,6 +509,10 @@ class YoloSink(Storage):
         image_format: ``"png"`` (lossless, default — spectrogram detail quantises poorly under JPEG) or ``"jpg"``.
         jpeg_quality: PIL JPEG quality (1-95); ignored for PNG.
         index_padding: Zero-padding width for the per-split sequential filenames (``6`` → ``000000.png``).
+        split_in_name: ``True`` puts the split in front of every file name (``train_000000.png``, its label
+            ``train_000000.txt``). Each split numbers from zero, so without it two splits of a folder both hold a
+            ``000000.png`` — and a tool that pairs a picture with its annotation by file name alone (an upload of
+            both splits at once) puts one split's boxes on the other's picture. Default ``False``.
         write_coco: Also write ``annotations/<split>.json`` in COCO format alongside the YOLO-txt labels.
         input_key: Record key carrying the input image (default ``"image"``).
         target_key: Record key carrying the detection target ``Boxes`` (default ``"target"``).
@@ -513,6 +529,7 @@ class YoloSink(Storage):
         image_format: Literal["png", "jpg"] = "png",
         jpeg_quality: int = 95,
         index_padding: int = 6,
+        split_in_name: bool = False,
         write_coco: bool = True,
         input_key: str = "image",
         target_key: str = "target",
@@ -533,6 +550,7 @@ class YoloSink(Storage):
         self.image_format = image_format
         self.jpeg_quality = int(jpeg_quality)
         self.index_padding = int(index_padding)
+        self.split_in_name = bool(split_in_name)
         self.write_coco = bool(write_coco)
         self.input_key = str(input_key)
         self.target_key = str(target_key)
@@ -618,11 +636,16 @@ class YoloSink(Storage):
         self._writing = deque()
         return self
 
+    def _name_prefix(self) -> str:
+        """What stands before a picture's number in its file name: the split (``split_in_name``) or nothing."""
+        return f"{self.split}_" if self.split_in_name else ""
+
     def _next_index(self) -> int:
         """The index after the last picture of this split — 0 on an empty split."""
         assert self._images_dir is not None
-        stems = [p.stem for p in self._images_dir.iterdir() if p.is_file() and p.stem.isdigit()]
-        return 1 + max((int(stem) for stem in stems), default=-1)
+        prefix = self._name_prefix()
+        stems = [p.stem[len(prefix) :] for p in self._images_dir.iterdir() if p.is_file() and p.stem.startswith(prefix)]
+        return 1 + max((int(stem) for stem in stems if stem.isdigit()), default=-1)
 
     def _check_vocabulary(self) -> None:
         """An append must name every class the folder already names the same way."""
@@ -651,7 +674,7 @@ class YoloSink(Storage):
         image = _to_uint8_hwc(_record_image(record, self.input_key))
         h, w = int(image.shape[0]), int(image.shape[1])
         pixels = _grey(image, idx) if self.image_mode == "grey" else image
-        stem = f"{idx:0{self.index_padding}d}"
+        stem = f"{self._name_prefix()}{idx:0{self.index_padding}d}"
         image_filename = f"{stem}.{self.image_format}"
 
         # The target is read (and a malformed polygon list refused) before anything is written.
@@ -749,6 +772,22 @@ class YoloSink(Storage):
                 if not annotation.get("segmentation"):
                     x, y, w, h = annotation["bbox"]
                     annotation["segmentation"] = [[x, y, x + w, y, x + w, y + h, x, y + h]]
+
+    def planned_changes(self) -> List[str]:
+        """What opening this sink for a run would delete, a line each — ``delete <folder> (807 files, 1.2G)`` for
+        this split's picture folder and its label folder in ``replace`` mode, when they are there. An ``append``,
+        and a folder that is not there yet, give nothing. Read off the disk; nothing is changed. (A ``replace`` also
+        drops this split's lines of ``metadata.jsonl``, rewritten at the end of the run.)"""
+        if self.mode != "replace":
+            return []
+        root = Path(self.output_dir).expanduser()
+        lines = []
+        for folder in (root / self._images_rel(), root / self._labels_rel()):
+            if folder.exists():
+                files = [path for path in folder.rglob("*") if path.is_file()]
+                count = f"{len(files)} file" + ("" if len(files) == 1 else "s")
+                lines.append(f"delete {folder} ({count}, {_size_text(sum(path.stat().st_size for path in files))})")
+        return lines
 
     def _images_rel(self) -> str:
         """This split's image folder, relative to the root — the layout's spelling."""
